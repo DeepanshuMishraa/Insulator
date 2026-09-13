@@ -126,9 +126,6 @@ impl Theme {
         }
     }
 
-    pub fn primary(&self) -> Hsla {
-        self.primary
-    }
 }
 
 pub trait ActiveTheme {

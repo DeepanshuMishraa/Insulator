@@ -3956,6 +3956,18 @@ impl Insulator {
                                                 .bg(theme.inverse)
                                                 .hover(|element| element.opacity(0.9))
                                                 .active(|element| element.opacity(0.8))
+                                                .focus_visible(|element| element.border_1().border_color(theme.accent))
+                                                .tab_index(0)
+                                                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                                                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                                        let prompt = this.composer.read(cx).content(cx).to_owned();
+                                                        if let Some(submission) = this.submission_with_attachments(&prompt, cx) {
+                                                            this.composer.update(cx, |input, cx| input.clear(cx));
+                                                            this.submit_composer_submission(submission, cx);
+                                                        }
+                                                        cx.stop_propagation();
+                                                    }
+                                                }))
                                                 .child(icon(
                                                     "icons/arrow-up.svg",
                                                     16.0,

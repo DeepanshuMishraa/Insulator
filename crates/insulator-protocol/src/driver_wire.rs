@@ -88,9 +88,10 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
             json!({"message": message, "level": level}),
         ),
         DriverEvent::PlanApproved => ("planApproved", Value::Null),
-        DriverEvent::ExtensionStatus { key, text } => {
-            ("extensionStatus", json!({"key": key, "text": text}))
-        }
+        DriverEvent::ExtensionStatus { key, text } => (
+            "extensionStatus",
+            json!({"key": key, "text": text}),
+        ),
         DriverEvent::SetEditorText(text) => ("setEditorText", Value::String(text)),
         DriverEvent::ComputerUseUpdated(state) => (
             "computerUseUpdated",

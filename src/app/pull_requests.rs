@@ -1,6 +1,7 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Read;
 use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -193,18 +194,35 @@ fn gh_output(args: &[&str]) -> anyhow::Result<std::process::Output> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command.spawn()?;
+    let stdout = child.stdout.take().expect("stdout was piped");
+    let stderr = child.stderr.take().expect("stderr was piped");
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.take(16 * 1024 * 1024).read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.take(16 * 1024 * 1024).read_to_end(&mut bytes).map(|_| bytes)
+    });
     let deadline = Instant::now() + Duration::from_secs(45);
-    loop {
+    let status = loop {
         match child.try_wait()? {
-            Some(_) => return Ok(child.wait_with_output()?),
+            Some(status) => break status,
             None if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
             None => {
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
                 anyhow::bail!("GitHub request timed out after 45 seconds");
             }
         }
-    }
+    };
+    Ok(std::process::Output {
+        status,
+        stdout: stdout_reader.join().map_err(|_| anyhow::anyhow!("stdout reader failed"))??,
+        stderr: stderr_reader.join().map_err(|_| anyhow::anyhow!("stderr reader failed"))??,
+    })
 }
 
 fn pull_request_cache_path() -> std::path::PathBuf {
@@ -434,13 +452,13 @@ fn load_pull_request_checks(request: &PullRequest) -> anyhow::Result<Vec<PullReq
         "--json",
         "name,state,bucket,link",
     ])?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "gh pr checks failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+    if let Ok(checks) = serde_json::from_slice(&output.stdout) {
+        return Ok(checks);
     }
-    Ok(serde_json::from_slice(&output.stdout)?)
+    anyhow::bail!(
+        "gh pr checks failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    )
 }
 
 fn load_pull_request_comments(request: &PullRequest) -> anyhow::Result<Vec<PullRequestComment>> {
@@ -472,6 +490,7 @@ fn load_pull_request_comments(request: &PullRequest) -> anyhow::Result<Vec<PullR
     let review_endpoint = format!("repos/{}/pulls/{}/comments", request.repository, request.number);
     let mut comments = load_endpoint(&issue_endpoint)?;
     comments.extend(load_endpoint(&review_endpoint)?);
+    comments.sort_by(|left, right| left.created_at.cmp(&right.created_at));
     Ok(comments
         .into_iter()
         .map(|comment| PullRequestComment {
@@ -759,7 +778,11 @@ impl Insulator {
         cx: &mut Context<Self>,
     ) {
         let body = self.pull_request_comment_input.read(cx).content().trim().to_owned();
-        if body.is_empty() || self.pull_request_comment_posting {
+        let request_key = (request.repository.clone(), request.number);
+        if body.is_empty()
+            || self.pull_request_comment_posting
+            || self.pull_request_comments_loading.contains(&request_key)
+        {
             return;
         }
         self.pull_request_comment_posting = true;
@@ -1349,6 +1372,7 @@ fn render_pull_request_row(
         .on_click(move |_, _, cx| {
             let _ = insulator.update(cx, |this, cx| {
                 this.pull_request_detail = Some(request.clone());
+                this.pull_request_comment_input.update(cx, |input, cx| input.clear(cx));
                 this.pull_request_detail_tab = PullRequestDetailTab::Summary;
                 this.pull_request_detail_scroll_handle.set_offset(Point::default());
                 this.ensure_pull_request_body(request.clone(), cx);

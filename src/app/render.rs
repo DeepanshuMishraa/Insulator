@@ -109,7 +109,10 @@ impl Insulator {
             return;
         }
         match target {
-            PanelResizeTarget::Sidebar => self.sidebar_width = width,
+            PanelResizeTarget::Sidebar => {
+                self.sidebar_width = width;
+                crate::platform::set_sidebar_material_width(window, width);
+            }
             PanelResizeTarget::RightPanel => self.right_panel_width = width,
             _ => unreachable!(),
         }

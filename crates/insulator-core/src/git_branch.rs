@@ -350,10 +350,10 @@ fn has_open_pull_request(cwd: &Path, branch: &str) -> Option<bool> {
                 .then_some(false)
         });
 
-    if let Some(open) = result {
+    if result == Some(true) {
         if let Ok(mut cache) = cache.lock() {
             cache.retain(|_, (checked_at, _)| checked_at.elapsed() < PULL_REQUEST_CACHE_TTL);
-            cache.insert(key, (Instant::now(), open));
+            cache.insert(key, (Instant::now(), true));
         }
     }
     result
