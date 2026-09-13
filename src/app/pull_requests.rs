@@ -1498,7 +1498,10 @@ impl Insulator {
             || self.pull_request_detail_loading.contains(&commit_key);
 
         let description = if let Some(error) = self.pull_request_body_error.get(&commit_key) {
-            div().text_color(theme.danger).child(SharedString::from(error.clone()))
+            div()
+                .text_color(theme.danger)
+                .child(SharedString::from(error.clone()))
+                .into_any_element()
         } else if is_body_loading {
             div()
                 .w_full()
