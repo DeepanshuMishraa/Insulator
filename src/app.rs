@@ -33,11 +33,10 @@ use crate::model::{
     ActivityItem, ActivityKind, AgentSession, BackgroundWorkEvent, BackgroundWorkItem,
     BackgroundWorkKey, BackgroundWorkKind, BackgroundWorkStatus, Checkpoint, CheckpointStatus,
     ContextUsage, DriverEvent, ExtensionNotificationLevel, FavoriteModel, Message,
-    MessageAttachment, MessageRole,
-    PendingPermission, Project, ProviderKind, ProviderModel, ProviderProbe, ProviderResumeCursor,
-    ProviderSessionHistory, ProviderSessionSummary, QueuedMessage, ReasoningBlock, RuntimeMode,
-    SessionStatus, SessionWorkspace, TranscriptBlock, TurnStatus, UserInputAnswer,
-    UserInputQuestion, compact_path, unix_time, unix_time_millis,
+    MessageAttachment, MessageRole, PendingPermission, Project, ProviderKind, ProviderModel,
+    ProviderProbe, ProviderResumeCursor, ProviderSessionHistory, ProviderSessionSummary,
+    QueuedMessage, ReasoningBlock, RuntimeMode, SessionStatus, SessionWorkspace, TranscriptBlock,
+    TurnStatus, UserInputAnswer, UserInputQuestion, compact_path, unix_time, unix_time_millis,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -55,19 +54,19 @@ use crate::ui::tooltip::Tooltip;
 use crate::browser::BrowserView;
 use crate::persistence::{
     ChatStatus, ComposerDraftStore, ComposerDrafts, DEFAULT_RIGHT_PANEL_WIDTH,
-    DEFAULT_SIDEBAR_WIDTH, PersistedState, PersistedWindowState, SidebarGrouping, SidebarOrdering,
-    StateStore,
+    DEFAULT_SIDEBAR_WIDTH, PersistedMainTab, PersistedRightPanelSurface, PersistedState,
+    PersistedWindowState, SidebarGrouping, SidebarOrdering, StateStore,
 };
 use crate::query::{Query, QueryCache};
 use crate::review_diff::{Snapshot as ReviewDiffSnapshot, Source as ReviewDiffSource};
 use crate::terminal::TerminalView;
 use crate::theme::{ColorTheme, Theme, ThemePreference, set_active_ui_font_family, sp};
-use insulator_protocol::theme::WindowStyle;
 use crate::ui::text_field::TextField;
 use crate::ui::{
-    MenuChip, ProjectNameSelector, Slider, SliderEvent, SliderState, activity_icon,
-    activity_noun, contain_horizontal_scroll, contain_scroll, file_icon, h_flex, icon, icon_button,
-    motion, provider_color, provider_mark, status_color, chat_status_color, runtime_mode_color, toggle_switch,
+    MenuChip, ProjectNameSelector, Slider, SliderEvent, SliderState, activity_icon, activity_noun,
+    chat_status_color, contain_horizontal_scroll, contain_scroll, file_icon, h_flex, icon,
+    icon_button, motion, provider_color, provider_mark, runtime_mode_color, status_color,
+    toggle_switch,
 };
 use crate::{
     CancelTaskSwitch, CancelTurn, CloseFind, CloseWindow, ConfirmTaskSwitch, CopySelection,
@@ -77,6 +76,7 @@ use crate::{
     ToggleFindCaseSensitive, ToggleFindRegex, ToggleFindWholeWord, ToggleFpsCounter,
     ToggleModelPicker, ToggleRightPanel, ToggleSidebar, ToggleUsagePanel,
 };
+use insulator_protocol::theme::WindowStyle;
 
 #[cfg(target_os = "macos")]
 const TRAFFIC_LIGHT_CLEARANCE: f32 = 86.0;
@@ -756,9 +756,14 @@ impl FileEditorSnippet {
     pub(super) fn from_range(range: std::ops::Range<usize>, content: &str) -> Self {
         let len = content.len();
         let start = range.start.min(len);
-        let start = (0..=start).rev().find(|&i| content.is_char_boundary(i)).unwrap_or(0);
+        let start = (0..=start)
+            .rev()
+            .find(|&i| content.is_char_boundary(i))
+            .unwrap_or(0);
         let end = range.end.min(len).max(start);
-        let end = (end..=len).find(|&i| content.is_char_boundary(i)).unwrap_or(len);
+        let end = (end..=len)
+            .find(|&i| content.is_char_boundary(i))
+            .unwrap_or(len);
         let valid_range = start..end;
         let start_line = content[..start].bytes().filter(|b| *b == b'\n').count() + 1;
         let selected_prefix = &content[..end];
@@ -1137,6 +1142,51 @@ pub(super) enum MainTab {
     Review,
 }
 
+impl From<&MainTab> for PersistedMainTab {
+    fn from(tab: &MainTab) -> Self {
+        match tab {
+            MainTab::Chat(id) => Self::Chat(*id),
+            MainTab::File(path) => Self::File(path.clone()),
+            MainTab::Review => Self::Review,
+        }
+    }
+}
+
+impl From<PersistedMainTab> for MainTab {
+    fn from(tab: PersistedMainTab) -> Self {
+        match tab {
+            PersistedMainTab::Chat(id) => Self::Chat(id),
+            PersistedMainTab::File(path) => Self::File(path),
+            PersistedMainTab::Review => Self::Review,
+        }
+    }
+}
+
+impl From<&RightPanelSurface> for PersistedRightPanelSurface {
+    fn from(surface: &RightPanelSurface) -> Self {
+        match surface {
+            RightPanelSurface::Browser(id) => Self::Browser(*id),
+            RightPanelSurface::Terminal(id) => Self::Terminal(*id),
+            RightPanelSurface::Files => Self::Files,
+            RightPanelSurface::Diff => Self::Diff,
+            RightPanelSurface::File(path) => Self::File(path.clone()),
+            RightPanelSurface::BackgroundWork { .. } => Self::Files,
+        }
+    }
+}
+
+impl From<PersistedRightPanelSurface> for RightPanelSurface {
+    fn from(surface: PersistedRightPanelSurface) -> Self {
+        match surface {
+            PersistedRightPanelSurface::Browser(id) => Self::Browser(id),
+            PersistedRightPanelSurface::Terminal(id) => Self::Terminal(id),
+            PersistedRightPanelSurface::Files => Self::Files,
+            PersistedRightPanelSurface::Diff => Self::Diff,
+            PersistedRightPanelSurface::File(path) => Self::File(path),
+        }
+    }
+}
+
 pub struct Insulator {
     /// Owns the headless provider process for exactly as long as the desktop
     /// app entity. Debug builds can replace it independently after a rebuild;
@@ -1453,6 +1503,22 @@ pub struct Insulator {
     sidebar_visible: bool,
     main_tabs_open: bool,
     main_tabs: Vec<MainTab>,
+    pull_requests_open: bool,
+    pull_requests_tab: pull_requests::PullRequestTab,
+    pull_requests: Vec<pull_requests::PullRequest>,
+    pull_requests_loading: bool,
+    pull_requests_error: Option<String>,
+    pull_request_detail: Option<pull_requests::PullRequest>,
+    pull_request_detail_tab: pull_requests::PullRequestDetailTab,
+    pull_request_detail_loading: bool,
+    pull_request_commits: HashMap<(String, u64), Vec<pull_requests::PullRequestCommit>>,
+    pull_request_commits_loading: bool,
+    pull_request_commits_error: Option<String>,
+    pull_request_diffs: HashMap<(String, u64), Arc<ReviewDiffSnapshot>>,
+    pull_request_diffs_loading: bool,
+    pull_request_diffs_error: Option<String>,
+    pull_request_markdown: RefCell<Option<((String, u64), MarkdownView)>>,
+    pull_requests_search: Entity<TextInput>,
     active_main_file_tab: Option<String>,
     active_main_review_tab: bool,
     main_tabs_scroll_handle: ScrollHandle,
@@ -1755,6 +1821,7 @@ mod file_search;
 mod goal_dialog;
 mod image_preview;
 mod project_dialog;
+mod pull_requests;
 mod render;
 mod resource_monitor;
 mod right_panel;
@@ -2090,6 +2157,9 @@ impl Insulator {
         let composer_draft_store = ComposerDraftStore::remote(daemon.clone());
         let composer_drafts = composer_draft_store.load().unwrap_or_default();
         let mut state = store.load_or_fresh(cwd);
+        let cached_pull_requests = pull_requests::load_cached_pull_requests();
+        let cached_commits = pull_requests::cached_commits(&cached_pull_requests);
+        let cached_diffs = pull_requests::cached_diffs(&cached_pull_requests);
         let home_directory = crate::projectless::home_directory();
         state.apply_daemon_settings(daemon.settings());
         if let Err(error) = daemon.update_settings(state.daemon_settings()) {
@@ -2193,6 +2263,11 @@ impl Insulator {
         });
         let usage_project_filter =
             cx.new(|cx| TextInput::new(window, cx).placeholder(tr!("input.filter_projects")));
+        let pull_requests_search = cx.new(|cx| {
+            TextInput::new(window, cx)
+                .clear_on_escape()
+                .placeholder("Search pull requests")
+        });
         let right_panel_diff_filter =
             cx.new(|cx| TextInput::new(window, cx).placeholder(tr!("diff.filter_files")));
         let navigation_rail = cx.new(|_| ConversationNavigationRail::new());
@@ -2250,7 +2325,12 @@ impl Insulator {
             window,
             cx,
         );
-        crate::platform::configure_window_style(window, state.window_style, state.color_theme, state.background_image_path.as_deref());
+        crate::platform::configure_window_style(
+            window,
+            state.window_style,
+            state.color_theme,
+            state.background_image_path.as_deref(),
+        );
         crate::platform::set_sidebar_material_width(window, sidebar_width);
         let project_paths = state
             .projects
@@ -2385,9 +2465,9 @@ impl Insulator {
                         Uuid::nil(),
                         insulator_client::Command::ProbeComputerPermissions { prompt: false },
                     ) {
-                        Ok(insulator_client::ResponsePayload::ComputerPermissions { permissions }) => {
-                            Ok(permissions)
-                        }
+                        Ok(insulator_client::ResponsePayload::ComputerPermissions {
+                            permissions,
+                        }) => Ok(permissions),
                         Ok(_) => Err("the daemon returned an invalid permission response".into()),
                         Err(error) => Err(error.to_string()),
                     };
@@ -2951,7 +3031,9 @@ impl Insulator {
                 let insulator = cx.entity().downgrade();
                 Rc::new(move |target, _, cx| {
                     let handled = insulator
-                        .update(cx, |insulator, cx| insulator.open_transcript_link(target, cx))
+                        .update(cx, |insulator, cx| {
+                            insulator.open_transcript_link(target, cx)
+                        })
                         .unwrap_or(false);
                     if !handled {
                         cx.open_url(target);
@@ -2959,6 +3041,49 @@ impl Insulator {
                 })
             };
             let initial_selected_session = state.selected_session;
+            let initial_main_tabs_open = if state.main_tabs.is_empty() {
+                initial_selected_session.is_some()
+            } else {
+                state.main_tabs_open
+            };
+            let initial_active_main_file_tab = state.active_main_file_tab.clone();
+            let initial_active_main_review_tab = state.active_main_review_tab;
+            let initial_right_panel_surfaces = state
+                .right_panel_surfaces
+                .clone()
+                .into_iter()
+                .map(RightPanelSurface::from)
+                .collect::<Vec<_>>();
+            let initial_right_panel_active_surface = state.right_panel_active_surface;
+            let initial_right_panel_upper_tab = initial_right_panel_active_surface
+                .and_then(|index| initial_right_panel_surfaces.get(index))
+                .map(|surface| match surface {
+                    RightPanelSurface::Diff => RightPanelUpperTab::Changes,
+                    RightPanelSurface::Browser(_) => RightPanelUpperTab::Browser,
+                    _ => RightPanelUpperTab::Files,
+                })
+                .unwrap_or(RightPanelUpperTab::Files);
+            let initial_main_tabs = if state.main_tabs.is_empty() {
+                initial_selected_session
+                    .map(|id| vec![MainTab::Chat(id)])
+                    .unwrap_or_default()
+            } else {
+                state
+                    .main_tabs
+                    .clone()
+                    .into_iter()
+                    .filter_map(|tab| match tab {
+                        PersistedMainTab::Chat(id) if state.sessions.iter().any(|s| s.id == id) => {
+                            Some(MainTab::Chat(id))
+                        }
+                        PersistedMainTab::File(path) if !path.is_empty() => {
+                            Some(MainTab::File(path))
+                        }
+                        PersistedMainTab::Review => Some(MainTab::Review),
+                        _ => None,
+                    })
+                    .collect()
+            };
 
             Self {
                 daemon,
@@ -3126,12 +3251,26 @@ impl Insulator {
                 sidebar_group_compose_focuses: RefCell::new(HashMap::new()),
                 sidebar_show_more_focuses: RefCell::new(HashMap::new()),
                 sidebar_visible,
-                main_tabs_open: initial_selected_session.is_some(),
-                main_tabs: initial_selected_session
-                    .map(|id| vec![MainTab::Chat(id)])
-                    .unwrap_or_default(),
-                active_main_file_tab: None,
-                active_main_review_tab: false,
+                main_tabs_open: initial_main_tabs_open,
+                main_tabs: initial_main_tabs,
+                pull_requests_open: false,
+                pull_requests_tab: pull_requests::PullRequestTab::All,
+                pull_requests: cached_pull_requests,
+                pull_requests_loading: false,
+                pull_requests_error: None,
+                pull_request_detail: None,
+                pull_request_detail_tab: pull_requests::PullRequestDetailTab::Summary,
+                pull_request_detail_loading: false,
+                pull_request_commits: cached_commits,
+                pull_request_commits_loading: false,
+                pull_request_commits_error: None,
+                pull_request_diffs: cached_diffs,
+                pull_request_diffs_loading: false,
+                pull_request_diffs_error: None,
+                pull_request_markdown: RefCell::new(None),
+                pull_requests_search,
+                active_main_file_tab: initial_active_main_file_tab,
+                active_main_review_tab: initial_active_main_review_tab,
                 main_tabs_scroll_handle: ScrollHandle::new(),
                 main_tabs_scrollbar: ScrollbarState::new(),
                 file_editor_input_expanded: false,
@@ -3148,16 +3287,27 @@ impl Insulator {
                 },
                 fps_counter_visible: false,
                 panel_resize_drag: None,
-                right_panel_upper_tab: RightPanelUpperTab::Files,
+                right_panel_upper_tab: initial_right_panel_upper_tab,
                 right_panel_terminal_height: 240.0,
                 right_panel_terminal_collapsed: false,
-                right_panel_terminal_ids: Vec::new(),
+                right_panel_terminal_ids: initial_right_panel_surfaces
+                    .iter()
+                    .filter_map(|surface| match surface {
+                        RightPanelSurface::Terminal(id) => Some(*id),
+                        _ => None,
+                    })
+                    .collect(),
                 right_panel_active_terminal_index: 0,
                 right_panel_terminal_tabs_scroll_handle: ScrollHandle::new(),
-                right_panel_browser_id: None,
+                right_panel_browser_id: initial_right_panel_surfaces.iter().find_map(|surface| {
+                    match surface {
+                        RightPanelSurface::Browser(id) => Some(*id),
+                        _ => None,
+                    }
+                }),
                 right_panel_session_states: HashMap::new(),
-                right_panel_surfaces: Vec::new(),
-                right_panel_active_surface: None,
+                right_panel_surfaces: initial_right_panel_surfaces,
+                right_panel_active_surface: initial_right_panel_active_surface,
                 right_panel_tabs_scroll_handle: ScrollHandle::new(),
                 right_panel_files_scroll_handle: ScrollHandle::new(),
                 right_panel_files_scrollbar: ScrollbarState::new(),
@@ -3180,7 +3330,7 @@ impl Insulator {
                 right_panel_files_selected_path: None,
                 right_panel_file_tree_width: DEFAULT_FILE_TREE_WIDTH,
                 right_panel_file_editors: HashMap::new(),
-        file_editor_selection: None,
+                file_editor_selection: None,
                 file_search: None,
                 right_panel_diff_source: ReviewDiffSource::default(),
                 right_panel_diff_snapshot: None,

@@ -38,6 +38,7 @@ enum CommitAction {
 enum CommitPending {
     Generating(CommitAction),
     Git(CommitAction),
+    PullRequest,
 }
 
 pub(super) struct CommitOperationState {
@@ -60,6 +61,7 @@ fn commit_pending_status_label(pending: CommitPending) -> String {
             tr!("commit.committing_and_pushing")
         }
         CommitPending::Git(CommitAction::Push) => tr!("commit.pushing"),
+        CommitPending::PullRequest => tr!("pull_request.opening"),
     }
 }
 
@@ -102,9 +104,101 @@ impl CommitDialogState {
 
 impl Insulator {
     pub(super) fn commit_operation_status_label(&self) -> Option<String> {
-        self.commit_operation
-            .as_ref()
-            .map(CommitOperationState::status_label)
+        self.commit_operation.as_ref().and_then(|operation| {
+            (operation.pending != CommitPending::PullRequest).then(|| operation.status_label())
+        })
+    }
+
+    pub(super) fn pull_request_operation_status_label(&self) -> Option<String> {
+        self.commit_operation.as_ref().and_then(|operation| {
+            (operation.pending == CommitPending::PullRequest).then(|| operation.status_label())
+        })
+    }
+
+    pub(super) fn git_operation_pending(&self) -> bool {
+        self.commit_operation.is_some()
+    }
+
+    pub(super) fn open_pull_request(&mut self, cx: &mut Context<Self>) {
+        if self.commit_operation.is_some() {
+            return;
+        }
+        let Some((workspace, invocation)) = self.selected_session().and_then(|session| {
+            let workspace = self.workspace_path_for_session(session)?.to_path_buf();
+            let probe = self.provider_probe(session.provider)?;
+            let binary = probe.path.clone()?;
+            Some((
+                workspace,
+                crate::git_commit::AgentInvocation {
+                    provider: session.provider,
+                    binary,
+                    model: self.model_for_session(session).map(str::to_owned),
+                    reasoning_effort: session.reasoning_effort.clone(),
+                },
+            ))
+        }) else {
+            self.show_toast(tr!("pull_request.agent_unavailable"));
+            cx.notify();
+            return;
+        };
+
+        let id = Uuid::new_v4();
+        self.commit_operation = Some(CommitOperationState {
+            id,
+            workspace: workspace.clone(),
+            pending: CommitPending::PullRequest,
+        });
+        cx.notify();
+
+        let workspace_client = insulator_client::WorkspaceClient::new(self.daemon.client());
+        cx.spawn(async move |insulator, cx| {
+            let operation_workspace = workspace.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    match workspace_client.request(
+                        insulator_client::WorkspaceOperation::CreatePullRequest {
+                            cwd: operation_workspace,
+                            commit_message: None,
+                            include_unstaged: true,
+                            invocation,
+                        },
+                    ) {
+                        Ok(insulator_client::WorkspaceResult::PullRequestCreated { url }) => Ok(url),
+                        Ok(_) => Err("the daemon returned an invalid pull request response".to_owned()),
+                        Err(error) => Err(error.to_string()),
+                    }
+                })
+                .await;
+            let _ = insulator.update(cx, |insulator, cx| {
+                let current = insulator.commit_operation.as_ref().is_some_and(|operation| {
+                    operation.id == id
+                        && operation.workspace == workspace
+                        && operation.pending == CommitPending::PullRequest
+                });
+                if !current {
+                    return;
+                }
+                insulator.commit_operation = None;
+                if insulator
+                    .selected_workspace_path()
+                    .is_some_and(|path| path == workspace)
+                {
+                    insulator.invalidate_workspace_queries(cx);
+                } else {
+                    insulator.branch_snapshots.invalidate(&workspace);
+                }
+                match result {
+                    Ok(url) => {
+                        insulator.show_success_toast(tr!("pull_request.opened"));
+                        cx.open_url(&url);
+                    }
+                    Err(error) => insulator.show_toast(error),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(super) fn open_commit_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -624,6 +718,7 @@ impl Insulator {
             CommitPending::Generating(action) | CommitPending::Git(action) => {
                 action == CommitAction::Commit
             }
+            CommitPending::PullRequest => false,
         });
         let commit = render_commit_action_row(
             "commit-dialog-commit",
@@ -647,6 +742,7 @@ impl Insulator {
             CommitPending::Generating(action) | CommitPending::Git(action) => {
                 action == CommitAction::CommitAndPush
             }
+            CommitPending::PullRequest => false,
         });
         let commit_and_push = render_commit_action_row(
             "commit-dialog-commit-and-push",

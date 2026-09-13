@@ -504,19 +504,27 @@ impl Insulator {
                                     let spans = match anchor_pos {
                                         Some(anchor_index) => {
                                             let direction = if head.0 > anchor_index
-                                                || (head.0 == anchor_index && head.1 >= anchor_offset)
+                                                || (head.0 == anchor_index
+                                                    && head.1 >= anchor_offset)
                                             {
                                                 crate::md::selection::DragDirection::Forward
                                             } else {
                                                 crate::md::selection::DragDirection::Backward
                                             };
-                                            selection.selection.borrow_mut().set_direction(direction);
+                                            selection
+                                                .selection
+                                                .borrow_mut()
+                                                .set_direction(direction);
                                             registry.resolve((anchor_index, anchor_offset), head)
                                         }
                                         None => {
                                             let sel = selection.selection.borrow();
                                             if let Some(direction) = sel.direction() {
-                                                registry.resolve_offscreen(head, direction, sel.spans())
+                                                registry.resolve_offscreen(
+                                                    head,
+                                                    direction,
+                                                    sel.spans(),
+                                                )
                                             } else {
                                                 Vec::new()
                                             }
@@ -549,7 +557,8 @@ impl Insulator {
                             let speed = (f32::from(dist) * 0.4 + 4.0).clamp(3.0, 35.0);
                             let next = (current + px(speed)).min(Pixels::ZERO);
                             if next != current {
-                                rows_for_scroll.set_offset_from_scrollbar(point(Pixels::ZERO, next));
+                                rows_for_scroll
+                                    .set_offset_from_scrollbar(point(Pixels::ZERO, next));
                                 scrolled = true;
                             }
                         } else if pos.y > bounds.bottom() - edge_zone {
@@ -557,7 +566,8 @@ impl Insulator {
                             let speed = (f32::from(dist) * 0.4 + 4.0).clamp(3.0, 35.0);
                             let next = (current - px(speed)).max(-max_offset);
                             if next != current {
-                                rows_for_scroll.set_offset_from_scrollbar(point(Pixels::ZERO, next));
+                                rows_for_scroll
+                                    .set_offset_from_scrollbar(point(Pixels::ZERO, next));
                                 scrolled = true;
                             }
                         }
@@ -1559,9 +1569,6 @@ impl Insulator {
         };
         let copied = self.copied_message_feedback.contains_key(&message.id);
         let action = self.assistant_message_action_for_message(message_index);
-        let force_visible = self
-            .hovered_response_row
-            .is_some_and(|(hovered_turn_id, _)| hovered_turn_id == turn_id);
         let group_name = SharedString::from(format!("assistant-response-footer-{turn_id}"));
         let mut column = div()
             .w_full()
@@ -1581,7 +1588,7 @@ impl Insulator {
                 copy_content,
                 copied,
                 group_name,
-                force_visible,
+                true,
                 false,
                 action,
                 None,

@@ -146,6 +146,19 @@ pub fn execute(operation: WorkspaceOperation) -> anyhow::Result<WorkspaceResult>
             crate::git_commit::push(&cwd)?;
             WorkspaceResult::Ack
         }
+        WorkspaceOperation::CreatePullRequest {
+            cwd,
+            commit_message,
+            include_unstaged,
+            invocation,
+        } => WorkspaceResult::PullRequestCreated {
+            url: crate::git_commit::create_pull_request(
+                &cwd,
+                commit_message.as_deref(),
+                include_unstaged,
+                &invocation,
+            )?,
+        },
         WorkspaceOperation::CaptureTurnStart {
             cwd,
             session_id,

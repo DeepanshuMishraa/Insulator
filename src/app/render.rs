@@ -340,9 +340,11 @@ impl Render for Insulator {
         let background_image = self.state.background_image_path.clone();
         let empty = should_render_empty_state(self.selected_session());
         let active_file = self.active_main_file_tab.clone();
+        let pull_requests_open = self.pull_requests_open;
         let active_review = self.active_main_review_tab;
         let file_editor_width =
-            (f32::from(window.viewport_size().width) - panels.sidebar - panels.right_panel).max(300.0);
+            (f32::from(window.viewport_size().width) - panels.sidebar - panels.right_panel)
+                .max(300.0);
         let permission = self.render_permission(cx);
         let computer_use = self.render_computer_use_overlay(cx);
         let command_palette = self.render_command_palette(window, cx);
@@ -438,8 +440,14 @@ impl Render for Insulator {
                     .flex()
                     .flex_col()
                     .bg(match window_style {
-                        WindowStyle::LiquidGlass => Hsla { a: 0.10, ..theme.surface },
-                        WindowStyle::Image => Hsla { a: 0.82, ..theme.surface },
+                        WindowStyle::LiquidGlass => Hsla {
+                            a: 0.10,
+                            ..theme.surface
+                        },
+                        WindowStyle::Image => Hsla {
+                            a: 0.82,
+                            ..theme.surface
+                        },
                         WindowStyle::Solid => theme.surface,
                         WindowStyle::Transparent => theme.surface,
                     })
@@ -447,13 +455,13 @@ impl Render for Insulator {
                         element.border_l_1().border_color(theme.sidebar_border)
                     })
                     .child(self.render_header(window, cx))
-
-                    .child(if let Some(path) = active_file.as_ref() {
+                    .child(if pull_requests_open {
+                        self.render_pull_requests(window, cx)
+                    } else if let Some(path) = active_file.as_ref() {
                         self.render_right_panel_file(path.clone(), file_editor_width, window, cx)
                             .into_any_element()
                     } else if active_review {
-                        self.render_main_review_diff(window, cx)
-                            .into_any_element()
+                        self.render_main_review_diff(window, cx).into_any_element()
                     } else if empty {
                         self.render_empty_state(cx)
                     } else {
@@ -464,7 +472,10 @@ impl Render for Insulator {
                     })
                     .children(permission)
                     .when(
-                        self.selected_session().is_some() && active_file.is_none() && !active_review,
+                        self.selected_session().is_some()
+                            && !pull_requests_open
+                            && active_file.is_none()
+                            && !active_review,
                         |element| {
                             element
                                 .children(self.render_queued_messages(cx))

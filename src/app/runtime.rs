@@ -192,7 +192,11 @@ fn attach_driver(
         return Ok(None);
     };
     let client = daemon.client();
-    let response = client.request(session_id, Uuid::nil(), insulator_client::Command::AttachSession)?;
+    let response = client.request(
+        session_id,
+        Uuid::nil(),
+        insulator_client::Command::AttachSession,
+    )?;
     let insulator_client::ResponsePayload::SessionRuntime {
         runtime_id,
         supports_steer,
@@ -325,17 +329,18 @@ fn prepare_submission(
             if project.is_projectless() {
                 anyhow::bail!("a projectless task cannot create a Git worktree");
             }
-            let created =
-                match workspace_client.request(insulator_client::WorkspaceOperation::CreateWorktree {
+            let created = match workspace_client.request(
+                insulator_client::WorkspaceOperation::CreateWorktree {
                     project_path: project.path.clone(),
                     project_id: project.id,
                     session_id,
                     prompt: prompt.to_owned(),
                     base_branch,
-                })? {
-                    insulator_client::WorkspaceResult::WorktreeCreated { worktree } => worktree,
-                    _ => anyhow::bail!("the daemon returned an invalid worktree response"),
-                };
+                },
+            )? {
+                insulator_client::WorkspaceResult::WorktreeCreated { worktree } => worktree,
+                _ => anyhow::bail!("the daemon returned an invalid worktree response"),
+            };
             SessionWorkspace::Worktree {
                 path: created.path,
                 branch: created.branch,
@@ -436,7 +441,10 @@ fn perform_message_rewind(
         return Err(tr!("session.pre_turn_checkpoint_missing"));
     }
 
-    let safety_ref = format!("refs/insulator/revert-backup-{session_id}-{}", Uuid::new_v4());
+    let safety_ref = format!(
+        "refs/insulator/revert-backup-{session_id}-{}",
+        Uuid::new_v4()
+    );
     workspace_ack(
         &request.workspace_client,
         insulator_client::WorkspaceOperation::CaptureRef {
@@ -753,12 +761,10 @@ fn perform_provider_rewind(
         }
         // Unreachable through the UI, which hides rewinding for providers that
         // answer `supports_conversation_rollback` with false.
-        ProviderKind::Fx | ProviderKind::Kimi => {
-            Err(anyhow::anyhow!(tr!(
-                "errors.provider_turn_branching_unsupported",
-                provider = provider.display_name()
-            )))
-        }
+        ProviderKind::Fx | ProviderKind::Kimi => Err(anyhow::anyhow!(tr!(
+            "errors.provider_turn_branching_unsupported",
+            provider = provider.display_name()
+        ))),
     }
 }
 
@@ -1481,7 +1487,8 @@ impl Insulator {
         if let Some(session) = self.selected_session() {
             return self.workspace_path_for_session(session);
         }
-        self.selected_project().map(|project| project.path.as_path())
+        self.selected_project()
+            .map(|project| project.path.as_path())
     }
 
     /// Marks the session for the next save; see `PersistedState::session_mut`.
@@ -1588,7 +1595,9 @@ impl Insulator {
                             probe_version: true,
                         },
                     ) {
-                        Ok(insulator_client::ResponsePayload::ProviderProbe { version, .. }) => version,
+                        Ok(insulator_client::ResponsePayload::ProviderProbe {
+                            version, ..
+                        }) => version,
                         _ => None,
                     };
                     if provider_version_tx.send((provider, version)).is_ok() {
@@ -1777,6 +1786,16 @@ impl Insulator {
     }
 
     pub(super) fn save(&mut self) {
+        self.state.main_tabs = self.main_tabs.iter().map(PersistedMainTab::from).collect();
+        self.state.main_tabs_open = self.main_tabs_open;
+        self.state.active_main_file_tab = self.active_main_file_tab.clone();
+        self.state.active_main_review_tab = self.active_main_review_tab;
+        self.state.right_panel_surfaces = self
+            .right_panel_surfaces
+            .iter()
+            .map(PersistedRightPanelSurface::from)
+            .collect();
+        self.state.right_panel_active_surface = self.right_panel_active_surface;
         self.state.pinned_sessions = self.pinned_session_ids.iter().copied().collect();
         self.state.pinned_sessions.sort_unstable();
         self.last_stream_save = Instant::now();
@@ -1907,71 +1926,79 @@ impl Insulator {
                         }
                     })
                     .await;
-                insulator.update(cx, |insulator, cx| {
-                    insulator.checkpoint_captures_in_flight
-                        .remove(&(session_id, turn_count));
-                    let selected = insulator.state.selected_session == Some(session_id);
-                    if selected {
-                        insulator.sync_transcript_rows();
-                    }
-                    let previous_kinds = if selected {
-                        insulator.transcript_row_kinds.borrow().clone()
-                    } else {
-                        Vec::new()
-                    };
-                    let checkpoint = match captured {
-                        Ok(checkpoint) => checkpoint,
-                        Err(error) => {
-                            insulator.show_toast(tr!("errors.capture_turn_checkpoint", error = error));
-                            Checkpoint {
-                                turn_count,
-                                git_ref: checkpoint::checkpoint_ref(session_id, turn_count),
-                                status: CheckpointStatus::Error,
-                                files: Vec::new(),
-                                additions: 0,
-                                deletions: 0,
-                                created_at: unix_time(),
-                            }
+                insulator
+                    .update(cx, |insulator, cx| {
+                        insulator
+                            .checkpoint_captures_in_flight
+                            .remove(&(session_id, turn_count));
+                        let selected = insulator.state.selected_session == Some(session_id);
+                        if selected {
+                            insulator.sync_transcript_rows();
                         }
-                    };
-                    insulator.invalidate_checkpoint_refs();
-                    let mut attached_turn_id = None;
-                    if let Some(session) = insulator.state.session_mut(session_id)
-                        && let Some(turn) = session
-                            .turns
-                            .iter_mut()
-                            .find(|turn| turn.turn_count == turn_count)
-                    {
-                        turn.checkpoint = Some(checkpoint);
-                        attached_turn_id = Some(turn.id);
-                    }
-                    if let Some(turn_id) = attached_turn_id
-                        && selected
-                    {
-                        // Reconcile a standalone card by row identity, then
-                        // remeasure the terminal response when the card is
-                        // hosted inline before its footer.
-                        insulator.splice_transcript_rows_after_visibility_change(&previous_kinds);
-                        insulator.remeasure_changed_files(turn_id);
-                    }
-                    let resume_queue = insulator.pending_queue_drains.contains(&session_id);
-                    if resume_queue {
-                        insulator.pending_queue_drains.retain(|id| *id != session_id);
-                        insulator.drain_queued_message(session_id, cx);
-                    }
-                    cx.notify();
-                    if attached_turn_id.is_some() {
-                        // Let the new transcript row paint before SQLite work.
-                        // Without this save, a checkpoint that lands after the
-                        // turn's final stream save can disappear on relaunch.
-                        cx.spawn(async move |insulator, cx| {
-                            cx.background_executor().timer(STREAM_FRAME_INTERVAL).await;
-                            let _ = insulator.update(cx, |insulator, _| insulator.save());
-                        })
-                        .detach();
-                    }
-                })
-                .ok();
+                        let previous_kinds = if selected {
+                            insulator.transcript_row_kinds.borrow().clone()
+                        } else {
+                            Vec::new()
+                        };
+                        let checkpoint = match captured {
+                            Ok(checkpoint) => checkpoint,
+                            Err(error) => {
+                                insulator.show_toast(tr!(
+                                    "errors.capture_turn_checkpoint",
+                                    error = error
+                                ));
+                                Checkpoint {
+                                    turn_count,
+                                    git_ref: checkpoint::checkpoint_ref(session_id, turn_count),
+                                    status: CheckpointStatus::Error,
+                                    files: Vec::new(),
+                                    additions: 0,
+                                    deletions: 0,
+                                    created_at: unix_time(),
+                                }
+                            }
+                        };
+                        insulator.invalidate_checkpoint_refs();
+                        let mut attached_turn_id = None;
+                        if let Some(session) = insulator.state.session_mut(session_id)
+                            && let Some(turn) = session
+                                .turns
+                                .iter_mut()
+                                .find(|turn| turn.turn_count == turn_count)
+                        {
+                            turn.checkpoint = Some(checkpoint);
+                            attached_turn_id = Some(turn.id);
+                        }
+                        if let Some(turn_id) = attached_turn_id
+                            && selected
+                        {
+                            // Reconcile a standalone card by row identity, then
+                            // remeasure the terminal response when the card is
+                            // hosted inline before its footer.
+                            insulator
+                                .splice_transcript_rows_after_visibility_change(&previous_kinds);
+                            insulator.remeasure_changed_files(turn_id);
+                        }
+                        let resume_queue = insulator.pending_queue_drains.contains(&session_id);
+                        if resume_queue {
+                            insulator
+                                .pending_queue_drains
+                                .retain(|id| *id != session_id);
+                            insulator.drain_queued_message(session_id, cx);
+                        }
+                        cx.notify();
+                        if attached_turn_id.is_some() {
+                            // Let the new transcript row paint before SQLite work.
+                            // Without this save, a checkpoint that lands after the
+                            // turn's final stream save can disappear on relaunch.
+                            cx.spawn(async move |insulator, cx| {
+                                cx.background_executor().timer(STREAM_FRAME_INTERVAL).await;
+                                let _ = insulator.update(cx, |insulator, _| insulator.save());
+                            })
+                            .detach();
+                        }
+                    })
+                    .ok();
             })
             .detach();
         }
@@ -2607,7 +2634,8 @@ impl Insulator {
             .sessions
             .iter()
             .find(|session| session.id == session_id)
-            .map(|session| session.provider) else {
+            .map(|session| session.provider)
+        else {
             return;
         };
         if selected {
@@ -3682,7 +3710,11 @@ impl Insulator {
         match driver {
             Ok(driver) => {
                 if provider == ProviderKind::Pi && starts_driver {
-                    let target = self.pi_plan_modes.get(&session_id).copied().unwrap_or_default();
+                    let target = self
+                        .pi_plan_modes
+                        .get(&session_id)
+                        .copied()
+                        .unwrap_or_default();
                     driver.provider_control(super::composer::pi_plan_mode_commands(
                         super::composer::PiPlanMode::Off,
                         target,

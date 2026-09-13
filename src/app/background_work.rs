@@ -50,7 +50,11 @@ struct BackgroundSummaryEntry {
 #[derive(Clone)]
 struct EnvironmentSummary {
     commit_status: Option<String>,
+    pull_request_status: Option<String>,
+    git_operation_pending: bool,
+    can_open_pull_request: bool,
     commit_focus: FocusHandle,
+    pull_request_focus: FocusHandle,
     compare_focus: FocusHandle,
 }
 
@@ -863,9 +867,20 @@ impl Insulator {
         let change_counts = snapshot
             .map(|snapshot| (snapshot.additions, snapshot.deletions))
             .filter(|(additions, deletions)| *additions > 0 || *deletions > 0);
+        let can_open_pull_request = snapshot.is_some_and(|snapshot| {
+            matches!(
+                (&snapshot.current, &snapshot.default_branch),
+                (Some(current), Some(default_branch)) if current != default_branch
+            )
+        });
         let environment = Some(EnvironmentSummary {
             commit_status: self.commit_operation_status_label(),
+            pull_request_status: self.pull_request_operation_status_label(),
+            git_operation_pending: self.git_operation_pending(),
+            can_open_pull_request,
             commit_focus: self.transcript_control_focus("environment-summary-commit", cx),
+            pull_request_focus: self
+                .transcript_control_focus("environment-summary-pull-request", cx),
             compare_focus: self.transcript_control_focus("environment-summary-compare", cx),
         });
         let (processes, agents) = session_id
@@ -1819,7 +1834,7 @@ fn render_environment_summary_section(
         environment
             .commit_status
             .unwrap_or_else(|| tr!("environment.commit_or_push")),
-        !commit_pending,
+        !environment.git_operation_pending,
         commit_pending,
         None,
         theme,
@@ -1828,6 +1843,29 @@ fn render_environment_summary_section(
             window.refresh();
             let _ = commit_weak.update(cx, |this, cx| {
                 this.open_commit_dialog(window, cx);
+            });
+        },
+    );
+
+    let pull_request_handle = handle.clone();
+    let pull_request_weak = weak.clone();
+    let pull_request_pending = environment.pull_request_status.is_some();
+    let pull_request = render_environment_action_row(
+        "environment-summary-pull-request",
+        &environment.pull_request_focus,
+        "icons/github.svg",
+        environment
+            .pull_request_status
+            .unwrap_or_else(|| tr!("environment.open_pull_request")),
+        environment.can_open_pull_request && !environment.git_operation_pending,
+        pull_request_pending,
+        Some(icon("icons/arrow-up-right.svg", 13.0, theme.text_tertiary).into_any_element()),
+        theme,
+        move |window, cx| {
+            pull_request_handle.close(window, cx);
+            window.refresh();
+            let _ = pull_request_weak.update(cx, |this, cx| {
+                this.open_pull_request(cx);
             });
         },
     );
@@ -1868,6 +1906,9 @@ fn render_environment_summary_section(
                 .child(tr!("environment.title")),
         )
         .child(commit)
+        .when(environment.can_open_pull_request || pull_request_pending, |section| {
+            section.child(pull_request)
+        })
         .child(compare)
 }
 
