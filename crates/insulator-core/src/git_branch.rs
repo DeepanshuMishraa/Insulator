@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::process::Output;
+use std::process::{Output, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -319,11 +319,11 @@ fn optional_stdout(cwd: &Path, args: &[&str]) -> anyhow::Result<Option<String>> 
 fn has_open_pull_request(cwd: &Path, branch: &str) -> bool {
     let key = (cwd.to_path_buf(), branch.to_owned());
     let cache = OPEN_PULL_REQUEST_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(cache) = cache.lock()
-        && let Some((checked_at, open)) = cache.get(&key)
-        && checked_at.elapsed() < PULL_REQUEST_CACHE_TTL
-    {
-        return *open;
+    if let Ok(mut cache) = cache.lock() {
+        cache.retain(|_, (checked_at, _)| checked_at.elapsed() < PULL_REQUEST_CACHE_TTL);
+        if let Some((_, open)) = cache.get(&key) {
+            return *open;
+        }
     }
 
     let mut command = crate::command_env::command("gh");
@@ -331,7 +331,10 @@ fn has_open_pull_request(cwd: &Path, branch: &str) -> bool {
         .args(["pr", "view", branch, "--json", "state", "--jq", ".state"])
         .current_dir(cwd)
         .env("GH_PROMPT_DISABLED", "1")
-        .env("GH_PAGER", "cat");
+        .env("GH_PAGER", "cat")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     let open = crate::command_env::spawn(&mut command)
         .ok()
         .and_then(|mut child| {
@@ -357,8 +360,11 @@ fn has_open_pull_request(cwd: &Path, branch: &str) -> bool {
         })
         .is_some_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "OPEN");
 
-    if let Ok(mut cache) = cache.lock() {
-        cache.insert(key, (Instant::now(), open));
+    if open {
+        if let Ok(mut cache) = cache.lock() {
+            cache.retain(|_, (checked_at, _)| checked_at.elapsed() < PULL_REQUEST_CACHE_TTL);
+            cache.insert(key, (Instant::now(), true));
+        }
     }
     open
 }

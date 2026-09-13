@@ -1170,6 +1170,7 @@ impl From<&RightPanelSurface> for PersistedRightPanelSurface {
             RightPanelSurface::Files => Self::Files,
             RightPanelSurface::Diff => Self::Diff,
             RightPanelSurface::File(path) => Self::File(path.clone()),
+            // Background work is transient and filtered before persistence.
             RightPanelSurface::BackgroundWork { .. } => Self::Files,
         }
     }
