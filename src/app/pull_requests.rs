@@ -64,6 +64,8 @@ pub(super) struct PullRequest {
     number: u64,
     title: String,
     #[serde(default)]
+    author: String,
+    #[serde(default)]
     body: String,
     repository: String,
     state: String,
@@ -81,6 +83,8 @@ struct GhPullRequest {
     number: u64,
     title: String,
     #[serde(default)]
+    author: GhAuthor,
+    #[serde(default)]
     body: Option<String>,
     state: String,
     #[serde(default)]
@@ -93,13 +97,19 @@ struct GhPullRequest {
     repository: GhRepository,
 }
 
+#[derive(Default, Deserialize)]
+struct GhAuthor {
+    #[serde(default)]
+    login: String,
+}
+
 #[derive(Deserialize, Default)]
 struct GhRepository {
     #[serde(rename = "nameWithOwner")]
     name_with_owner: String,
 }
 
-const GH_FIELDS: &str = "number,title,body,state,updatedAt,url,repository";
+const GH_FIELDS: &str = "number,title,author,body,state,updatedAt,url,repository";
 
 fn load_owned_repository_pull_requests() -> anyhow::Result<Vec<GhPullRequest>> {
     let login = std::process::Command::new("gh")
@@ -432,6 +442,7 @@ fn load_pull_requests() -> anyhow::Result<Vec<PullRequest>> {
             entries.entry(key).or_insert_with(|| PullRequest {
                 number: request.number,
                 title: request.title.clone(),
+                author: request.author.login.clone(),
                 body: request.body.clone().unwrap_or_default(),
                 repository: request.repository.name_with_owner.clone(),
                 state,
@@ -449,9 +460,10 @@ fn load_pull_requests() -> anyhow::Result<Vec<PullRequest>> {
 
 impl Insulator {
     pub(super) fn ensure_pull_requests(&mut self, force: bool, cx: &mut Context<Self>) {
-        if self.pull_requests_loading {
+        if self.pull_requests_refreshing {
             return;
         }
+        self.pull_requests_refreshing = true;
         self.pull_requests_loading = self.pull_requests.is_empty() || force;
         let entity = cx.entity().downgrade();
         let cached = self.pull_requests.clone();
@@ -471,6 +483,7 @@ impl Insulator {
             .await;
             let _ = entity.update(cx, |this, cx| {
                 this.pull_requests_loading = false;
+                this.pull_requests_refreshing = false;
                 match result {
                     Ok(entries) => {
                         this.pull_requests = entries;
@@ -832,8 +845,14 @@ fn render_pull_request_row(
                         .text_size(sp(12.5))
                         .text_color(theme.text_secondary)
                         .child(SharedString::from(format!(
-                            "{}  ·  {}",
-                            entry.repository, entry.state
+                            "{}  ·  {}  ·  {}",
+                            entry.repository,
+                            if entry.author.is_empty() {
+                                "unknown"
+                            } else {
+                                &entry.author
+                            },
+                            entry.state
                         ))),
                 ),
         )
@@ -1193,6 +1212,7 @@ mod tests {
         let cached = super::PullRequest {
             number: 1,
             title: "Old title".into(),
+            author: "contributor".into(),
             body: "Cached body".into(),
             repository: "owner/repo".into(),
             state: "open".into(),

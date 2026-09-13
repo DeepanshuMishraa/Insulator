@@ -1507,6 +1507,7 @@ pub struct Insulator {
     pull_requests_tab: pull_requests::PullRequestTab,
     pull_requests: Vec<pull_requests::PullRequest>,
     pull_requests_loading: bool,
+    pull_requests_refreshing: bool,
     pull_requests_error: Option<String>,
     pull_request_detail: Option<pull_requests::PullRequest>,
     pull_request_detail_tab: pull_requests::PullRequestDetailTab,
@@ -3257,6 +3258,7 @@ impl Insulator {
                 pull_requests_tab: pull_requests::PullRequestTab::All,
                 pull_requests: cached_pull_requests,
                 pull_requests_loading: false,
+                pull_requests_refreshing: false,
                 pull_requests_error: None,
                 pull_request_detail: None,
                 pull_request_detail_tab: pull_requests::PullRequestDetailTab::Summary,
@@ -3474,6 +3476,8 @@ impl Insulator {
             // The skill library too: the Skills settings page must open onto
             // data, not a scan.
             this.ensure_skills_catalog(false, cx);
+            // Refresh GitHub pull requests at launch while cached rows remain visible.
+            this.ensure_pull_requests(false, cx);
             // And the header's "open project in app" targets, so its menu
             // lists installed apps and icons without ever probing on a frame.
             this.detect_open_in_apps(cx);

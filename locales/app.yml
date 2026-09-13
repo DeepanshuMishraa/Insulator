@@ -1617,7 +1617,7 @@ commit.pushed:
 pull_request.opening:
   en: Opening pull request…
 pull_request.opened:
-  en: Opened pull request
+  en: Pull request created
 pull_request.agent_unavailable:
   en: The current agent CLI is unavailable, so it cannot write the pull request
 

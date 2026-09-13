@@ -189,7 +189,8 @@ pub fn create_pull_request(
     invocation: &AgentInvocation,
 ) -> anyhow::Result<String> {
     let snapshot = inspect(cwd)?;
-    let default_branch = default_branch(cwd)?
+    let default_branch = github_default_branch(cwd)?
+        .or(default_branch(cwd)?)
         .ok_or_else(|| anyhow!("could not determine the repository's default branch"))?;
     if snapshot.branch == default_branch || snapshot.branch == "HEAD" {
         bail!("switch to a non-default branch before opening a pull request");
@@ -278,6 +279,28 @@ fn parse_pull_request_draft(output: &str) -> anyhow::Result<PullRequestDraft> {
         bail!("the agent returned an empty pull request title or body");
     }
     Ok(draft)
+}
+
+fn github_default_branch(cwd: &Path) -> anyhow::Result<Option<String>> {
+    let output = gh_capture(
+        cwd,
+        &[
+            "repo",
+            "view",
+            "--json",
+            "defaultBranchRef",
+            "--jq",
+            ".defaultBranchRef.name",
+        ],
+    )?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_owned))
 }
 
 fn existing_pull_request_url(cwd: &Path) -> anyhow::Result<Option<String>> {
@@ -896,6 +919,16 @@ mod tests {
             normalize_message("Commit message: Add commit dialog\n").as_deref(),
             Some("Add commit dialog")
         );
+    }
+
+    #[test]
+    fn parses_pull_request_json_from_agent_output() {
+        let draft = parse_pull_request_draft(
+            "```json\n{\"title\":\"Fix branch detection.\",\"body\":\"## Summary\\nFix it\"}\n```",
+        )
+        .unwrap();
+        assert_eq!(draft.title, "Fix branch detection");
+        assert_eq!(draft.body, "## Summary\nFix it");
     }
 
     fn has(args: &[OsString], value: &str) -> bool {
