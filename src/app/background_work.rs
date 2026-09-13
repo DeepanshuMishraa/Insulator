@@ -53,6 +53,7 @@ struct EnvironmentSummary {
     pull_request_status: Option<String>,
     git_operation_pending: bool,
     can_open_pull_request: bool,
+    has_non_default_branch: bool,
     commit_focus: FocusHandle,
     pull_request_focus: FocusHandle,
     compare_focus: FocusHandle,
@@ -866,17 +867,20 @@ impl Insulator {
         let change_counts = snapshot
             .map(|snapshot| (snapshot.additions, snapshot.deletions))
             .filter(|(additions, deletions)| *additions > 0 || *deletions > 0);
-        let can_open_pull_request = snapshot.is_some_and(|snapshot| {
+        let has_non_default_branch = snapshot.is_some_and(|snapshot| {
             matches!(
                 (&snapshot.current, &snapshot.default_branch),
                 (Some(current), Some(default_branch)) if current != default_branch
             )
         });
+        let can_open_pull_request = has_non_default_branch
+            && snapshot.is_some_and(|snapshot| !snapshot.pull_request_open);
         let environment = Some(EnvironmentSummary {
             commit_status: self.commit_operation_status_label(),
             pull_request_status: self.pull_request_operation_status_label(),
             git_operation_pending: self.git_operation_pending(),
             can_open_pull_request,
+            has_non_default_branch,
             commit_focus: self.transcript_control_focus("environment-summary-commit", cx),
             pull_request_focus: self
                 .transcript_control_focus("environment-summary-pull-request", cx),
@@ -1906,7 +1910,9 @@ fn render_environment_summary_section(
         )
         .child(commit)
         .when(
-            environment.can_open_pull_request || pull_request_pending,
+            environment.can_open_pull_request
+                || pull_request_pending
+                || environment.has_non_default_branch,
             |section| section.child(pull_request),
         )
         .child(compare)

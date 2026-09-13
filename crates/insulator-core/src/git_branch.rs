@@ -103,6 +103,9 @@ pub fn inspect(cwd: &Path) -> anyhow::Result<Option<BranchSnapshot>> {
         .filter(|branch| branches.iter().any(|entry| entry.name == *branch))
         .map(str::to_owned)
         .or_else(|| current.clone());
+    let pull_request_open = current
+        .as_deref()
+        .is_some_and(|branch| has_open_pull_request(cwd, branch));
     let (additions, deletions) = worktree_line_counts(&repository);
 
     Ok(Some(BranchSnapshot {
@@ -110,6 +113,7 @@ pub fn inspect(cwd: &Path) -> anyhow::Result<Option<BranchSnapshot>> {
         current,
         detached_head,
         default_branch,
+        pull_request_open,
         branches,
         additions,
         deletions,
@@ -301,6 +305,19 @@ fn optional_stdout(cwd: &Path, args: &[&str]) -> anyhow::Result<Option<String>> 
         return Ok(None);
     }
     bail!("{}", command_error(&output))
+}
+
+fn has_open_pull_request(cwd: &Path, branch: &str) -> bool {
+    let output = crate::command_env::plain_command("gh")
+        .args(["pr", "view", "--head", branch, "--json", "state", "--jq", ".state"])
+        .current_dir(cwd)
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("GH_PAGER", "cat")
+        .output();
+    output
+        .ok()
+        .filter(|output| output.status.success())
+        .is_some_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "OPEN")
 }
 
 fn command_error(output: &Output) -> String {
