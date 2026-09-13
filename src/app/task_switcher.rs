@@ -81,7 +81,8 @@ impl TaskSwitcherUi {
 
     fn reset_list(&self) {
         let rows = self.ordered_session_ids.len().div_ceil(self.columns.max(1));
-        self.list.reset_with_uniform_height(rows, px(CARD_HEIGHT + CARD_GAP));
+        self.list
+            .reset_with_uniform_height(rows, px(CARD_HEIGHT + CARD_GAP));
     }
 
     fn reveal_highlight(&self) {
@@ -267,7 +268,12 @@ impl Insulator {
         }
     }
 
-    pub(crate) fn cycle_task_switcher(&mut self, reverse: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn cycle_task_switcher(
+        &mut self,
+        reverse: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.task_switcher.open {
             self.open_task_switcher(reverse, window, cx);
             return;
@@ -497,7 +503,9 @@ impl Insulator {
                 status_color(&theme, session.status),
                 11.0,
             )),
-            Some(path) => Some(icon(path, 11.0, status_color(&theme, session.status)).into_any_element()),
+            Some(path) => {
+                Some(icon(path, 11.0, status_color(&theme, session.status)).into_any_element())
+            }
             None => None,
         };
 
@@ -517,8 +525,7 @@ impl Insulator {
                     .shadow_md()
             })
             .when(!highlighted, |card| {
-                card.border_color(theme.border)
-                    .bg(theme.inset)
+                card.border_color(theme.border).bg(theme.inset)
             })
             .hover(|card| {
                 if !highlighted {
@@ -564,7 +571,12 @@ impl Insulator {
                             .items_center()
                             .gap(px(6.0))
                             .min_w_0()
-                            .child(provider_mark(&theme, provider, 13.0, provider_color(&theme, provider)))
+                            .child(provider_mark(
+                                &theme,
+                                provider,
+                                13.0,
+                                provider_color(&theme, provider),
+                            ))
                             .child(
                                 div()
                                     .truncate()

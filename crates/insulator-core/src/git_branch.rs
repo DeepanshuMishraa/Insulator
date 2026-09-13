@@ -4,10 +4,14 @@
 //! from the background executor; render paths consume only the cached
 //! [`BranchSnapshot`] values they return.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::process::Output;
+use std::process::{Child, Output, Stdio};
+use std::sync::{Mutex, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::ffi::OsString;
@@ -19,6 +23,11 @@ const MAX_UNTRACKED_FILES: usize = 2_048;
 const MAX_UNTRACKED_FILE_BYTES: u64 = 8 * 1_024 * 1_024;
 const MAX_UNTRACKED_TOTAL_BYTES: u64 = 32 * 1_024 * 1_024;
 const BINARY_PROBE_BYTES: usize = 8_000;
+const PULL_REQUEST_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
+const PULL_REQUEST_CACHE_TTL: Duration = Duration::from_secs(30);
+
+static OPEN_PULL_REQUEST_CACHE: OnceLock<Mutex<HashMap<(PathBuf, String), (Instant, bool)>>> =
+    OnceLock::new();
 
 pub use insulator_protocol::git::{BranchEntry, BranchSnapshot};
 
@@ -103,6 +112,9 @@ pub fn inspect(cwd: &Path) -> anyhow::Result<Option<BranchSnapshot>> {
         .filter(|branch| branches.iter().any(|entry| entry.name == *branch))
         .map(str::to_owned)
         .or_else(|| current.clone());
+    let pull_request_open = current
+        .as_deref()
+        .and_then(|branch| has_open_pull_request(cwd, branch));
     let (additions, deletions) = worktree_line_counts(&repository);
 
     Ok(Some(BranchSnapshot {
@@ -110,6 +122,7 @@ pub fn inspect(cwd: &Path) -> anyhow::Result<Option<BranchSnapshot>> {
         current,
         detached_head,
         default_branch,
+        pull_request_open,
         branches,
         additions,
         deletions,
@@ -302,6 +315,133 @@ fn optional_stdout(cwd: &Path, args: &[&str]) -> anyhow::Result<Option<String>> 
     }
     bail!("{}", command_error(&output))
 }
+
+fn has_open_pull_request(cwd: &Path, branch: &str) -> Option<bool> {
+    let key = (cwd.to_path_buf(), branch.to_owned());
+    let cache = OPEN_PULL_REQUEST_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut cache) = cache.lock() {
+        cache.retain(|_, (checked_at, _)| checked_at.elapsed() < PULL_REQUEST_CACHE_TTL);
+        if let Some((_, open)) = cache.get(&key) {
+            return Some(*open);
+        }
+    }
+
+    let mut command = crate::command_env::command("gh");
+    command
+        .args(["pr", "view", "--json", "state", "--jq", ".state"])
+        .current_dir(cwd)
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("GH_PAGER", "cat")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    prepare_pull_request_process_group(&mut command);
+    let result = crate::command_env::spawn(&mut command)
+        .ok()
+        .and_then(read_timed_pull_request_output)
+        .and_then(|output| {
+            if output.status.success() {
+                return Some(String::from_utf8_lossy(&output.stdout).trim() == "OPEN");
+            }
+            let error = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
+            ["no pull requests found", "no pull request found"]
+                .iter()
+                .any(|message| error.contains(message))
+                .then_some(false)
+        });
+
+    if let Some(open) = result {
+        if let Ok(mut cache) = cache.lock() {
+            cache.retain(|_, (checked_at, _)| checked_at.elapsed() < PULL_REQUEST_CACHE_TTL);
+            cache.insert(key, (Instant::now(), open));
+        }
+    }
+    result
+}
+
+fn read_timed_pull_request_output(mut child: Child) -> Option<Output> {
+    let stdout = child.stdout.take()?;
+    let stderr = child.stderr.take()?;
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = std::io::BufReader::new(stdout)
+            .take(16 * 1024 * 1024)
+            .read_to_end(&mut bytes);
+        bytes
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = std::io::BufReader::new(stderr)
+            .take(16 * 1024 * 1024)
+            .read_to_end(&mut bytes);
+        bytes
+    });
+    let deadline = Instant::now() + PULL_REQUEST_LOOKUP_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(25));
+            }
+            _ => {
+                terminate_process_group(&mut child);
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return None;
+            }
+        }
+    };
+    // Helpers may inherit the pipes after the direct child exits. Close the
+    // process group before joining readers so branch inspection cannot hang.
+    terminate_process_group(&mut child);
+    let stdout = stdout_reader.join().ok()?;
+    let stderr = stderr_reader.join().ok()?;
+    Some(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn terminate_process_group(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        if let Ok(pid) = i32::try_from(child.id()) {
+            // The child is placed in its own process group before spawning.
+            unsafe {
+                libc::killpg(pid, libc::SIGKILL);
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        // `gh` can leave a helper holding one of the inherited pipes. Ask
+        // Windows to terminate the complete process tree before joining the
+        // reader threads.
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .output();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+fn prepare_pull_request_process_group(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt as _;
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn prepare_pull_request_process_group(_command: &mut std::process::Command) {}
 
 fn command_error(output: &Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();

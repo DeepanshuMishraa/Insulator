@@ -8,10 +8,13 @@ use gpui::{
 pub mod menu;
 pub mod motion;
 pub mod scrollbar;
+pub mod shimmer;
 pub mod slider;
 pub mod text_field;
 pub mod tooltip;
 
+#[allow(unused_imports)]
+pub use shimmer::{ShimmerSpread, ShimmerStyle, ShimmerText};
 #[allow(unused_imports)]
 pub use slider::{Slider, SliderEvent, SliderState, SliderValue};
 
@@ -258,13 +261,11 @@ pub fn provider_mark(theme: &Theme, provider: ProviderKind, size: f32, color: Hs
         .child(icon(provider_icon(provider), size, color));
     match provider_badge(provider) {
         // The badge inherits the base's alpha so a dimmed row dims both layers.
-        Some(badge) => base.child(
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .child(icon(badge, size, theme.danger.opacity(color.a))),
-        ),
+        Some(badge) => base.child(div().absolute().top_0().left_0().child(icon(
+            badge,
+            size,
+            theme.danger.opacity(color.a),
+        ))),
         None => base,
     }
 }
@@ -391,8 +392,7 @@ impl MenuChip {
     /// over `icon(provider_icon(..), ..)`, which silently drops the badge.
     pub fn provider(mut self, theme: &Theme, provider: ProviderKind, color: Hsla) -> Self {
         self.icon = Some((provider_icon(provider), color));
-        self.badge =
-            provider_badge(provider).map(|badge| (badge, theme.danger.opacity(color.a)));
+        self.badge = provider_badge(provider).map(|badge| (badge, theme.danger.opacity(color.a)));
         self
     }
 
@@ -490,13 +490,11 @@ impl RenderOnce for MenuChip {
                             .h(sp(12.0))
                             .flex_none()
                             .child(mark)
-                            .child(
-                                div()
-                                    .absolute()
-                                    .top_0()
-                                    .left_0()
-                                    .child(icon(badge, 12.0, badge_color)),
-                            ),
+                            .child(div().absolute().top_0().left_0().child(icon(
+                                badge,
+                                12.0,
+                                badge_color,
+                            ))),
                     ),
                     None => element.child(div().flex_none().child(mark)),
                 }
@@ -508,36 +506,34 @@ impl RenderOnce for MenuChip {
                     .text_color(theme.text_secondary)
                     .child(self.label),
             )
-            .when_some(self.trailing_tag, |element, (icon_path, icon_color, tag_label)| {
-                element
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_color(theme.text_ghost)
-                            .child("·"),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex()
-                            .items_center()
-                            .gap(px(4.0))
-                            .child(div().flex_none().child(icon(icon_path, 11.5, icon_color)))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_color(theme.text_secondary)
-                                    .child(tag_label),
-                            ),
-                    )
-            })
+            .when_some(
+                self.trailing_tag,
+                |element, (icon_path, icon_color, tag_label)| {
+                    element
+                        .child(div().flex_none().text_color(theme.text_ghost).child("·"))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex()
+                                .items_center()
+                                .gap(px(4.0))
+                                .child(div().flex_none().child(icon(icon_path, 11.5, icon_color)))
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_color(theme.text_secondary)
+                                        .child(tag_label),
+                                ),
+                        )
+                },
+            )
             .when(self.caret, |element| {
-                element.child(
-                    div()
-                        .flex_none()
-                        .child(icon("icons/chevron-down.svg", 10.5, theme.text_ghost)),
-                )
+                element.child(div().flex_none().child(icon(
+                    "icons/chevron-down.svg",
+                    10.5,
+                    theme.text_ghost,
+                )))
             })
     }
 }
@@ -599,12 +595,7 @@ impl RenderOnce for ProjectNameSelector {
             .flex_none()
             .cursor_default()
             .focus_visible(|style| style.border_1().border_color(theme.accent))
-            .child(
-                div()
-                    .truncate()
-                    .max_w(px(240.0))
-                    .child(self.label),
-            )
+            .child(div().truncate().max_w(px(240.0)).child(self.label))
             .child(
                 canvas(
                     |_, _, _| {},

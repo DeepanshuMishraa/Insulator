@@ -133,6 +133,13 @@ pub enum WorkspaceOperation {
         #[ts(type = "string")]
         cwd: PathBuf,
     },
+    CreatePullRequest {
+        #[ts(type = "string")]
+        cwd: PathBuf,
+        commit_message: Option<String>,
+        include_unstaged: bool,
+        invocation: AgentInvocation,
+    },
     CaptureTurnStart {
         #[ts(type = "string")]
         cwd: PathBuf,
@@ -246,6 +253,9 @@ pub enum WorkspaceResult {
     },
     CommitMessage {
         message: String,
+    },
+    PullRequestCreated {
+        url: String,
     },
     Checkpoint {
         checkpoint: Checkpoint,

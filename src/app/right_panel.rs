@@ -1924,12 +1924,17 @@ impl Insulator {
     }
 
     pub(super) fn close_right_panel_terminal(&mut self, terminal_id: Uuid, cx: &mut Context<Self>) {
-        if let Some(pos) = self.right_panel_terminal_ids.iter().position(|id| *id == terminal_id) {
+        if let Some(pos) = self
+            .right_panel_terminal_ids
+            .iter()
+            .position(|id| *id == terminal_id)
+        {
             self.right_panel_terminal_ids.remove(pos);
             self.right_panel_terminals.remove(&terminal_id);
             if self.right_panel_terminal_ids.is_empty() {
                 self.right_panel_active_terminal_index = 0;
-            } else if self.right_panel_active_terminal_index >= self.right_panel_terminal_ids.len() {
+            } else if self.right_panel_active_terminal_index >= self.right_panel_terminal_ids.len()
+            {
                 self.right_panel_active_terminal_index = self.right_panel_terminal_ids.len() - 1;
             }
             self.request_active_terminal_focus();
@@ -1946,17 +1951,21 @@ impl Insulator {
     }
 
     pub(super) fn request_active_terminal_focus(&mut self) {
-        self.right_panel_pending_terminal_focus = self
-            .right_panel_active_terminal_id()
-            .or_else(|| self.active_right_panel_surface().and_then(RightPanelSurface::terminal_id));
+        self.right_panel_pending_terminal_focus =
+            self.right_panel_active_terminal_id().or_else(|| {
+                self.active_right_panel_surface()
+                    .and_then(RightPanelSurface::terminal_id)
+            });
     }
 
     pub(super) fn request_active_browser_focus(&mut self) {
-        self.right_panel_pending_browser_focus = if self.right_panel_upper_tab == RightPanelUpperTab::Browser {
-            self.right_panel_browser_id
-        } else {
-            self.active_right_panel_surface().and_then(RightPanelSurface::browser_id)
-        };
+        self.right_panel_pending_browser_focus =
+            if self.right_panel_upper_tab == RightPanelUpperTab::Browser {
+                self.right_panel_browser_id
+            } else {
+                self.active_right_panel_surface()
+                    .and_then(RightPanelSurface::browser_id)
+            };
     }
 
     /// The file the active editor surface is showing, whether via a File tab
@@ -2053,11 +2062,16 @@ impl Insulator {
                 self.right_panel_pending_browser_focus = Some(*browser_id);
             }
             RightPanelSurface::Terminal(terminal_id) => {
-                if let Some(pos) = self.right_panel_terminal_ids.iter().position(|id| id == terminal_id) {
+                if let Some(pos) = self
+                    .right_panel_terminal_ids
+                    .iter()
+                    .position(|id| id == terminal_id)
+                {
                     self.right_panel_active_terminal_index = pos;
                 } else {
                     self.right_panel_terminal_ids.push(*terminal_id);
-                    self.right_panel_active_terminal_index = self.right_panel_terminal_ids.len() - 1;
+                    self.right_panel_active_terminal_index =
+                        self.right_panel_terminal_ids.len() - 1;
                 }
                 self.right_panel_terminal_collapsed = false;
                 self.ensure_right_panel_terminal(*terminal_id, cx);
@@ -2086,6 +2100,7 @@ impl Insulator {
         self.right_panel_active_surface = Some(index);
         self.reveal_right_panel_tab(index);
         self.set_right_panel_visible(true, cx);
+        self.save();
         cx.notify();
     }
 
@@ -2152,6 +2167,7 @@ impl Insulator {
             }
         }
         self.main_tabs_scroll_handle.scroll_to_item(index);
+        self.save();
         cx.notify();
     }
 
@@ -2161,11 +2177,17 @@ impl Insulator {
             return;
         }
         let current_index = if self.active_main_review_tab {
-            self.main_tabs.iter().position(|t| matches!(t, MainTab::Review))
+            self.main_tabs
+                .iter()
+                .position(|t| matches!(t, MainTab::Review))
         } else if let Some(path) = &self.active_main_file_tab {
-            self.main_tabs.iter().position(|t| matches!(t, MainTab::File(p) if p == path))
+            self.main_tabs
+                .iter()
+                .position(|t| matches!(t, MainTab::File(p) if p == path))
         } else if let Some(session_id) = self.state.selected_session {
-            self.main_tabs.iter().position(|t| matches!(t, MainTab::Chat(id) if *id == session_id))
+            self.main_tabs
+                .iter()
+                .position(|t| matches!(t, MainTab::Chat(id) if *id == session_id))
         } else {
             None
         };
@@ -2186,22 +2208,23 @@ impl Insulator {
     }
 
     pub(super) fn open_main_review_tab(&mut self, cx: &mut Context<Self>) {
-        let empty_draft_to_replace = if !self.active_main_review_tab && self.active_main_file_tab.is_none() {
-            self.state.selected_session.filter(|session_id| {
-                self.state
-                    .sessions
-                    .iter()
-                    .find(|session| session.id == *session_id)
-                    .is_some_and(|session| {
-                        !session.has_started()
-                            && session.messages.is_empty()
-                            && session.turns.is_empty()
-                            && session.queued_messages.is_empty()
-                    })
-            })
-        } else {
-            None
-        };
+        let empty_draft_to_replace =
+            if !self.active_main_review_tab && self.active_main_file_tab.is_none() {
+                self.state.selected_session.filter(|session_id| {
+                    self.state
+                        .sessions
+                        .iter()
+                        .find(|session| session.id == *session_id)
+                        .is_some_and(|session| {
+                            !session.has_started()
+                                && session.messages.is_empty()
+                                && session.turns.is_empty()
+                                && session.queued_messages.is_empty()
+                        })
+                })
+            } else {
+                None
+            };
 
         let review_tab = MainTab::Review;
         if let Some(draft_id) = empty_draft_to_replace {
@@ -2238,6 +2261,7 @@ impl Insulator {
             self.right_panel_active_surface = Some(index);
             self.set_right_panel_visible(true, cx);
             self.refresh_right_panel_diff(cx);
+            self.save();
             cx.notify();
         } else {
             self.open_right_panel_surface(RightPanelSurface::Diff, cx);
@@ -2252,7 +2276,9 @@ impl Insulator {
 
         if was_active {
             if !self.main_tabs.is_empty() {
-                let next_index = index.unwrap_or(0).min(self.main_tabs.len().saturating_sub(1));
+                let next_index = index
+                    .unwrap_or(0)
+                    .min(self.main_tabs.len().saturating_sub(1));
                 self.activate_main_tab_at_index(next_index, cx);
             } else {
                 self.active_main_file_tab = None;
@@ -2265,26 +2291,28 @@ impl Insulator {
         } else if self.main_tabs.is_empty() {
             self.main_tabs_open = false;
         }
+        self.save();
         cx.notify();
     }
 
     fn open_right_panel_file(&mut self, relative_path: String, cx: &mut Context<Self>) {
-        let empty_draft_to_replace = if !self.active_main_review_tab && self.active_main_file_tab.is_none() {
-            self.state.selected_session.filter(|session_id| {
-                self.state
-                    .sessions
-                    .iter()
-                    .find(|session| session.id == *session_id)
-                    .is_some_and(|session| {
-                        !session.has_started()
-                            && session.messages.is_empty()
-                            && session.turns.is_empty()
-                            && session.queued_messages.is_empty()
-                    })
-            })
-        } else {
-            None
-        };
+        let empty_draft_to_replace =
+            if !self.active_main_review_tab && self.active_main_file_tab.is_none() {
+                self.state.selected_session.filter(|session_id| {
+                    self.state
+                        .sessions
+                        .iter()
+                        .find(|session| session.id == *session_id)
+                        .is_some_and(|session| {
+                            !session.has_started()
+                                && session.messages.is_empty()
+                                && session.turns.is_empty()
+                                && session.queued_messages.is_empty()
+                        })
+                })
+            } else {
+                None
+            };
 
         let file_tab = MainTab::File(relative_path.clone());
         if let Some(draft_id) = empty_draft_to_replace {
@@ -2325,6 +2353,7 @@ impl Insulator {
             self.right_panel_active_surface = Some(index);
             self.set_right_panel_visible(true, cx);
             self.refresh_right_panel_working_tree(cx);
+            self.save();
             cx.notify();
         } else {
             self.open_right_panel_surface(RightPanelSurface::Files, cx);
@@ -2335,7 +2364,11 @@ impl Insulator {
         if self.right_panel_file_is_dirty(path) {
             self.save_file_by_path(path, false, cx);
         }
-        if self.file_editor_selection.as_ref().map_or(false, |s| s.path == path) {
+        if self
+            .file_editor_selection
+            .as_ref()
+            .map_or(false, |s| s.path == path)
+        {
             self.clear_file_editor_selection(Some(cx));
         }
         let was_active = self.active_main_file_tab.as_deref() == Some(path);
@@ -2345,7 +2378,9 @@ impl Insulator {
 
         if was_active {
             if !self.main_tabs.is_empty() {
-                let next_index = index.unwrap_or(0).min(self.main_tabs.len().saturating_sub(1));
+                let next_index = index
+                    .unwrap_or(0)
+                    .min(self.main_tabs.len().saturating_sub(1));
                 self.activate_main_tab_at_index(next_index, cx);
             } else {
                 self.active_main_file_tab = None;
@@ -2358,6 +2393,7 @@ impl Insulator {
         } else if self.main_tabs.is_empty() {
             self.main_tabs_open = false;
         }
+        self.save();
         cx.notify();
     }
 
@@ -2383,7 +2419,9 @@ impl Insulator {
 
         if was_active {
             if !self.main_tabs.is_empty() {
-                let next_index = index.unwrap_or(0).min(self.main_tabs.len().saturating_sub(1));
+                let next_index = index
+                    .unwrap_or(0)
+                    .min(self.main_tabs.len().saturating_sub(1));
                 self.activate_main_tab_at_index(next_index, cx);
             } else {
                 self.active_main_file_tab = None;
@@ -2413,6 +2451,7 @@ impl Insulator {
         if self.main_tabs.is_empty() {
             self.main_tabs_open = false;
         }
+        self.save();
         cx.notify();
     }
 
@@ -2453,6 +2492,7 @@ impl Insulator {
             self.right_panel_pending_browser_focus = None;
             self.set_right_panel_visible(false, cx);
         }
+        self.save();
         cx.notify();
     }
 
@@ -2565,14 +2605,26 @@ impl Insulator {
                             .size(px(6.0))
                             .rounded_full()
                             .flex_none()
-                            .bg(if is_exited { theme.danger } else { theme.accent }),
+                            .bg(if is_exited {
+                                theme.danger
+                            } else {
+                                theme.accent
+                            }),
                     )
                     .child(
                         div()
                             .truncate()
                             .text_size(sp(11.5))
-                            .font_weight(if is_active { FontWeight::MEDIUM } else { FontWeight::NORMAL })
-                            .text_color(if is_active { theme.text } else { theme.text_secondary })
+                            .font_weight(if is_active {
+                                FontWeight::MEDIUM
+                            } else {
+                                FontWeight::NORMAL
+                            })
+                            .text_color(if is_active {
+                                theme.text
+                            } else {
+                                theme.text_secondary
+                            })
                             .child(format!("Terminal {}", i + 1)),
                     )
                     .child(
@@ -2609,14 +2661,17 @@ impl Insulator {
                 .justify_center()
                 .cursor_pointer()
                 .hover(|el| el.bg(theme.overlay))
-                .tooltip(|window, cx| Tooltip::new(SharedString::from("New terminal")).build(window, cx))
+                .tooltip(|window, cx| {
+                    Tooltip::new(SharedString::from("New terminal")).build(window, cx)
+                })
                 .child(icon("icons/plus.svg", 11.0, theme.text_secondary))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.add_right_panel_terminal(cx);
                 })),
         );
 
-        let active_view = active_terminal_id.and_then(|id| self.right_panel_terminals.get(&id).cloned());
+        let active_view =
+            active_terminal_id.and_then(|id| self.right_panel_terminals.get(&id).cloned());
 
         let mut header = div()
             .id("right-panel-terminal-header")
@@ -2675,7 +2730,9 @@ impl Insulator {
                         .justify_center()
                         .cursor_pointer()
                         .hover(|el| el.bg(theme.overlay))
-                        .tooltip(|window, cx| Tooltip::new(SharedString::from("New terminal")).build(window, cx))
+                        .tooltip(|window, cx| {
+                            Tooltip::new(SharedString::from("New terminal")).build(window, cx)
+                        })
                         .child(icon("icons/plus.svg", 11.0, theme.text_secondary))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.add_right_panel_terminal(cx);
@@ -2697,7 +2754,9 @@ impl Insulator {
                         .justify_center()
                         .cursor_pointer()
                         .hover(|el| el.bg(theme.overlay))
-                        .tooltip(|window, cx| Tooltip::new(SharedString::from("Restart terminal")).build(window, cx))
+                        .tooltip(|window, cx| {
+                            Tooltip::new(SharedString::from("Restart terminal")).build(window, cx)
+                        })
                         .child(icon("icons/rotate-cw.svg", 11.0, theme.text_tertiary))
                         .on_click(move |_, _, cx| {
                             let _ = weak_t.update(cx, |t, cx| {
@@ -2719,7 +2778,9 @@ impl Insulator {
                         .justify_center()
                         .cursor_pointer()
                         .hover(|el| el.bg(theme.overlay))
-                        .tooltip(|window, cx| Tooltip::new(SharedString::from("Close terminal")).build(window, cx))
+                        .tooltip(|window, cx| {
+                            Tooltip::new(SharedString::from("Close terminal")).build(window, cx)
+                        })
                         .child(icon("icons/x.svg", 11.0, theme.text_tertiary))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.close_right_panel_terminal(active_id, cx);
@@ -2846,6 +2907,20 @@ impl Insulator {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
+        if self.pull_request_detail.is_some() {
+            return div()
+                .id("right-panel")
+                .w(px(width))
+                .h_full()
+                .flex_none()
+                .relative()
+                .child(self.render_pull_request_detail_panel(width, cx))
+                .child(self.render_panel_resize_handle(
+                    "right-panel-resize-handle",
+                    PanelResizeTarget::RightPanel,
+                    cx,
+                ));
+        }
         let theme = Theme::current(cx);
 
         let upper_body = match self.right_panel_upper_tab.clone() {
@@ -2885,8 +2960,14 @@ impl Insulator {
             .border_l_1()
             .border_color(theme.border_strong)
             .bg(match self.state.window_style {
-                WindowStyle::LiquidGlass => Hsla { a: 0.10, ..theme.surface },
-                WindowStyle::Image => Hsla { a: 0.82, ..theme.surface },
+                WindowStyle::LiquidGlass => Hsla {
+                    a: 0.10,
+                    ..theme.surface
+                },
+                WindowStyle::Image => Hsla {
+                    a: 0.82,
+                    ..theme.surface
+                },
                 WindowStyle::Solid => theme.surface,
                 WindowStyle::Transparent => theme.surface,
             })
@@ -2999,7 +3080,11 @@ impl Insulator {
         }
     }
 
-    pub(super) fn ensure_right_panel_terminal(&mut self, terminal_id: Uuid, cx: &mut Context<Self>) {
+    pub(super) fn ensure_right_panel_terminal(
+        &mut self,
+        terminal_id: Uuid,
+        cx: &mut Context<Self>,
+    ) {
         if self.daemon.is_remote() {
             // A desktop PTY would interpret the daemon's cwd on the wrong
             // machine. Keep the surface unavailable until the protocol grows
@@ -3010,13 +3095,23 @@ impl Insulator {
         let Some(working_directory) = self
             .selected_workspace_path()
             .map(std::path::Path::to_path_buf)
-            .or_else(|| self.home_directory.clone().or_else(dirs::home_dir).or_else(|| std::env::current_dir().ok()))
+            .or_else(|| {
+                self.home_directory
+                    .clone()
+                    .or_else(dirs::home_dir)
+                    .or_else(|| std::env::current_dir().ok())
+            })
         else {
             self.right_panel_terminals.remove(&terminal_id);
             return;
         };
-        let matches = match (self.selected_workspace_path(), self.right_panel_terminals.get(&terminal_id)) {
-            (Some(project_path), Some(terminal)) => terminal.read(cx).working_directory() == project_path,
+        let matches = match (
+            self.selected_workspace_path(),
+            self.right_panel_terminals.get(&terminal_id),
+        ) {
+            (Some(project_path), Some(terminal)) => {
+                terminal.read(cx).working_directory() == project_path
+            }
             (None, Some(_)) => true,
             _ => false,
         };
@@ -3090,8 +3185,16 @@ impl Insulator {
                     div()
                         .truncate()
                         .text_size(sp(12.5))
-                        .font_weight(if is_files { FontWeight::MEDIUM } else { FontWeight::NORMAL })
-                        .text_color(if is_files { theme.text } else { theme.text_secondary })
+                        .font_weight(if is_files {
+                            FontWeight::MEDIUM
+                        } else {
+                            FontWeight::NORMAL
+                        })
+                        .text_color(if is_files {
+                            theme.text
+                        } else {
+                            theme.text_secondary
+                        })
                         .child("All files"),
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -3115,8 +3218,16 @@ impl Insulator {
                     div()
                         .truncate()
                         .text_size(sp(12.5))
-                        .font_weight(if is_changes { FontWeight::MEDIUM } else { FontWeight::NORMAL })
-                        .text_color(if is_changes { theme.text } else { theme.text_secondary })
+                        .font_weight(if is_changes {
+                            FontWeight::MEDIUM
+                        } else {
+                            FontWeight::NORMAL
+                        })
+                        .text_color(if is_changes {
+                            theme.text
+                        } else {
+                            theme.text_secondary
+                        })
                         .child(format!("Changes {changes_count}")),
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -3140,8 +3251,16 @@ impl Insulator {
                     div()
                         .truncate()
                         .text_size(sp(12.5))
-                        .font_weight(if is_browser { FontWeight::MEDIUM } else { FontWeight::NORMAL })
-                        .text_color(if is_browser { theme.text } else { theme.text_secondary })
+                        .font_weight(if is_browser {
+                            FontWeight::MEDIUM
+                        } else {
+                            FontWeight::NORMAL
+                        })
+                        .text_color(if is_browser {
+                            theme.text
+                        } else {
+                            theme.text_secondary
+                        })
                         .child("Browser"),
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -3217,20 +3336,14 @@ impl Insulator {
                     .track_scroll(&self.right_panel_tabs_scroll_handle)
                     .child(tabs),
             )
-            .child(
-                div()
-                    .flex_none()
-                    .child(self.render_right_panel_toggle(cx)),
-            );
+            .child(div().flex_none().child(self.render_right_panel_toggle(cx)));
 
         self.window_drag_region(
-            header.children(
-                self.render_client_window_controls(
-                    super::window_chrome::WindowControlSide::Right,
-                    window,
-                    cx,
-                ),
-            ),
+            header.children(self.render_client_window_controls(
+                super::window_chrome::WindowControlSide::Right,
+                window,
+                cx,
+            )),
             cx,
         )
     }
@@ -3705,7 +3818,8 @@ impl Insulator {
                 });
                 if let Some(idx) = overlap_idx {
                     let existing = &selection.snippets[idx];
-                    let merged_range = existing.byte_range.start.min(range.start)..existing.byte_range.end.max(range.end);
+                    let merged_range = existing.byte_range.start.min(range.start)
+                        ..existing.byte_range.end.max(range.end);
                     selection.snippets[idx] = FileEditorSnippet::from_range(merged_range, &content);
                     active_drag_index.set(Some(idx));
                 } else {
@@ -3734,7 +3848,8 @@ impl Insulator {
             this.file_editor_input_expanded = true;
             this.file_editor_selection = Some(selection);
             cx.notify();
-        }).detach();
+        })
+        .detach();
 
         let focused_path = relative_path.to_owned();
         cx.subscribe(&state, move |this: &mut Self, _, event: &InputEvent, cx| {
@@ -3796,49 +3911,53 @@ impl Insulator {
                     async move { read_right_panel_file(&workspace, &project_path, &relative_path) }
                 })
                 .await;
-            insulator.update(cx, |insulator, cx| {
-                if insulator.state.selected_session != Some(session_id)
-                    || insulator
-                        .selected_workspace_path()
-                        .is_none_or(|path| path != project_path)
-                {
-                    // The editor moved into another session's stored state, or
-                    // the project changed. Clear the flag so a later reload can
-                    // ask again, and drop the text.
-                    if let Some(editor) = insulator.right_panel_file_editors.get_mut(&relative_path) {
-                        editor.reading = false;
+            insulator
+                .update(cx, |insulator, cx| {
+                    if insulator.state.selected_session != Some(session_id)
+                        || insulator
+                            .selected_workspace_path()
+                            .is_none_or(|path| path != project_path)
+                    {
+                        // The editor moved into another session's stored state, or
+                        // the project changed. Clear the flag so a later reload can
+                        // ask again, and drop the text.
+                        if let Some(editor) =
+                            insulator.right_panel_file_editors.get_mut(&relative_path)
+                        {
+                            editor.reading = false;
+                        }
+                        return;
                     }
-                    return;
-                }
-                let (content, writable) = read;
-                let Some(editor) = insulator.right_panel_file_editors.get_mut(&relative_path) else {
-                    return;
-                };
-                // A save landed while the read was in flight, so this text
-                // describes the file as it was before that save.
-                if editor.read_epoch != epoch {
-                    return;
-                }
-                editor.reading = false;
-                // An edit landed while the read was in flight; the user's text
-                // wins over the copy on disk.
-                if editor.dirty {
-                    return;
-                }
-                if editor.disk_content == content && editor.writable == writable {
-                    return;
-                }
-                editor.disk_content = content.clone();
-                editor.writable = writable;
-                editor.dirty = false;
-                let state = editor.state.clone();
-                state.update(cx, |state, cx| {
-                    state.set_read_only(!writable);
-                    state.set_content(content, cx);
-                });
-                cx.notify();
-            })
-            .ok();
+                    let (content, writable) = read;
+                    let Some(editor) = insulator.right_panel_file_editors.get_mut(&relative_path)
+                    else {
+                        return;
+                    };
+                    // A save landed while the read was in flight, so this text
+                    // describes the file as it was before that save.
+                    if editor.read_epoch != epoch {
+                        return;
+                    }
+                    editor.reading = false;
+                    // An edit landed while the read was in flight; the user's text
+                    // wins over the copy on disk.
+                    if editor.dirty {
+                        return;
+                    }
+                    if editor.disk_content == content && editor.writable == writable {
+                        return;
+                    }
+                    editor.disk_content = content.clone();
+                    editor.writable = writable;
+                    editor.dirty = false;
+                    let state = editor.state.clone();
+                    state.update(cx, |state, cx| {
+                        state.set_read_only(!writable);
+                        state.set_content(content, cx);
+                    });
+                    cx.notify();
+                })
+                .ok();
         })
         .detach();
     }
@@ -4183,11 +4302,13 @@ impl Insulator {
                     let relative_path = relative_path_str.clone();
                     let content = content.clone();
                     async move {
-                        match workspace.request(insulator_client::WorkspaceOperation::WriteTextFile {
-                            root: project_path,
-                            relative_path: PathBuf::from(relative_path),
-                            content,
-                        })? {
+                        match workspace.request(
+                            insulator_client::WorkspaceOperation::WriteTextFile {
+                                root: project_path,
+                                relative_path: PathBuf::from(relative_path),
+                                content,
+                            },
+                        )? {
                             insulator_client::WorkspaceResult::Ack => Ok(()),
                             _ => anyhow::bail!("the daemon returned an invalid file response"),
                         }
@@ -4203,7 +4324,9 @@ impl Insulator {
                 }
                 match result {
                     Ok(()) => {
-                        if let Some(editor) = insulator.right_panel_file_editors.get_mut(&relative_path_str)
+                        if let Some(editor) = insulator
+                            .right_panel_file_editors
+                            .get_mut(&relative_path_str)
                             && editor.read_epoch == epoch
                         {
                             let current = editor.state.read(cx).content();
@@ -4211,7 +4334,10 @@ impl Insulator {
                             editor.dirty = current != content;
                         }
                         if show_toast {
-                            insulator.show_success_toast(tr!("files.saved", path = relative_path_str.clone()));
+                            insulator.show_success_toast(tr!(
+                                "files.saved",
+                                path = relative_path_str.clone()
+                            ));
                         }
                     }
                     Err(error) => insulator.show_toast(tr!(
@@ -4241,7 +4367,9 @@ impl Insulator {
                     cx,
                 )
                 .into_any_element(),
-            Some(_) => self.render_right_panel_diff_tree(window, cx).into_any_element(),
+            Some(_) => self
+                .render_right_panel_diff_tree(window, cx)
+                .into_any_element(),
             None if self.right_panel_diff_loading => self
                 .render_right_panel_empty_message(
                     tr!("diff.loading"),
@@ -4459,7 +4587,7 @@ impl Insulator {
             .into_any_element()
     }
 
-    fn render_right_panel_unified_diff(
+    pub(super) fn render_right_panel_unified_diff(
         &self,
         snapshot: Arc<ReviewDiffSnapshot>,
         cx: &mut Context<Self>,
@@ -4489,7 +4617,9 @@ impl Insulator {
                             .upgrade()
                             .map(|entity| {
                                 entity.update(cx, |this, cx| {
-                                    this.render_right_panel_diff_line(index, cx)
+                                    this.render_right_panel_diff_line_from_snapshot(
+                                        &snapshot, index, cx,
+                                    )
                                 })
                             })
                             .unwrap_or_else(|| div().into_any_element())
@@ -4568,12 +4698,16 @@ impl Insulator {
             .border_color(theme.border)
             .bg(if sticky {
                 match self.state.window_style {
-                    WindowStyle::LiquidGlass | WindowStyle::Image | WindowStyle::Transparent => theme.raised,
+                    WindowStyle::LiquidGlass | WindowStyle::Image | WindowStyle::Transparent => {
+                        theme.raised
+                    }
                     WindowStyle::Solid => theme.surface,
                 }
             } else {
                 match self.state.window_style {
-                    WindowStyle::LiquidGlass | WindowStyle::Image | WindowStyle::Transparent => theme.overlay,
+                    WindowStyle::LiquidGlass | WindowStyle::Image | WindowStyle::Transparent => {
+                        theme.overlay
+                    }
                     WindowStyle::Solid => theme.surface,
                 }
             })
@@ -4610,6 +4744,15 @@ impl Insulator {
         let Some(snapshot) = self.right_panel_diff_snapshot.as_ref() else {
             return div().into_any_element();
         };
+        self.render_right_panel_diff_line_from_snapshot(snapshot, index, cx)
+    }
+
+    fn render_right_panel_diff_line_from_snapshot(
+        &self,
+        snapshot: &ReviewDiffSnapshot,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(line) = snapshot.lines.get(index) else {
             return div().into_any_element();
         };
@@ -5151,9 +5294,7 @@ impl Insulator {
     pub(super) fn refresh_workspace_surfaces(&mut self, cx: &mut Context<Self>) {
         match self.right_panel_upper_tab {
             RightPanelUpperTab::Changes => self.refresh_right_panel_diff(cx),
-            RightPanelUpperTab::Files => {
-                self.refresh_right_panel_working_tree(cx)
-            }
+            RightPanelUpperTab::Files => self.refresh_right_panel_working_tree(cx),
             _ => {}
         }
     }
@@ -5187,41 +5328,44 @@ impl Insulator {
                         .spawn({
                             let path = project_path.clone();
                             async move {
-                                match workspace.request(insulator_client::WorkspaceOperation::ListTree {
-                                    root: path,
-                                    expanded_paths: expanded.into_iter().collect(),
-                                }) {
-                                    Ok(insulator_client::WorkspaceResult::WorkingTree { entries }) => {
-                                        entries
-                                            .into_iter()
-                                            .map(|entry| WorkingTreeEntry {
-                                                file_icon: (!entry.is_dir)
-                                                    .then(|| file_icon_for_name(&entry.name)),
-                                                relative_path: entry.relative_path,
-                                                absolute_path: entry.absolute_path,
-                                                name: entry.name,
-                                                is_dir: entry.is_dir,
-                                                expanded: entry.expanded,
-                                                depth: entry.depth,
-                                            })
-                                            .collect()
-                                    }
+                                match workspace.request(
+                                    insulator_client::WorkspaceOperation::ListTree {
+                                        root: path,
+                                        expanded_paths: expanded.into_iter().collect(),
+                                    },
+                                ) {
+                                    Ok(insulator_client::WorkspaceResult::WorkingTree {
+                                        entries,
+                                    }) => entries
+                                        .into_iter()
+                                        .map(|entry| WorkingTreeEntry {
+                                            file_icon: (!entry.is_dir)
+                                                .then(|| file_icon_for_name(&entry.name)),
+                                            relative_path: entry.relative_path,
+                                            absolute_path: entry.absolute_path,
+                                            name: entry.name,
+                                            is_dir: entry.is_dir,
+                                            expanded: entry.expanded,
+                                            depth: entry.depth,
+                                        })
+                                        .collect(),
                                     Ok(_) | Err(_) => Vec::new(),
                                 }
                             }
                         })
                         .await;
-                    insulator.update(cx, |insulator, cx| {
-                        if insulator.working_trees.fulfill(token, entries.clone())
-                            && insulator
-                                .selected_workspace_path()
-                                .is_some_and(|path| path == project_path)
-                        {
-                            insulator.right_panel_working_tree = entries;
-                            cx.notify();
-                        }
-                    })
-                    .ok();
+                    insulator
+                        .update(cx, |insulator, cx| {
+                            if insulator.working_trees.fulfill(token, entries.clone())
+                                && insulator
+                                    .selected_workspace_path()
+                                    .is_some_and(|path| path == project_path)
+                            {
+                                insulator.right_panel_working_tree = entries;
+                                cx.notify();
+                            }
+                        })
+                        .ok();
                 })
                 .detach();
             }
@@ -5354,54 +5498,57 @@ impl Insulator {
                     }
                 })
                 .await;
-            insulator.update(cx, |insulator, cx| {
-                let still_current = insulator.state.selected_session == Some(session_id)
-                    && insulator.right_panel_diff_generation == generation
-                    && insulator.right_panel_diff_source == source
-                    && insulator
-                        .selected_workspace_path()
-                        .is_some_and(|path| path == project_path);
-                if !still_current {
-                    return;
-                }
+            insulator
+                .update(cx, |insulator, cx| {
+                    let still_current = insulator.state.selected_session == Some(session_id)
+                        && insulator.right_panel_diff_generation == generation
+                        && insulator.right_panel_diff_source == source
+                        && insulator
+                            .selected_workspace_path()
+                            .is_some_and(|path| path == project_path);
+                    if !still_current {
+                        return;
+                    }
 
-                insulator.right_panel_diff_loading = false;
-                match result {
-                    Ok(snapshot) => {
-                        insulator.right_panel_diff_selection.clear();
-                        let directories = review_diff_directory_paths(&snapshot.files);
-                        if had_snapshot {
-                            insulator.right_panel_diff_expanded_paths
-                                .retain(|path| directories.contains(path));
-                            insulator.right_panel_diff_expanded_paths
-                                .extend(directories.difference(&previous_directories).cloned());
-                        } else {
-                            insulator.right_panel_diff_expanded_paths = directories;
+                    insulator.right_panel_diff_loading = false;
+                    match result {
+                        Ok(snapshot) => {
+                            insulator.right_panel_diff_selection.clear();
+                            let directories = review_diff_directory_paths(&snapshot.files);
+                            if had_snapshot {
+                                insulator
+                                    .right_panel_diff_expanded_paths
+                                    .retain(|path| directories.contains(path));
+                                insulator
+                                    .right_panel_diff_expanded_paths
+                                    .extend(directories.difference(&previous_directories).cloned());
+                            } else {
+                                insulator.right_panel_diff_expanded_paths = directories;
+                            }
+                            insulator.right_panel_diff_selected_file = selected_path
+                                .as_deref()
+                                .and_then(|path| {
+                                    snapshot.files.iter().position(|file| file.path == path)
+                                })
+                                .or_else(|| (!snapshot.files.is_empty()).then_some(0));
+                            let line_count = snapshot.lines.len();
+                            insulator.right_panel_diff_snapshot = Some(Arc::new(snapshot));
+                            insulator.right_panel_diff_error = None;
+                            insulator.right_panel_diff_list_state.reset(line_count);
+                            insulator.sync_right_panel_diff_tree_rows(cx);
                         }
-                        insulator.right_panel_diff_selected_file = selected_path
-                            .as_deref()
-                            .and_then(|path| {
-                                snapshot.files.iter().position(|file| file.path == path)
-                            })
-                            .or_else(|| (!snapshot.files.is_empty()).then_some(0));
-                        let line_count = snapshot.lines.len();
-                        insulator.right_panel_diff_snapshot = Some(Arc::new(snapshot));
-                        insulator.right_panel_diff_error = None;
-                        insulator.right_panel_diff_list_state.reset(line_count);
-                        insulator.sync_right_panel_diff_tree_rows(cx);
-                    }
-                    Err(error) => {
-                        let message = error.to_string();
-                        if insulator.right_panel_diff_snapshot.is_some() {
-                            insulator.show_toast(tr!("diff.refresh_failed", error = message));
-                        } else {
-                            insulator.right_panel_diff_error = Some(message);
+                        Err(error) => {
+                            let message = error.to_string();
+                            if insulator.right_panel_diff_snapshot.is_some() {
+                                insulator.show_toast(tr!("diff.refresh_failed", error = message));
+                            } else {
+                                insulator.right_panel_diff_error = Some(message);
+                            }
                         }
                     }
-                }
-                cx.notify();
-            })
-            .ok();
+                    cx.notify();
+                })
+                .ok();
         })
         .detach();
     }
@@ -5585,7 +5732,10 @@ impl Insulator {
         if !self.right_panel_file_editors.contains_key(path) {
             return prompt.to_owned();
         }
-        let selection = self.file_editor_selection.as_ref().filter(|selection| selection.path == path);
+        let selection = self
+            .file_editor_selection
+            .as_ref()
+            .filter(|selection| selection.path == path);
         match selection {
             Some(selection) if !selection.snippets.is_empty() => {
                 let mut out = format!("{prompt}\n\n@{path}");
@@ -5593,9 +5743,15 @@ impl Insulator {
                     let line_label = if snippet.start_line == snippet.end_line {
                         format!("[Selected line {}]", snippet.start_line)
                     } else {
-                        format!("[Selected lines {}-{}]", snippet.start_line, snippet.end_line)
+                        format!(
+                            "[Selected lines {}-{}]",
+                            snippet.start_line, snippet.end_line
+                        )
                     };
-                    out.push_str(&format!("\n{line_label}\n```\n{}\n```", snippet.text.trim_end()));
+                    out.push_str(&format!(
+                        "\n{line_label}\n```\n{}\n```",
+                        snippet.text.trim_end()
+                    ));
                 }
                 out
             }
@@ -5661,7 +5817,10 @@ impl Insulator {
         cx.notify();
     }
 
-    pub(super) fn render_file_editor_selection_pills(&self, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
+    pub(super) fn render_file_editor_selection_pills(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Vec<Stateful<Div>> {
         let Some(selection) = self.file_editor_selection.as_ref().filter(|selection| {
             self.active_main_file_tab.as_deref() == Some(selection.path.as_str())
         }) else {
@@ -5735,7 +5894,9 @@ impl Insulator {
                             .justify_center()
                             .cursor_pointer()
                             .hover(|e| e.bg(theme.overlay_strong))
-                            .tooltip(|window, cx| Tooltip::new("Remove selection").build(window, cx))
+                            .tooltip(|window, cx| {
+                                Tooltip::new("Remove selection").build(window, cx)
+                            })
                             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                 cx.stop_propagation();
                             })

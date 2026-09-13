@@ -1794,7 +1794,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn locates_claudes_native_task_output_across_workspace_slugs() {
-        let root = std::env::temp_dir().join(format!("insulator-claude-output-test-{}", Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("insulator-claude-output-test-{}", Uuid::new_v4()));
         let output = root
             .join("-Users-egoist-dev-insulator")
             .join("session-live")
@@ -1836,7 +1837,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn native_task_output_streams_before_completion() {
-        let root = std::env::temp_dir().join(format!("insulator-claude-tail-test-{}", Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("insulator-claude-tail-test-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let output = root.join("task.output");
         std::fs::write(&output, "first\n").unwrap();

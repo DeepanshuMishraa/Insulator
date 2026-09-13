@@ -611,7 +611,8 @@ fn create_kernel(
             globals.set("__insulatorTmpDir", temp.display().to_string())?;
             ctx.eval::<(), _>(KERNEL_BOOTSTRAP)?;
             let timer_dispatch = globals.get::<_, Function<'_>>("__insulatorRunTimer")?;
-            let request_meta_setter = globals.get::<_, Function<'_>>("__insulatorSetRequestMeta")?;
+            let request_meta_setter =
+                globals.get::<_, Function<'_>>("__insulatorSetRequestMeta")?;
             globals.remove("__insulatorRunTimer")?;
             globals.remove("__insulatorSetRequestMeta")?;
             Ok((

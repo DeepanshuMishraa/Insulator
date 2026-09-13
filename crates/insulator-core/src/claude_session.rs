@@ -906,7 +906,8 @@ mod tests {
     const ASSISTANT_THREE: &str = "88888888-8888-4888-8888-888888888888";
 
     fn fixture() -> (PathBuf, PathBuf) {
-        let root = std::env::temp_dir().join(format!("insulator-claude-session-{}", Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("insulator-claude-session-{}", Uuid::new_v4()));
         let project = root.join("projects").join("-tmp-project");
         let workspace = root.join("workspace");
         fs::create_dir_all(&project).unwrap();

@@ -38,6 +38,7 @@ enum CommitAction {
 enum CommitPending {
     Generating(CommitAction),
     Git(CommitAction),
+    PullRequest,
 }
 
 pub(super) struct CommitOperationState {
@@ -60,6 +61,7 @@ fn commit_pending_status_label(pending: CommitPending) -> String {
             tr!("commit.committing_and_pushing")
         }
         CommitPending::Git(CommitAction::Push) => tr!("commit.pushing"),
+        CommitPending::PullRequest => tr!("pull_request.opening"),
     }
 }
 
@@ -102,9 +104,108 @@ impl CommitDialogState {
 
 impl Insulator {
     pub(super) fn commit_operation_status_label(&self) -> Option<String> {
-        self.commit_operation
-            .as_ref()
-            .map(CommitOperationState::status_label)
+        self.commit_operation.as_ref().and_then(|operation| {
+            (operation.pending != CommitPending::PullRequest).then(|| operation.status_label())
+        })
+    }
+
+    pub(super) fn pull_request_operation_status_label(&self) -> Option<String> {
+        self.commit_operation.as_ref().and_then(|operation| {
+            (operation.pending == CommitPending::PullRequest).then(|| operation.status_label())
+        })
+    }
+
+    pub(super) fn git_operation_pending(&self) -> bool {
+        self.commit_operation.is_some()
+    }
+
+    pub(super) fn open_pull_request(&mut self, cx: &mut Context<Self>) {
+        if self.commit_operation.is_some() {
+            return;
+        }
+        let Some((workspace, invocation)) = self.selected_session().and_then(|session| {
+            let workspace = self.workspace_path_for_session(session)?.to_path_buf();
+            let probe = self.provider_probe(session.provider)?;
+            let binary = probe.path.clone()?;
+            Some((
+                workspace,
+                crate::git_commit::AgentInvocation {
+                    provider: session.provider,
+                    binary,
+                    model: self.model_for_session(session).map(str::to_owned),
+                    reasoning_effort: session.reasoning_effort.clone(),
+                },
+            ))
+        }) else {
+            self.show_toast(tr!("pull_request.agent_unavailable"));
+            cx.notify();
+            return;
+        };
+
+        let id = Uuid::new_v4();
+        self.commit_operation = Some(CommitOperationState {
+            id,
+            workspace: workspace.clone(),
+            pending: CommitPending::PullRequest,
+        });
+        cx.notify();
+
+        let workspace_client = insulator_client::WorkspaceClient::new(self.daemon.client());
+        cx.spawn(async move |insulator, cx| {
+            let operation_workspace = workspace.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    match workspace_client.request(
+                        insulator_client::WorkspaceOperation::CreatePullRequest {
+                            cwd: operation_workspace,
+                            commit_message: None,
+                            include_unstaged: true,
+                            invocation,
+                        },
+                    ) {
+                        Ok(insulator_client::WorkspaceResult::PullRequestCreated { url }) => {
+                            Ok(url)
+                        }
+                        Ok(_) => {
+                            Err("the daemon returned an invalid pull request response".to_owned())
+                        }
+                        Err(error) => Err(error.to_string()),
+                    }
+                })
+                .await;
+            let _ = insulator.update(cx, |insulator, cx| {
+                let current = insulator
+                    .commit_operation
+                    .as_ref()
+                    .is_some_and(|operation| {
+                        operation.id == id
+                            && operation.workspace == workspace
+                            && operation.pending == CommitPending::PullRequest
+                    });
+                if !current {
+                    return;
+                }
+                insulator.commit_operation = None;
+                if insulator
+                    .selected_workspace_path()
+                    .is_some_and(|path| path == workspace)
+                {
+                    insulator.invalidate_workspace_queries(cx);
+                } else {
+                    insulator.branch_snapshots.invalidate(&workspace);
+                }
+                match result {
+                    Ok(url) => {
+                        insulator.show_success_toast(tr!("pull_request.opened"));
+                        cx.open_url(&url);
+                    }
+                    Err(error) => insulator.show_toast(error),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(super) fn open_commit_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -183,9 +284,11 @@ impl Insulator {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    match workspace_client.request(insulator_client::WorkspaceOperation::InspectCommit {
-                        cwd: workspace.clone(),
-                    }) {
+                    match workspace_client.request(
+                        insulator_client::WorkspaceOperation::InspectCommit {
+                            cwd: workspace.clone(),
+                        },
+                    ) {
                         Ok(insulator_client::WorkspaceResult::CommitSnapshot { snapshot }) => {
                             Ok(snapshot)
                         }
@@ -195,7 +298,10 @@ impl Insulator {
                 })
                 .await;
             let _ = insulator.update(cx, |insulator, cx| {
-                let Some(dialog) = insulator.commit_dialog.as_mut().filter(|dialog| dialog.id == id)
+                let Some(dialog) = insulator
+                    .commit_dialog
+                    .as_mut()
+                    .filter(|dialog| dialog.id == id)
                 else {
                     return;
                 };
@@ -336,7 +442,9 @@ impl Insulator {
                             invocation,
                         },
                     ) {
-                        Ok(insulator_client::WorkspaceResult::CommitMessage { message }) => Ok(message),
+                        Ok(insulator_client::WorkspaceResult::CommitMessage { message }) => {
+                            Ok(message)
+                        }
                         Ok(_) => {
                             Err("the daemon returned an invalid commit message response".into())
                         }
@@ -345,11 +453,14 @@ impl Insulator {
                 })
                 .await;
             let _ = insulator.update(cx, |insulator, cx| {
-                let current = insulator.commit_operation.as_ref().is_some_and(|operation| {
-                    operation.id == id
-                        && operation.workspace == workspace
-                        && operation.pending == CommitPending::Generating(action)
-                });
+                let current = insulator
+                    .commit_operation
+                    .as_ref()
+                    .is_some_and(|operation| {
+                        operation.id == id
+                            && operation.workspace == workspace
+                            && operation.pending == CommitPending::Generating(action)
+                    });
                 if !current {
                     return;
                 }
@@ -358,8 +469,10 @@ impl Insulator {
                         if let Some(operation) = insulator.commit_operation.as_mut() {
                             operation.pending = CommitPending::Git(action);
                         }
-                        if let Some(dialog) =
-                            insulator.commit_dialog.as_mut().filter(|dialog| dialog.id == id)
+                        if let Some(dialog) = insulator
+                            .commit_dialog
+                            .as_mut()
+                            .filter(|dialog| dialog.id == id)
                         {
                             dialog
                                 .message
@@ -377,8 +490,10 @@ impl Insulator {
                     }
                     Err(error) => {
                         insulator.commit_operation = None;
-                        if let Some(dialog) =
-                            insulator.commit_dialog.as_mut().filter(|dialog| dialog.id == id)
+                        if let Some(dialog) = insulator
+                            .commit_dialog
+                            .as_mut()
+                            .filter(|dialog| dialog.id == id)
                         {
                             dialog.error = Some(error);
                             dialog
@@ -418,12 +533,14 @@ impl Insulator {
                             include_unstaged,
                             push: false,
                         },
-                        CommitAction::CommitAndPush => insulator_client::WorkspaceOperation::Commit {
-                            cwd: operation_workspace.clone(),
-                            message,
-                            include_unstaged,
-                            push: true,
-                        },
+                        CommitAction::CommitAndPush => {
+                            insulator_client::WorkspaceOperation::Commit {
+                                cwd: operation_workspace.clone(),
+                                message,
+                                include_unstaged,
+                                push: true,
+                            }
+                        }
                         CommitAction::Push => insulator_client::WorkspaceOperation::Push {
                             cwd: operation_workspace.clone(),
                         },
@@ -451,11 +568,14 @@ impl Insulator {
                 })
                 .await;
             let focus = insulator.update(cx, |insulator, cx| {
-                let current = insulator.commit_operation.as_ref().is_some_and(|operation| {
-                    operation.id == id
-                        && operation.workspace == workspace
-                        && operation.pending == CommitPending::Git(action)
-                });
+                let current = insulator
+                    .commit_operation
+                    .as_ref()
+                    .is_some_and(|operation| {
+                        operation.id == id
+                            && operation.workspace == workspace
+                            && operation.pending == CommitPending::Git(action)
+                    });
                 if !current {
                     return None;
                 }
@@ -486,8 +606,10 @@ impl Insulator {
                         dialog_was_open.then(|| insulator.composer_focus(cx))
                     }
                     Err(error) => {
-                        if let Some(dialog) =
-                            insulator.commit_dialog.as_mut().filter(|dialog| dialog.id == id)
+                        if let Some(dialog) = insulator
+                            .commit_dialog
+                            .as_mut()
+                            .filter(|dialog| dialog.id == id)
                         {
                             dialog.error = Some(error);
                             if let Some(snapshot) = refreshed_snapshot {
@@ -606,14 +728,15 @@ impl Insulator {
                 )
                 .when(include_enabled, |row| {
                     row.on_click(move |_, _, cx| {
-                        let _ = click_weak.update(cx, |insulator, cx| insulator.toggle_include_unstaged(cx));
+                        let _ = click_weak
+                            .update(cx, |insulator, cx| insulator.toggle_include_unstaged(cx));
                     })
                     .on_key_down(move |event: &KeyDownEvent, _, cx| {
                         if !event.keystroke.modifiers.modified()
                             && matches!(event.keystroke.key.as_str(), "enter" | "space")
                         {
-                            let _ =
-                                key_weak.update(cx, |insulator, cx| insulator.toggle_include_unstaged(cx));
+                            let _ = key_weak
+                                .update(cx, |insulator, cx| insulator.toggle_include_unstaged(cx));
                             cx.stop_propagation();
                         }
                     })
@@ -624,6 +747,7 @@ impl Insulator {
             CommitPending::Generating(action) | CommitPending::Git(action) => {
                 action == CommitAction::Commit
             }
+            CommitPending::PullRequest => false,
         });
         let commit = render_commit_action_row(
             "commit-dialog-commit",
@@ -647,6 +771,7 @@ impl Insulator {
             CommitPending::Generating(action) | CommitPending::Git(action) => {
                 action == CommitAction::CommitAndPush
             }
+            CommitPending::PullRequest => false,
         });
         let commit_and_push = render_commit_action_row(
             "commit-dialog-commit-and-push",
@@ -687,12 +812,16 @@ impl Insulator {
         let card = div()
             .id("commit-dialog-card")
             .key_context(DIALOG_CONTEXT)
-            .on_action(cx.listener(|insulator, _: &ConfirmCommitDialog, window, cx| {
-                insulator.request_commit_action(CommitAction::Commit, window, cx)
-            }))
-            .on_action(cx.listener(|insulator, _: &DismissCommitDialog, window, cx| {
-                insulator.close_commit_dialog(window, cx)
-            }))
+            .on_action(
+                cx.listener(|insulator, _: &ConfirmCommitDialog, window, cx| {
+                    insulator.request_commit_action(CommitAction::Commit, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|insulator, _: &DismissCommitDialog, window, cx| {
+                    insulator.close_commit_dialog(window, cx)
+                }),
+            )
             .tab_group()
             .tab_stop(false)
             .w_full()

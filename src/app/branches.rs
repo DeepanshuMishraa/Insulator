@@ -67,9 +67,9 @@ impl Insulator {
                                         cwd: fetch_path.clone(),
                                     },
                                 ) {
-                                    Ok(insulator_client::WorkspaceResult::Branches { snapshot }) => {
-                                        Ok(snapshot)
-                                    }
+                                    Ok(insulator_client::WorkspaceResult::Branches {
+                                        snapshot,
+                                    }) => Ok(snapshot),
                                     Ok(_) => {
                                         Err("the daemon returned an invalid branch response"
                                             .to_owned())
@@ -105,7 +105,8 @@ impl Insulator {
                                         *branch = current.to_owned();
                                         persisted_branch_changed = true;
                                     }
-                                    insulator.visible_branch_snapshot = Some((fetch_path, snapshot));
+                                    insulator.visible_branch_snapshot =
+                                        Some((fetch_path, snapshot));
                                     if persisted_branch_changed {
                                         insulator.save();
                                     }

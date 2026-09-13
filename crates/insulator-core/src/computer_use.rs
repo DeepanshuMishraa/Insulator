@@ -312,10 +312,9 @@ fn helper_install_matches(source: &Path, destination: &Path) -> anyhow::Result<b
             .or_else(|_| fs::read(path.join("Contents/Resources/.insulator-helper-fingerprint")))
             .ok()
     };
-    let (Some(source_fingerprint), Some(installed_fingerprint)) = (
-        read_fingerprint(source),
-        read_fingerprint(destination),
-    ) else {
+    let (Some(source_fingerprint), Some(installed_fingerprint)) =
+        (read_fingerprint(source), read_fingerprint(destination))
+    else {
         return Ok(false);
     };
     Ok(source_fingerprint == installed_fingerprint)
@@ -354,7 +353,11 @@ pub fn skill_root_path() -> anyhow::Result<PathBuf> {
         .parent()
         .ok_or_else(|| anyhow!("Insulator app bundle is malformed"))?;
     let path = contents.join("Resources").join("skills");
-    if !path.join("insulator-computer-use").join("SKILL.md").is_file() {
+    if !path
+        .join("insulator-computer-use")
+        .join("SKILL.md")
+        .is_file()
+    {
         bail!("Insulator Computer Use skill is missing from this Insulator build")
     }
     Ok(path)
@@ -365,7 +368,9 @@ fn host_executable_path() -> anyhow::Result<PathBuf> {
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
         .map(Ok)
-        .unwrap_or_else(|| std::env::current_exe().context("Insulator executable path is unavailable"))
+        .unwrap_or_else(|| {
+            std::env::current_exe().context("Insulator executable path is unavailable")
+        })
 }
 
 #[cfg(test)]

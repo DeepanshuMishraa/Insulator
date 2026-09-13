@@ -1123,8 +1123,7 @@ pub fn install_selection_input_with_scroll<F>(
     window: &mut Window,
     state: &TranscriptSelection,
     mut on_drag_scroll: F,
-)
-where
+) where
     F: 'static + FnMut(Point<Pixels>, &mut Window, &mut gpui::App) -> bool,
 {
     window.on_mouse_event({
@@ -1133,9 +1132,10 @@ where
             if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
                 return;
             }
-            state
-                .last_drag_position
-                .set(Some((f32::from(event.position.x), f32::from(event.position.y))));
+            state.last_drag_position.set(Some((
+                f32::from(event.position.x),
+                f32::from(event.position.y),
+            )));
             let registry = state.registry.borrow();
             let hit = registry.entries().iter().enumerate().find(|(_, entry)| {
                 !entry.geometry.is_missing() && entry.geometry.bounds().contains(&event.position)
@@ -1182,9 +1182,10 @@ where
             if phase != DispatchPhase::Bubble || !event.dragging() {
                 return;
             }
-            state
-                .last_drag_position
-                .set(Some((f32::from(event.position.x), f32::from(event.position.y))));
+            state.last_drag_position.set(Some((
+                f32::from(event.position.x),
+                f32::from(event.position.y),
+            )));
             let scrolled = on_drag_scroll(event.position, window, cx);
             if scrolled {
                 window.refresh();

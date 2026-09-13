@@ -261,7 +261,8 @@ impl Insulator {
                 .timer(Duration::from_millis(400))
                 .await;
             let _ = insulator.update(cx, |insulator, cx| {
-                if let Some(ProjectDialogState::Github { stage, .. }) = insulator.project_dialog.as_mut()
+                if let Some(ProjectDialogState::Github { stage, .. }) =
+                    insulator.project_dialog.as_mut()
                 {
                     *stage = CloneStage::Cloning;
                     cx.notify();
@@ -275,7 +276,9 @@ impl Insulator {
                         url: url_to_clone,
                         destination,
                     }) {
-                        Ok(insulator_client::WorkspaceResult::ClonedRepository { path }) => Ok(path),
+                        Ok(insulator_client::WorkspaceResult::ClonedRepository { path }) => {
+                            Ok(path)
+                        }
                         Ok(_) => Err("the daemon returned an invalid clone response".to_owned()),
                         Err(error) => Err(error.to_string()),
                     }
@@ -647,9 +650,10 @@ impl Insulator {
                                                 event.keystroke.key.as_str(),
                                                 "enter" | "space"
                                             ) {
-                                                let _ = button_key_weak.update(cx, |insulator, cx| {
-                                                    insulator.clone_github_project(window, cx)
-                                                });
+                                                let _ =
+                                                    button_key_weak.update(cx, |insulator, cx| {
+                                                        insulator.clone_github_project(window, cx)
+                                                    });
                                                 cx.stop_propagation();
                                             }
                                         })
@@ -681,12 +685,16 @@ impl Insulator {
         let layer = div()
             .id("project-dialog-scrim")
             .key_context(DIALOG_CONTEXT)
-            .on_action(cx.listener(|insulator, _: &DismissProjectDialog, window, cx| {
-                insulator.close_project_dialog(window, cx)
-            }))
-            .on_action(cx.listener(|insulator, _: &ConfirmGithubProject, window, cx| {
-                insulator.clone_github_project(window, cx)
-            }))
+            .on_action(
+                cx.listener(|insulator, _: &DismissProjectDialog, window, cx| {
+                    insulator.close_project_dialog(window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|insulator, _: &ConfirmGithubProject, window, cx| {
+                    insulator.clone_github_project(window, cx)
+                }),
+            )
             .absolute()
             .inset_0()
             .occlude()
@@ -908,9 +916,9 @@ impl Insulator {
             .on_action(cx.listener(|insulator, _: &DismissRename, window, cx| {
                 insulator.close_rename_dialog(window, cx)
             }))
-            .on_action(
-                cx.listener(|insulator, _: &ConfirmRename, window, cx| insulator.confirm_rename(window, cx)),
-            )
+            .on_action(cx.listener(|insulator, _: &ConfirmRename, window, cx| {
+                insulator.confirm_rename(window, cx)
+            }))
             .absolute()
             .inset_0()
             .occlude()

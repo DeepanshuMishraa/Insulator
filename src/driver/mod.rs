@@ -182,7 +182,8 @@ fn connect_remote(
                     }
                     Ok(_) => {
                         let _ = forwarding_events.send(DriverEvent::Error(
-                            "Insulator daemon returned an invalid runtime attachment response".into(),
+                            "Insulator daemon returned an invalid runtime attachment response"
+                                .into(),
                         ));
                         break;
                     }
@@ -267,7 +268,9 @@ impl DriverControl for RemoteDriverControl {
 
     fn stop_background_work(&self, key: BackgroundWorkKey, control_id: String) {
         match serde_json::to_value(key) {
-            Ok(key) => self.notify(insulator_client::Command::StopBackgroundWork { key, control_id }),
+            Ok(key) => {
+                self.notify(insulator_client::Command::StopBackgroundWork { key, control_id })
+            }
             Err(error) => {
                 let _ = self.events.send(DriverEvent::Error(format!(
                     "could not encode background-work command: {error}"

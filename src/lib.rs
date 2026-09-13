@@ -28,9 +28,9 @@ macro_rules! tr_cow {
     };
 }
 
-mod audio;
 mod app;
 mod assets;
+mod audio;
 mod browser;
 mod computer_use;
 pub mod daemon;

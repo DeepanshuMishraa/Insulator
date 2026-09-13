@@ -1078,8 +1078,9 @@ mod tests {
 
         let binary =
             crate::command_env::find_executable("dsh").expect("DeepSeek Harness is not installed");
-        let root =
-            TempHarnessHome(std::env::temp_dir().join(format!("insulator-dsh-test-{}", Uuid::new_v4())));
+        let root = TempHarnessHome(
+            std::env::temp_dir().join(format!("insulator-dsh-test-{}", Uuid::new_v4())),
+        );
         std::fs::create_dir_all(&root.0).unwrap();
         {
             let server = DeepSeekServer::start_with_dsh_home(&binary, Some(&root.0))

@@ -18,6 +18,9 @@ pub struct BranchSnapshot {
     pub current: Option<String>,
     pub detached_head: Option<String>,
     pub default_branch: Option<String>,
+    /// `None` means there is no current branch (detached HEAD), or the GitHub lookup failed or timed out.
+    #[serde(default)]
+    pub pull_request_open: Option<bool>,
     pub branches: Vec<BranchEntry>,
     pub additions: u64,
     pub deletions: u64,

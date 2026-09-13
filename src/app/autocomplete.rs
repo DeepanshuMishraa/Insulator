@@ -165,15 +165,16 @@ fn pi_reference_config_path(root: &std::path::Path, global: bool) -> std::path::
 fn pi_reference_file_fingerprint(path: &std::path::Path) -> PiReferenceFileFingerprint {
     let metadata = std::fs::metadata(path).ok();
     PiReferenceFileFingerprint {
-        modified: metadata.as_ref().and_then(|metadata| metadata.modified().ok()),
+        modified: metadata
+            .as_ref()
+            .and_then(|metadata| metadata.modified().ok()),
         length: metadata.map(|metadata| metadata.len()),
     }
 }
 
-fn pi_reference_fingerprint(root: &std::path::Path) -> (
-    PiReferenceFileFingerprint,
-    PiReferenceFileFingerprint,
-) {
+fn pi_reference_fingerprint(
+    root: &std::path::Path,
+) -> (PiReferenceFileFingerprint, PiReferenceFileFingerprint) {
     (
         pi_reference_file_fingerprint(&pi_reference_config_path(root, true)),
         pi_reference_file_fingerprint(&pi_reference_config_path(root, false)),
@@ -187,10 +188,7 @@ impl Insulator {
         cx.spawn(async move |insulator, cx| {
             let mut previous: Option<(
                 std::path::PathBuf,
-                (
-                    PiReferenceFileFingerprint,
-                    PiReferenceFileFingerprint,
-                ),
+                (PiReferenceFileFingerprint, PiReferenceFileFingerprint),
             )> = None;
             loop {
                 let root = match insulator.update(cx, |insulator, _| {
@@ -220,11 +218,12 @@ impl Insulator {
                         (root, fingerprint)
                     })
                     .await;
-                let changed = previous
-                    .as_ref()
-                    .is_some_and(|(previous_root, previous_fingerprint)| {
-                        previous_root == &root && previous_fingerprint != &fingerprint
-                    });
+                let changed =
+                    previous
+                        .as_ref()
+                        .is_some_and(|(previous_root, previous_fingerprint)| {
+                            previous_root == &root && previous_fingerprint != &fingerprint
+                        });
                 previous = Some((root, fingerprint));
                 if changed {
                     let _ = insulator.update(cx, |insulator, cx| {
@@ -306,20 +305,21 @@ impl Insulator {
                                     binary_override,
                                 },
                             ) {
-                                Ok(insulator_client::WorkspaceResult::SlashCommands { commands }) => {
-                                    commands
-                                }
+                                Ok(insulator_client::WorkspaceResult::SlashCommands {
+                                    commands,
+                                }) => commands,
                                 Ok(_) | Err(_) => Vec::new(),
                             }
                         })
                         .await;
-                    insulator.update(cx, |insulator, cx| {
-                        if insulator.slash_commands.fulfill(token, commands) {
-                            insulator.refresh_composer_sources(cx);
-                            cx.notify();
-                        }
-                    })
-                    .ok();
+                    insulator
+                        .update(cx, |insulator, cx| {
+                            if insulator.slash_commands.fulfill(token, commands) {
+                                insulator.refresh_composer_sources(cx);
+                                cx.notify();
+                            }
+                        })
+                        .ok();
                 })
                 .detach();
             }
@@ -371,13 +371,14 @@ impl Insulator {
                             }
                         })
                         .await;
-                    insulator.update(cx, |insulator, cx| {
-                        if insulator.mention_files.fulfill(token, files) {
-                            insulator.refresh_composer_sources(cx);
-                            cx.notify();
-                        }
-                    })
-                    .ok();
+                    insulator
+                        .update(cx, |insulator, cx| {
+                            if insulator.mention_files.fulfill(token, files) {
+                                insulator.refresh_composer_sources(cx);
+                                cx.notify();
+                            }
+                        })
+                        .ok();
                 })
                 .detach();
             }
@@ -971,22 +972,43 @@ mod tests {
         assert_eq!(selectable, vec![1, 2, 4]);
 
         // Navigating to first item (pos 0) always scrolls to 0 (top header)
-        assert_eq!(scroll_target_for_row_navigation(&rows, &selectable, 0, "up"), 0);
-        assert_eq!(scroll_target_for_row_navigation(&rows, &selectable, 0, "down"), 0);
+        assert_eq!(
+            scroll_target_for_row_navigation(&rows, &selectable, 0, "up"),
+            0
+        );
+        assert_eq!(
+            scroll_target_for_row_navigation(&rows, &selectable, 0, "down"),
+            0
+        );
 
         // Navigating down to pos 1 (opencode) scrolls to 2
-        assert_eq!(scroll_target_for_row_navigation(&rows, &selectable, 1, "down"), 2);
+        assert_eq!(
+            scroll_target_for_row_navigation(&rows, &selectable, 1, "down"),
+            2
+        );
 
         // Navigating down to pos 2 (.gitignore) scrolls to 4
-        assert_eq!(scroll_target_for_row_navigation(&rows, &selectable, 2, "down"), 4);
+        assert_eq!(
+            scroll_target_for_row_navigation(&rows, &selectable, 2, "down"),
+            4
+        );
 
         // Navigating up to pos 2 (.gitignore, preceded by "Files" header at index 3) scrolls to 3
-        assert_eq!(scroll_target_for_row_navigation(&rows, &selectable, 2, "up"), 3);
+        assert_eq!(
+            scroll_target_for_row_navigation(&rows, &selectable, 2, "up"),
+            3
+        );
 
         // Navigating up to pos 1 (opencode, preceded by "effect" at index 1) scrolls to 2
-        assert_eq!(scroll_target_for_row_navigation(&rows, &selectable, 1, "up"), 2);
+        assert_eq!(
+            scroll_target_for_row_navigation(&rows, &selectable, 1, "up"),
+            2
+        );
 
         // Navigating up to pos 0 (effect, preceded by "References" header at index 0) scrolls to 0
-        assert_eq!(scroll_target_for_row_navigation(&rows, &selectable, 0, "up"), 0);
+        assert_eq!(
+            scroll_target_for_row_navigation(&rows, &selectable, 0, "up"),
+            0
+        );
     }
 }

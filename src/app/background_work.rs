@@ -50,7 +50,12 @@ struct BackgroundSummaryEntry {
 #[derive(Clone)]
 struct EnvironmentSummary {
     commit_status: Option<String>,
+    pull_request_status: Option<String>,
+    git_operation_pending: bool,
+    can_open_pull_request: bool,
+    has_non_default_branch: bool,
     commit_focus: FocusHandle,
+    pull_request_focus: FocusHandle,
     compare_focus: FocusHandle,
 }
 
@@ -432,9 +437,8 @@ pub(super) fn strip_ansi(text: &str) -> String {
 
 pub(super) fn is_usage_summary(text: &str) -> bool {
     let text = strip_ansi(text).trim().to_owned();
-    let tps_tracker = text.contains("tok/s")
-        && text.contains("tokens in ")
-        && text.ends_with(" streaming");
+    let tps_tracker =
+        text.contains("tok/s") && text.contains("tokens in ") && text.ends_with(" streaming");
     let pi_status_anim = text
         .split_once(" tokens · ")
         .is_some_and(|(count, elapsed)| !count.is_empty() && elapsed.ends_with('s'));
@@ -863,9 +867,23 @@ impl Insulator {
         let change_counts = snapshot
             .map(|snapshot| (snapshot.additions, snapshot.deletions))
             .filter(|(additions, deletions)| *additions > 0 || *deletions > 0);
+        let has_non_default_branch = snapshot.is_some_and(|snapshot| {
+            matches!(
+                (&snapshot.current, &snapshot.default_branch),
+                (Some(current), Some(default_branch)) if current != default_branch
+            )
+        });
+        let can_open_pull_request = has_non_default_branch
+            && snapshot.is_some_and(|snapshot| snapshot.pull_request_open == Some(false));
         let environment = Some(EnvironmentSummary {
             commit_status: self.commit_operation_status_label(),
+            pull_request_status: self.pull_request_operation_status_label(),
+            git_operation_pending: self.git_operation_pending(),
+            can_open_pull_request,
+            has_non_default_branch,
             commit_focus: self.transcript_control_focus("environment-summary-commit", cx),
+            pull_request_focus: self
+                .transcript_control_focus("environment-summary-pull-request", cx),
             compare_focus: self.transcript_control_focus("environment-summary-compare", cx),
         });
         let (processes, agents) = session_id
@@ -1819,7 +1837,7 @@ fn render_environment_summary_section(
         environment
             .commit_status
             .unwrap_or_else(|| tr!("environment.commit_or_push")),
-        !commit_pending,
+        !environment.git_operation_pending,
         commit_pending,
         None,
         theme,
@@ -1828,6 +1846,29 @@ fn render_environment_summary_section(
             window.refresh();
             let _ = commit_weak.update(cx, |this, cx| {
                 this.open_commit_dialog(window, cx);
+            });
+        },
+    );
+
+    let pull_request_handle = handle.clone();
+    let pull_request_weak = weak.clone();
+    let pull_request_pending = environment.pull_request_status.is_some();
+    let pull_request = render_environment_action_row(
+        "environment-summary-pull-request",
+        &environment.pull_request_focus,
+        "icons/github.svg",
+        environment
+            .pull_request_status
+            .unwrap_or_else(|| tr!("environment.open_pull_request")),
+        environment.can_open_pull_request && !environment.git_operation_pending,
+        pull_request_pending,
+        Some(icon("icons/arrow-up-right.svg", 13.0, theme.text_tertiary).into_any_element()),
+        theme,
+        move |window, cx| {
+            pull_request_handle.close(window, cx);
+            window.refresh();
+            let _ = pull_request_weak.update(cx, |this, cx| {
+                this.open_pull_request(cx);
             });
         },
     );
@@ -1868,6 +1909,12 @@ fn render_environment_summary_section(
                 .child(tr!("environment.title")),
         )
         .child(commit)
+        .when(
+            environment.can_open_pull_request
+                || pull_request_pending
+                || environment.has_non_default_branch,
+            |section| section.child(pull_request),
+        )
         .child(compare)
 }
 
@@ -2250,7 +2297,10 @@ mod tests {
     #[test]
     fn toast_text_strips_ansi_sequences() {
         let message = "\u{1b}[38;2;181;189;104m✓ 429 tok/s  \u{1b}[38;2;102;102;102m169 tokens in 0.4s streaming\u{1b}[39m";
-        assert_eq!(strip_ansi(message), "✓ 429 tok/s  169 tokens in 0.4s streaming");
+        assert_eq!(
+            strip_ansi(message),
+            "✓ 429 tok/s  169 tokens in 0.4s streaming"
+        );
         assert!(is_usage_summary(message));
         assert!(is_usage_summary("429 tokens · 1s"));
         assert!(!is_usage_summary("Started 3 subagents"));

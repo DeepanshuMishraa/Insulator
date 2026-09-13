@@ -793,11 +793,15 @@ mod tests {
     }
 
     fn diverged_repository() -> PathBuf {
-        let directory = std::env::temp_dir().join(format!("insulator-checkpoints-{}", Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("insulator-checkpoints-{}", Uuid::new_v4()));
         fs::create_dir_all(&directory).unwrap();
         git_ok(&directory, &["init", "--quiet", "--initial-branch=main"]);
         git_ok(&directory, &["config", "user.name", "Insulator Test"]);
-        git_ok(&directory, &["config", "user.email", "insulator@example.com"]);
+        git_ok(
+            &directory,
+            &["config", "user.email", "insulator@example.com"],
+        );
         fs::write(directory.join("shared.txt"), "shared\n").unwrap();
         git_ok(&directory, &["add", "shared.txt"]);
         git_ok(&directory, &["commit", "--quiet", "-m", "baseline"]);
@@ -817,7 +821,8 @@ mod tests {
 
     #[test]
     fn session_turn_refs_lists_the_sessions_checkpoints_in_one_call() {
-        let directory = std::env::temp_dir().join(format!("insulator-checkpoints-{}", Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("insulator-checkpoints-{}", Uuid::new_v4()));
         fs::create_dir_all(&directory).unwrap();
         git_ok(&directory, &["init", "--quiet"]);
         fs::write(directory.join("tracked.txt"), "baseline\n").unwrap();
@@ -857,7 +862,8 @@ mod tests {
     /// are worth pinning down.
     #[test]
     fn refs_are_deleted_and_copied_in_batches() {
-        let directory = std::env::temp_dir().join(format!("insulator-checkpoints-{}", Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("insulator-checkpoints-{}", Uuid::new_v4()));
         fs::create_dir_all(&directory).unwrap();
         git_ok(&directory, &["init", "--quiet"]);
         fs::write(directory.join("tracked.txt"), "baseline\n").unwrap();
@@ -932,7 +938,8 @@ mod tests {
 
     #[test]
     fn captures_diffs_and_restores_tracked_and_untracked_files() {
-        let directory = std::env::temp_dir().join(format!("insulator-checkpoints-{}", Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("insulator-checkpoints-{}", Uuid::new_v4()));
         fs::create_dir_all(&directory).unwrap();
         git_ok(&directory, &["init", "--quiet"]);
         git_ok(&directory, &["config", "core.autocrlf", "false"]);

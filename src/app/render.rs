@@ -20,6 +20,7 @@ impl Insulator {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let theme = Theme::current(cx);
+        let focus = self.transcript_control_focus(format!("panel-resize-{id}"), cx);
         let active = self
             .panel_resize_drag
             .is_some_and(|drag| drag.target == target);
@@ -40,6 +41,9 @@ impl Insulator {
             .left(px(strip_left))
             .w(px(strip_width))
             .h_full()
+            .track_focus(&focus)
+            .tab_index(0)
+            .focus_visible(|style| style.bg(theme.resize_handle.opacity(0.35)))
             .group("panel-resize-handle")
             .cursor_col_resize()
             .child(
@@ -64,6 +68,56 @@ impl Insulator {
                     this.begin_panel_resize(target, event, window, cx);
                 }),
             )
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                let delta = match event.keystroke.key.as_str() {
+                    "left" => Some(if target == PanelResizeTarget::Sidebar { -24.0 } else { 24.0 }),
+                    "right" => Some(if target == PanelResizeTarget::Sidebar { 24.0 } else { -24.0 }),
+                    _ => None,
+                };
+                if let Some(delta) = delta {
+                    this.resize_panel_by_keyboard(target, delta, window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+    }
+
+    fn resize_panel_by_keyboard(
+        &mut self,
+        target: PanelResizeTarget,
+        delta: f32,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (sidebar_width, right_panel_width) = self.effective_panel_widths(window);
+        let (current, minimum, maximum, width) = match target {
+            PanelResizeTarget::Sidebar => {
+                let maximum = SIDEBAR_MAX_WIDTH
+                    .min(f32::from(window.viewport_size().width) - MAIN_PANEL_MIN_WIDTH - right_panel_width)
+                    .max(SIDEBAR_MIN_WIDTH);
+                (self.sidebar_width, SIDEBAR_MIN_WIDTH, maximum, sidebar_width + delta)
+            }
+            PanelResizeTarget::RightPanel => {
+                let maximum = RIGHT_PANEL_MAX_WIDTH
+                    .min(f32::from(window.viewport_size().width) - MAIN_PANEL_MIN_WIDTH - sidebar_width)
+                    .max(RIGHT_PANEL_MIN_WIDTH);
+                (self.right_panel_width, RIGHT_PANEL_MIN_WIDTH, maximum, right_panel_width + delta)
+            }
+            _ => return,
+        };
+        let width = width.clamp(minimum, maximum);
+        if (current - width).abs() < 0.5 {
+            return;
+        }
+        match target {
+            PanelResizeTarget::Sidebar => {
+                self.sidebar_width = width;
+                crate::platform::set_sidebar_material_width(window, width);
+            }
+            PanelResizeTarget::RightPanel => self.right_panel_width = width,
+            _ => unreachable!(),
+        }
+        self.persist_panel_layout();
+        cx.notify();
     }
 
     pub(super) fn render_horizontal_panel_resize_handle(
@@ -340,9 +394,11 @@ impl Render for Insulator {
         let background_image = self.state.background_image_path.clone();
         let empty = should_render_empty_state(self.selected_session());
         let active_file = self.active_main_file_tab.clone();
+        let pull_requests_open = self.pull_requests_open;
         let active_review = self.active_main_review_tab;
         let file_editor_width =
-            (f32::from(window.viewport_size().width) - panels.sidebar - panels.right_panel).max(300.0);
+            (f32::from(window.viewport_size().width) - panels.sidebar - panels.right_panel)
+                .max(300.0);
         let permission = self.render_permission(cx);
         let computer_use = self.render_computer_use_overlay(cx);
         let command_palette = self.render_command_palette(window, cx);
@@ -438,8 +494,14 @@ impl Render for Insulator {
                     .flex()
                     .flex_col()
                     .bg(match window_style {
-                        WindowStyle::LiquidGlass => Hsla { a: 0.10, ..theme.surface },
-                        WindowStyle::Image => Hsla { a: 0.82, ..theme.surface },
+                        WindowStyle::LiquidGlass => Hsla {
+                            a: 0.10,
+                            ..theme.surface
+                        },
+                        WindowStyle::Image => Hsla {
+                            a: 0.82,
+                            ..theme.surface
+                        },
                         WindowStyle::Solid => theme.surface,
                         WindowStyle::Transparent => theme.surface,
                     })
@@ -447,13 +509,13 @@ impl Render for Insulator {
                         element.border_l_1().border_color(theme.sidebar_border)
                     })
                     .child(self.render_header(window, cx))
-
-                    .child(if let Some(path) = active_file.as_ref() {
+                    .child(if pull_requests_open {
+                        self.render_pull_requests(window, cx)
+                    } else if let Some(path) = active_file.as_ref() {
                         self.render_right_panel_file(path.clone(), file_editor_width, window, cx)
                             .into_any_element()
                     } else if active_review {
-                        self.render_main_review_diff(window, cx)
-                            .into_any_element()
+                        self.render_main_review_diff(window, cx).into_any_element()
                     } else if empty {
                         self.render_empty_state(cx)
                     } else {
@@ -464,7 +526,10 @@ impl Render for Insulator {
                     })
                     .children(permission)
                     .when(
-                        self.selected_session().is_some() && active_file.is_none() && !active_review,
+                        self.selected_session().is_some()
+                            && !pull_requests_open
+                            && active_file.is_none()
+                            && !active_review,
                         |element| {
                             element
                                 .children(self.render_queued_messages(cx))

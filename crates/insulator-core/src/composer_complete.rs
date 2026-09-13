@@ -11,9 +11,9 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use crate::model::{ProviderKind, ReportedCommand};
+pub use insulator_protocol::composer::{CommandScope, FileEntry, ReferenceEntry, SlashCommand};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Matcher, Utf32Str};
-pub use insulator_protocol::composer::{CommandScope, FileEntry, ReferenceEntry, SlashCommand};
 
 /// How many rows a filter pass returns. The popup shows a screenful and the
 /// keyboard walks the rest; past this the tail is noise, not choice.
@@ -846,9 +846,8 @@ pub fn list_pi_references(root: &Path) -> Vec<ReferenceEntry> {
                     serde_json::Value::String(value) => !value.is_empty(),
                     serde_json::Value::Object(object) => {
                         let path = object.get("path").and_then(serde_json::Value::as_str);
-                        let repository = object
-                            .get("repository")
-                            .and_then(serde_json::Value::as_str);
+                        let repository =
+                            object.get("repository").and_then(serde_json::Value::as_str);
                         matches!((path, repository), (Some(_), None) | (None, Some(_)))
                             && object
                                 .get("branch")
@@ -1390,7 +1389,8 @@ mod tests {
 
     #[test]
     fn provider_cli_catalog_entries_join_the_composer_index() {
-        let root = std::env::temp_dir().join(format!("insulator-cli-catalog-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("insulator-cli-catalog-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let commands = assemble_slash_commands(
@@ -1415,8 +1415,10 @@ mod tests {
 
     #[test]
     fn opencode_commands_use_native_dispatch_while_insulator_templates_still_expand() {
-        let root =
-            std::env::temp_dir().join(format!("insulator-native-commands-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "insulator-native-commands-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(root.join(".opencode/command")).unwrap();
         std::fs::create_dir_all(root.join(".insulator/commands")).unwrap();
         std::fs::write(
@@ -1449,8 +1451,12 @@ mod tests {
             None
         );
         assert_eq!(
-            resolved_submission(ProviderKind::OpenCode, "/insulator-review changes", &commands)
-                .as_deref(),
+            resolved_submission(
+                ProviderKind::OpenCode,
+                "/insulator-review changes",
+                &commands
+            )
+            .as_deref(),
             Some("Review changes")
         );
         assert!(
@@ -1538,10 +1544,15 @@ mod tests {
 
     #[test]
     fn insulator_resume_is_reserved_and_listed_for_every_provider() {
-        let root = std::env::temp_dir().join(format!("insulator-resume-command-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("insulator-resume-command-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join(".insulator/commands")).unwrap();
-        std::fs::write(root.join(".insulator/commands/resume.md"), "Project override").unwrap();
+        std::fs::write(
+            root.join(".insulator/commands/resume.md"),
+            "Project override",
+        )
+        .unwrap();
 
         for provider in ProviderKind::ALL {
             let commands = assemble_slash_commands(provider, &root, Vec::new());
@@ -1609,8 +1620,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn codex_plugin_skill_uses_qualified_catalog_key() {
-        let root =
-            std::env::temp_dir().join(format!("insulator-codex-plugin-skill-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "insulator-codex-plugin-skill-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let plugin = root.join("plugin");
         let skill = plugin.join("skills/to-spec");

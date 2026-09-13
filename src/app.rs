@@ -33,11 +33,10 @@ use crate::model::{
     ActivityItem, ActivityKind, AgentSession, BackgroundWorkEvent, BackgroundWorkItem,
     BackgroundWorkKey, BackgroundWorkKind, BackgroundWorkStatus, Checkpoint, CheckpointStatus,
     ContextUsage, DriverEvent, ExtensionNotificationLevel, FavoriteModel, Message,
-    MessageAttachment, MessageRole,
-    PendingPermission, Project, ProviderKind, ProviderModel, ProviderProbe, ProviderResumeCursor,
-    ProviderSessionHistory, ProviderSessionSummary, QueuedMessage, ReasoningBlock, RuntimeMode,
-    SessionStatus, SessionWorkspace, TranscriptBlock, TurnStatus, UserInputAnswer,
-    UserInputQuestion, compact_path, unix_time, unix_time_millis,
+    MessageAttachment, MessageRole, PendingPermission, Project, ProviderKind, ProviderModel,
+    ProviderProbe, ProviderResumeCursor, ProviderSessionHistory, ProviderSessionSummary,
+    QueuedMessage, ReasoningBlock, RuntimeMode, SessionStatus, SessionWorkspace, TranscriptBlock,
+    TurnStatus, UserInputAnswer, UserInputQuestion, compact_path, unix_time, unix_time_millis,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -55,19 +54,19 @@ use crate::ui::tooltip::Tooltip;
 use crate::browser::BrowserView;
 use crate::persistence::{
     ChatStatus, ComposerDraftStore, ComposerDrafts, DEFAULT_RIGHT_PANEL_WIDTH,
-    DEFAULT_SIDEBAR_WIDTH, PersistedState, PersistedWindowState, SidebarGrouping, SidebarOrdering,
-    StateStore,
+    DEFAULT_SIDEBAR_WIDTH, PersistedMainTab, PersistedRightPanelSurface, PersistedState,
+    PersistedWindowState, SidebarGrouping, SidebarOrdering, StateStore,
 };
 use crate::query::{Query, QueryCache};
 use crate::review_diff::{Snapshot as ReviewDiffSnapshot, Source as ReviewDiffSource};
 use crate::terminal::TerminalView;
 use crate::theme::{ColorTheme, Theme, ThemePreference, set_active_ui_font_family, sp};
-use insulator_protocol::theme::WindowStyle;
 use crate::ui::text_field::TextField;
 use crate::ui::{
-    MenuChip, ProjectNameSelector, Slider, SliderEvent, SliderState, activity_icon,
-    activity_noun, contain_horizontal_scroll, contain_scroll, file_icon, h_flex, icon, icon_button,
-    motion, provider_color, provider_mark, status_color, chat_status_color, runtime_mode_color, toggle_switch,
+    MenuChip, ProjectNameSelector, Slider, SliderEvent, SliderState, activity_icon, activity_noun,
+    chat_status_color, contain_horizontal_scroll, contain_scroll, file_icon, h_flex, icon,
+    icon_button, motion, provider_color, provider_mark, runtime_mode_color, status_color,
+    toggle_switch,
 };
 use crate::{
     CancelTaskSwitch, CancelTurn, CloseFind, CloseWindow, ConfirmTaskSwitch, CopySelection,
@@ -77,6 +76,7 @@ use crate::{
     ToggleFindCaseSensitive, ToggleFindRegex, ToggleFindWholeWord, ToggleFpsCounter,
     ToggleModelPicker, ToggleRightPanel, ToggleSidebar, ToggleUsagePanel,
 };
+use insulator_protocol::theme::WindowStyle;
 
 #[cfg(target_os = "macos")]
 const TRAFFIC_LIGHT_CLEARANCE: f32 = 86.0;
@@ -163,6 +163,9 @@ const MAX_CACHED_MESSAGE_SOURCE_BYTES: usize = 512 * 1024;
 /// practice. 8 is generous and caps the tree cache, the only large one, at a
 /// few hundred KB.
 const MAX_CACHED_WORKSPACES: usize = 8;
+/// Decoded screenshots are several MiB each. Keep enough for the visible
+/// transcript without retaining every image viewed during a long-running app.
+const MAX_CACHED_REMOTE_IMAGES: usize = 16;
 const STREAM_REMEASURE_TAIL_ROWS: usize = 3;
 /// Top-level markdown blocks the live reasoning peek renders, counted from
 /// the tail. The peek is a 400 px viewport pinned to the newest thought, so
@@ -340,13 +343,6 @@ struct ComposerAttachment {
     is_image: bool,
     /// Daemon-issued durable reference retained by task persistence.
     blob_reference: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-enum RemoteImageState {
-    Loading,
-    Ready(Arc<gpui::Image>),
-    Unavailable,
 }
 
 /// One accepted composer submission. `prompt` preserves the composer and
@@ -756,9 +752,14 @@ impl FileEditorSnippet {
     pub(super) fn from_range(range: std::ops::Range<usize>, content: &str) -> Self {
         let len = content.len();
         let start = range.start.min(len);
-        let start = (0..=start).rev().find(|&i| content.is_char_boundary(i)).unwrap_or(0);
+        let start = (0..=start)
+            .rev()
+            .find(|&i| content.is_char_boundary(i))
+            .unwrap_or(0);
         let end = range.end.min(len).max(start);
-        let end = (end..=len).find(|&i| content.is_char_boundary(i)).unwrap_or(len);
+        let end = (end..=len)
+            .find(|&i| content.is_char_boundary(i))
+            .unwrap_or(len);
         let valid_range = start..end;
         let start_line = content[..start].bytes().filter(|b| *b == b'\n').count() + 1;
         let selected_prefix = &content[..end];
@@ -1137,6 +1138,52 @@ pub(super) enum MainTab {
     Review,
 }
 
+impl From<&MainTab> for PersistedMainTab {
+    fn from(tab: &MainTab) -> Self {
+        match tab {
+            MainTab::Chat(id) => Self::Chat(*id),
+            MainTab::File(path) => Self::File(path.clone()),
+            MainTab::Review => Self::Review,
+        }
+    }
+}
+
+impl From<PersistedMainTab> for MainTab {
+    fn from(tab: PersistedMainTab) -> Self {
+        match tab {
+            PersistedMainTab::Chat(id) => Self::Chat(id),
+            PersistedMainTab::File(path) => Self::File(path),
+            PersistedMainTab::Review => Self::Review,
+        }
+    }
+}
+
+impl From<&RightPanelSurface> for PersistedRightPanelSurface {
+    fn from(surface: &RightPanelSurface) -> Self {
+        match surface {
+            RightPanelSurface::Browser(id) => Self::Browser(*id),
+            RightPanelSurface::Terminal(id) => Self::Terminal(*id),
+            RightPanelSurface::Files => Self::Files,
+            RightPanelSurface::Diff => Self::Diff,
+            RightPanelSurface::File(path) => Self::File(path.clone()),
+            // Background work is transient and filtered before persistence.
+            RightPanelSurface::BackgroundWork { .. } => Self::Files,
+        }
+    }
+}
+
+impl From<PersistedRightPanelSurface> for RightPanelSurface {
+    fn from(surface: PersistedRightPanelSurface) -> Self {
+        match surface {
+            PersistedRightPanelSurface::Browser(id) => Self::Browser(id),
+            PersistedRightPanelSurface::Terminal(id) => Self::Terminal(id),
+            PersistedRightPanelSurface::Files => Self::Files,
+            PersistedRightPanelSurface::Diff => Self::Diff,
+            PersistedRightPanelSurface::File(path) => Self::File(path),
+        }
+    }
+}
+
 pub struct Insulator {
     /// Owns the headless provider process for exactly as long as the desktop
     /// app entity. Debug builds can replace it independently after a rebuild;
@@ -1378,7 +1425,7 @@ pub struct Insulator {
     /// In-memory GPUI images for daemon-owned bytes. A missing entry schedules
     /// one background fetch only when a visible row asks to render it; the
     /// desktop never creates another attachment file.
-    remote_images: RefCell<HashMap<String, RemoteImageState>>,
+    remote_images: RefCell<QueryCache<String, Option<Arc<gpui::Image>>>>,
     /// Coalesced edge trigger for provider and background result queues. The
     /// payloads stay in their typed channels; this channel only wakes the UI.
     event_wake_tx: smol::channel::Sender<()>,
@@ -1453,6 +1500,41 @@ pub struct Insulator {
     sidebar_visible: bool,
     main_tabs_open: bool,
     main_tabs: Vec<MainTab>,
+    pull_requests_open: bool,
+    pull_requests_tab: pull_requests::PullRequestTab,
+    pull_requests: Vec<pull_requests::PullRequest>,
+    pull_requests_loading: bool,
+    pull_requests_refreshing: bool,
+    pull_requests_error: Option<String>,
+    pull_request_detail: Option<pull_requests::PullRequest>,
+    pull_request_detail_tab: pull_requests::PullRequestDetailTab,
+    pull_request_detail_loading: HashSet<(String, u64)>,
+    pull_request_body_error: HashMap<(String, u64), String>,
+    pull_request_commits: HashMap<(String, u64), Vec<pull_requests::PullRequestCommit>>,
+    pull_request_commits_loading: HashSet<(String, u64)>,
+    pull_request_commits_error: HashMap<(String, u64), String>,
+    pull_request_checks: HashMap<(String, u64), Vec<pull_requests::PullRequestCheck>>,
+    pull_request_checks_loading: HashSet<(String, u64)>,
+    pull_request_checks_error: HashMap<(String, u64), String>,
+    pull_request_comments: HashMap<(String, u64), Vec<pull_requests::PullRequestComment>>,
+    pull_request_comments_loading: HashSet<(String, u64)>,
+    pull_request_comments_error: HashMap<(String, u64), String>,
+    pull_request_comment_input: Entity<TextInput>,
+    pull_request_comment_posting: HashSet<(String, u64)>,
+    pull_request_comment_post_errors: HashMap<(String, u64), String>,
+    pull_request_collapsed_comments: HashSet<String>,
+    pull_request_diffs: HashMap<(String, u64), Arc<ReviewDiffSnapshot>>,
+    pull_request_diffs_loading: HashSet<(String, u64)>,
+    pull_request_diffs_error: HashMap<(String, u64), String>,
+    pull_request_markdown: RefCell<Option<((String, u64), MarkdownView)>>,
+    pull_requests_search: Entity<TextInput>,
+    /// Virtualized filtered PR rows. GitHub accounts can return hundreds of
+    /// requests, so frames must only build what is visible.
+    pull_requests_list_state: ListState,
+    pull_requests_rows: RefCell<Vec<usize>>,
+    pull_requests_scrollbar: Rc<ScrollbarState>,
+    pull_request_detail_scroll_handle: ScrollHandle,
+    pull_request_detail_scrollbar: Rc<ScrollbarState>,
     active_main_file_tab: Option<String>,
     active_main_review_tab: bool,
     main_tabs_scroll_handle: ScrollHandle,
@@ -1755,6 +1837,7 @@ mod file_search;
 mod goal_dialog;
 mod image_preview;
 mod project_dialog;
+mod pull_requests;
 mod render;
 mod resource_monitor;
 mod right_panel;
@@ -2090,6 +2173,8 @@ impl Insulator {
         let composer_draft_store = ComposerDraftStore::remote(daemon.clone());
         let composer_drafts = composer_draft_store.load().unwrap_or_default();
         let mut state = store.load_or_fresh(cwd);
+        let cached_pull_requests = pull_requests::load_cached_pull_requests();
+        let cached_commits = pull_requests::cached_commits(&cached_pull_requests);
         let home_directory = crate::projectless::home_directory();
         state.apply_daemon_settings(daemon.settings());
         if let Err(error) = daemon.update_settings(state.daemon_settings()) {
@@ -2193,6 +2278,18 @@ impl Insulator {
         });
         let usage_project_filter =
             cx.new(|cx| TextInput::new(window, cx).placeholder(tr!("input.filter_projects")));
+        let pull_requests_search = cx.new(|cx| {
+            TextInput::new(window, cx)
+                .clear_on_escape()
+                .placeholder(tr!("pull_requests.search_placeholder"))
+        });
+        let pull_request_comment_input = cx.new(|cx| {
+            TextInput::new(window, cx)
+                .multi_line()
+                .auto_height()
+                .placeholder(tr!("pull_requests.comment_placeholder"))
+                .accessibility_label(tr!("pull_requests.comment_label"))
+        });
         let right_panel_diff_filter =
             cx.new(|cx| TextInput::new(window, cx).placeholder(tr!("diff.filter_files")));
         let navigation_rail = cx.new(|_| ConversationNavigationRail::new());
@@ -2250,7 +2347,12 @@ impl Insulator {
             window,
             cx,
         );
-        crate::platform::configure_window_style(window, state.window_style, state.color_theme, state.background_image_path.as_deref());
+        crate::platform::configure_window_style(
+            window,
+            state.window_style,
+            state.color_theme,
+            state.background_image_path.as_deref(),
+        );
         crate::platform::set_sidebar_material_width(window, sidebar_width);
         let project_paths = state
             .projects
@@ -2385,9 +2487,9 @@ impl Insulator {
                         Uuid::nil(),
                         insulator_client::Command::ProbeComputerPermissions { prompt: false },
                     ) {
-                        Ok(insulator_client::ResponsePayload::ComputerPermissions { permissions }) => {
-                            Ok(permissions)
-                        }
+                        Ok(insulator_client::ResponsePayload::ComputerPermissions {
+                            permissions,
+                        }) => Ok(permissions),
                         Ok(_) => Err("the daemon returned an invalid permission response".into()),
                         Err(error) => Err(error.to_string()),
                     };
@@ -2443,6 +2545,7 @@ impl Insulator {
         let transcript_rows = ListState::new(0, ListAlignment::Bottom, px(2048.0));
         let anchored_transcript_rows = ListState::new(0, ListAlignment::Top, px(2048.0));
         let sidebar_list_state = ListState::new(0, ListAlignment::Top, px(256.0));
+        let pull_requests_list_state = ListState::new(0, ListAlignment::Top, px(256.0));
         let usage_projects_list = ListState::new(0, ListAlignment::Top, px(256.0));
         let branch_picker_list_state = ListState::new(0, ListAlignment::Top, px(152.0));
         let transcript_is_scrolled = Rc::new(Cell::new(false));
@@ -2951,7 +3054,9 @@ impl Insulator {
                 let insulator = cx.entity().downgrade();
                 Rc::new(move |target, _, cx| {
                     let handled = insulator
-                        .update(cx, |insulator, cx| insulator.open_transcript_link(target, cx))
+                        .update(cx, |insulator, cx| {
+                            insulator.open_transcript_link(target, cx)
+                        })
                         .unwrap_or(false);
                     if !handled {
                         cx.open_url(target);
@@ -2959,6 +3064,49 @@ impl Insulator {
                 })
             };
             let initial_selected_session = state.selected_session;
+            let initial_main_tabs_open = if state.main_tabs.is_empty() {
+                initial_selected_session.is_some()
+            } else {
+                state.main_tabs_open
+            };
+            let initial_active_main_file_tab = state.active_main_file_tab.clone();
+            let initial_active_main_review_tab = state.active_main_review_tab;
+            let initial_right_panel_surfaces = state
+                .right_panel_surfaces
+                .clone()
+                .into_iter()
+                .map(RightPanelSurface::from)
+                .collect::<Vec<_>>();
+            let initial_right_panel_active_surface = state.right_panel_active_surface;
+            let initial_right_panel_upper_tab = initial_right_panel_active_surface
+                .and_then(|index| initial_right_panel_surfaces.get(index))
+                .map(|surface| match surface {
+                    RightPanelSurface::Diff => RightPanelUpperTab::Changes,
+                    RightPanelSurface::Browser(_) => RightPanelUpperTab::Browser,
+                    _ => RightPanelUpperTab::Files,
+                })
+                .unwrap_or(RightPanelUpperTab::Files);
+            let initial_main_tabs = if state.main_tabs.is_empty() {
+                initial_selected_session
+                    .map(|id| vec![MainTab::Chat(id)])
+                    .unwrap_or_default()
+            } else {
+                state
+                    .main_tabs
+                    .clone()
+                    .into_iter()
+                    .filter_map(|tab| match tab {
+                        PersistedMainTab::Chat(id) if state.sessions.iter().any(|s| s.id == id) => {
+                            Some(MainTab::Chat(id))
+                        }
+                        PersistedMainTab::File(path) if !path.is_empty() => {
+                            Some(MainTab::File(path))
+                        }
+                        PersistedMainTab::Review => Some(MainTab::Review),
+                        _ => None,
+                    })
+                    .collect()
+            };
 
             Self {
                 daemon,
@@ -3095,7 +3243,7 @@ impl Insulator {
                 composer_attachments,
                 image_preview: None,
                 image_preview_generation: 0,
-                remote_images: RefCell::new(HashMap::new()),
+                remote_images: RefCell::new(QueryCache::new(MAX_CACHED_REMOTE_IMAGES)),
                 event_wake_tx,
                 task_state_sync_tx,
                 task_state_sync_events,
@@ -3126,12 +3274,43 @@ impl Insulator {
                 sidebar_group_compose_focuses: RefCell::new(HashMap::new()),
                 sidebar_show_more_focuses: RefCell::new(HashMap::new()),
                 sidebar_visible,
-                main_tabs_open: initial_selected_session.is_some(),
-                main_tabs: initial_selected_session
-                    .map(|id| vec![MainTab::Chat(id)])
-                    .unwrap_or_default(),
-                active_main_file_tab: None,
-                active_main_review_tab: false,
+                main_tabs_open: initial_main_tabs_open,
+                main_tabs: initial_main_tabs,
+                pull_requests_open: false,
+                pull_requests_tab: pull_requests::PullRequestTab::All,
+                pull_requests: cached_pull_requests,
+                pull_requests_loading: false,
+                pull_requests_refreshing: false,
+                pull_requests_error: None,
+                pull_request_detail: None,
+                pull_request_detail_tab: pull_requests::PullRequestDetailTab::Summary,
+                pull_request_detail_loading: HashSet::new(),
+                pull_request_body_error: HashMap::new(),
+                pull_request_commits: cached_commits,
+                pull_request_commits_loading: HashSet::new(),
+                pull_request_commits_error: HashMap::new(),
+                pull_request_checks: HashMap::new(),
+                pull_request_checks_loading: HashSet::new(),
+                pull_request_checks_error: HashMap::new(),
+                pull_request_comments: HashMap::new(),
+                pull_request_comments_loading: HashSet::new(),
+                pull_request_comments_error: HashMap::new(),
+                pull_request_comment_input,
+                pull_request_comment_posting: HashSet::new(),
+                pull_request_comment_post_errors: HashMap::new(),
+                pull_request_collapsed_comments: HashSet::new(),
+                pull_request_diffs: HashMap::new(),
+                pull_request_diffs_loading: HashSet::new(),
+                pull_request_diffs_error: HashMap::new(),
+                pull_request_markdown: RefCell::new(None),
+                pull_requests_search,
+                pull_requests_list_state,
+                pull_requests_rows: RefCell::new(Vec::new()),
+                pull_requests_scrollbar: ScrollbarState::new(),
+                pull_request_detail_scroll_handle: ScrollHandle::new(),
+                pull_request_detail_scrollbar: ScrollbarState::new(),
+                active_main_file_tab: initial_active_main_file_tab,
+                active_main_review_tab: initial_active_main_review_tab,
                 main_tabs_scroll_handle: ScrollHandle::new(),
                 main_tabs_scrollbar: ScrollbarState::new(),
                 file_editor_input_expanded: false,
@@ -3148,16 +3327,27 @@ impl Insulator {
                 },
                 fps_counter_visible: false,
                 panel_resize_drag: None,
-                right_panel_upper_tab: RightPanelUpperTab::Files,
+                right_panel_upper_tab: initial_right_panel_upper_tab,
                 right_panel_terminal_height: 240.0,
                 right_panel_terminal_collapsed: false,
-                right_panel_terminal_ids: Vec::new(),
+                right_panel_terminal_ids: initial_right_panel_surfaces
+                    .iter()
+                    .filter_map(|surface| match surface {
+                        RightPanelSurface::Terminal(id) => Some(*id),
+                        _ => None,
+                    })
+                    .collect(),
                 right_panel_active_terminal_index: 0,
                 right_panel_terminal_tabs_scroll_handle: ScrollHandle::new(),
-                right_panel_browser_id: None,
+                right_panel_browser_id: initial_right_panel_surfaces.iter().find_map(|surface| {
+                    match surface {
+                        RightPanelSurface::Browser(id) => Some(*id),
+                        _ => None,
+                    }
+                }),
                 right_panel_session_states: HashMap::new(),
-                right_panel_surfaces: Vec::new(),
-                right_panel_active_surface: None,
+                right_panel_surfaces: initial_right_panel_surfaces,
+                right_panel_active_surface: initial_right_panel_active_surface,
                 right_panel_tabs_scroll_handle: ScrollHandle::new(),
                 right_panel_files_scroll_handle: ScrollHandle::new(),
                 right_panel_files_scrollbar: ScrollbarState::new(),
@@ -3180,7 +3370,7 @@ impl Insulator {
                 right_panel_files_selected_path: None,
                 right_panel_file_tree_width: DEFAULT_FILE_TREE_WIDTH,
                 right_panel_file_editors: HashMap::new(),
-        file_editor_selection: None,
+                file_editor_selection: None,
                 file_search: None,
                 right_panel_diff_source: ReviewDiffSource::default(),
                 right_panel_diff_snapshot: None,

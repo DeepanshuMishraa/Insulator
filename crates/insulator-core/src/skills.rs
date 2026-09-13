@@ -405,7 +405,8 @@ mod tests {
     use super::*;
 
     fn temp_root(tag: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("insulator-skills-{tag}-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("insulator-skills-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         root
@@ -556,7 +557,11 @@ mod tests {
         // User scope leads, alphabetical inside each group.
         assert_eq!(
             names,
-            vec![("review", None), ("zeta", None), ("review", Some("insulator"))]
+            vec![
+                ("review", None),
+                ("zeta", None),
+                ("review", Some("insulator"))
+            ]
         );
         // A user-scope and a project-scope copy stay separate rows — the
         // project one shadows at invocation — and both carry the note.

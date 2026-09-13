@@ -88,9 +88,11 @@ pub fn execute(operation: WorkspaceOperation) -> anyhow::Result<WorkspaceResult>
                 cwd: crate::projectless::migrate_workspace(&path)?.cwd,
             }
         }
-        WorkspaceOperation::CloneRepository { url, destination } => WorkspaceResult::ClonedRepository {
-            path: clone_github_repository(&url, &destination)?,
-        },
+        WorkspaceOperation::CloneRepository { url, destination } => {
+            WorkspaceResult::ClonedRepository {
+                path: clone_github_repository(&url, &destination)?,
+            }
+        }
         WorkspaceOperation::InspectBranches { cwd } => WorkspaceResult::Branches {
             snapshot: crate::git_branch::inspect(&cwd)?,
         },
@@ -146,6 +148,19 @@ pub fn execute(operation: WorkspaceOperation) -> anyhow::Result<WorkspaceResult>
             crate::git_commit::push(&cwd)?;
             WorkspaceResult::Ack
         }
+        WorkspaceOperation::CreatePullRequest {
+            cwd,
+            commit_message,
+            include_unstaged,
+            invocation,
+        } => WorkspaceResult::PullRequestCreated {
+            url: crate::git_commit::create_pull_request(
+                &cwd,
+                commit_message.as_deref(),
+                include_unstaged,
+                &invocation,
+            )?,
+        },
         WorkspaceOperation::CaptureTurnStart {
             cwd,
             session_id,

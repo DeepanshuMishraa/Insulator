@@ -22,11 +22,11 @@ pub use insulator_protocol::model::{
     AgentSession, ChatStatus, FavoriteModel, Project, ProviderKind, ProviderResumeCursor,
     ProviderSessionHistory, ProviderSessionSummary, RuntimeMode,
 };
-use insulator_protocol::theme::{ColorTheme, ThemePreference, WindowStyle};
 pub use insulator_protocol::persistence::{
     ComposerDraft, ComposerDraftAttachment, ComposerDraftChange, ComposerDraftKey,
     ComposerDraftTarget, ComposerDrafts, SessionMessageMatch,
 };
+use insulator_protocol::theme::{ColorTheme, ThemePreference, WindowStyle};
 
 const STATE_VERSION: u32 = 5;
 const APP_STATE_VERSION: u32 = 1;
@@ -99,7 +99,6 @@ fn default_ui_font_family() -> String {
 fn default_code_font_family() -> String {
     DEFAULT_CODE_FONT_FAMILY.to_owned()
 }
-
 
 fn default_provider() -> ProviderKind {
     ProviderKind::Codex
@@ -383,6 +382,22 @@ pub fn sanitized_code_font_size(size: f32) -> f32 {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum PersistedMainTab {
+    Chat(Uuid),
+    File(String),
+    Review,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum PersistedRightPanelSurface {
+    Browser(Uuid),
+    Terminal(Uuid),
+    Files,
+    Diff,
+    File(String),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct AppState {
     app_state_version: u32,
     #[serde(default)]
@@ -425,6 +440,18 @@ struct AppState {
     markdown_preview: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     window_state: Option<PersistedWindowState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    main_tabs: Vec<PersistedMainTab>,
+    #[serde(default)]
+    main_tabs_open: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_main_file_tab: Option<String>,
+    #[serde(default)]
+    active_main_review_tab: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    right_panel_surfaces: Vec<PersistedRightPanelSurface>,
+    #[serde(default)]
+    right_panel_active_surface: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -509,6 +536,18 @@ pub struct PersistedState {
     pub markdown_preview: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_state: Option<PersistedWindowState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub main_tabs: Vec<PersistedMainTab>,
+    #[serde(default)]
+    pub main_tabs_open: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_main_file_tab: Option<String>,
+    #[serde(default)]
+    pub active_main_review_tab: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub right_panel_surfaces: Vec<PersistedRightPanelSurface>,
+    #[serde(default)]
+    pub right_panel_active_surface: Option<usize>,
     #[serde(default = "default_computer_use_enabled")]
     pub computer_use_enabled: bool,
     #[serde(default)]
@@ -583,6 +622,12 @@ impl PersistedState {
             right_panel_width: DEFAULT_RIGHT_PANEL_WIDTH,
             markdown_preview: false,
             window_state: None,
+            main_tabs: Vec::new(),
+            main_tabs_open: false,
+            active_main_file_tab: None,
+            active_main_review_tab: false,
+            right_panel_surfaces: Vec::new(),
+            right_panel_active_surface: None,
             computer_use_enabled: false,
             computer_use_allowed_apps: Vec::new(),
             disabled_providers: Vec::new(),
@@ -735,6 +780,12 @@ impl PersistedState {
             right_panel_width: self.right_panel_width,
             markdown_preview: self.markdown_preview,
             window_state: self.window_state,
+            main_tabs: self.main_tabs.clone(),
+            main_tabs_open: self.main_tabs_open,
+            active_main_file_tab: self.active_main_file_tab.clone(),
+            active_main_review_tab: self.active_main_review_tab,
+            right_panel_surfaces: self.right_panel_surfaces.clone(),
+            right_panel_active_surface: self.right_panel_active_surface,
         }
     }
 
@@ -790,6 +841,12 @@ impl PersistedState {
         self.right_panel_width = app_state.right_panel_width;
         self.markdown_preview = app_state.markdown_preview;
         self.window_state = app_state.window_state;
+        self.main_tabs = app_state.main_tabs;
+        self.main_tabs_open = app_state.main_tabs_open;
+        self.active_main_file_tab = app_state.active_main_file_tab;
+        self.active_main_review_tab = app_state.active_main_review_tab;
+        self.right_panel_surfaces = app_state.right_panel_surfaces;
+        self.right_panel_active_surface = app_state.right_panel_active_surface;
     }
 
     pub fn record_recent_model(&mut self, provider: ProviderKind, model: &str) {
@@ -834,17 +891,24 @@ impl PersistedState {
                 self.sessions.push(session);
             }
         }
-        if self
-            .selected_session
-            .is_some_and(|selected| self.sessions.iter().any(|session| session.id == selected))
+        if let Some(selected) = self.selected_session
+            && let Some(session) = self.sessions.iter().find(|session| session.id == selected)
         {
+            // The session is authoritative for its project. This repairs old
+            // state files where the project selection was lost independently.
+            self.selected_project = Some(session.project_id);
             return;
         }
         self.selected_session = None;
         let Some(project_id) = self
             .selected_project
             .filter(|selected| self.projects.iter().any(|project| project.id == *selected))
-            .or_else(|| self.projects.iter().find(|p| !p.is_projectless()).map(|p| p.id))
+            .or_else(|| {
+                self.projects
+                    .iter()
+                    .find(|p| !p.is_projectless())
+                    .map(|p| p.id)
+            })
         else {
             return;
         };
@@ -1383,9 +1447,18 @@ mod tests {
 
         assert_eq!(settings.sidebar_transparency, DEFAULT_SIDEBAR_TRANSPARENCY);
         assert_eq!(state.sidebar_transparency, DEFAULT_SIDEBAR_TRANSPARENCY);
-        assert_eq!(default_sidebar_transparency_for(false, WindowStyle::Solid), 10.0);
-        assert_eq!(default_sidebar_transparency_for(true, WindowStyle::Solid), 25.0);
-        assert_eq!(default_sidebar_transparency_for(true, WindowStyle::Image), 15.0);
+        assert_eq!(
+            default_sidebar_transparency_for(false, WindowStyle::Solid),
+            10.0
+        );
+        assert_eq!(
+            default_sidebar_transparency_for(true, WindowStyle::Solid),
+            25.0
+        );
+        assert_eq!(
+            default_sidebar_transparency_for(true, WindowStyle::Image),
+            15.0
+        );
         assert_eq!(sanitized_sidebar_transparency(-1.0), 0.0);
         assert_eq!(sanitized_sidebar_transparency(101.0), 100.0);
         assert_eq!(

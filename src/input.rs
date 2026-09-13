@@ -1042,7 +1042,11 @@ impl TextInput {
         &self.extra_selection_ranges
     }
 
-    pub fn set_extra_selection_ranges(&mut self, ranges: Vec<Range<usize>>, cx: &mut Context<Self>) {
+    pub fn set_extra_selection_ranges(
+        &mut self,
+        ranges: Vec<Range<usize>>,
+        cx: &mut Context<Self>,
+    ) {
         if self.extra_selection_ranges != ranges {
             self.extra_selection_ranges = ranges;
             cx.notify();
@@ -2574,7 +2578,9 @@ fn input_text_runs(
             {
                 Some(search.active_color)
             } else if selected_range.is_some_and(|range| range.start < end && range.end > start)
-                || extra_selection_ranges.iter().any(|range| range.start < end && range.end > start)
+                || extra_selection_ranges
+                    .iter()
+                    .any(|range| range.start < end && range.end > start)
             {
                 Some(selection_color)
             } else if covering_match(start, end) {

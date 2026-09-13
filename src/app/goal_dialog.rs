@@ -13,7 +13,10 @@ use crate::usage::format_tokens;
 
 use super::*;
 
-actions!(insulator_goal_dialog, [ConfirmGoalDialog, DismissGoalDialog]);
+actions!(
+    insulator_goal_dialog,
+    [ConfirmGoalDialog, DismissGoalDialog]
+);
 
 const DIALOG_CONTEXT: &str = "GoalDialog";
 const DIALOG_INPUT_CONTEXT: &str = "GoalDialog > TextInput";
@@ -591,7 +594,8 @@ fn render_goal_action_row(
         })
         .when(enabled, |row| {
             row.on_click(move |_, window, cx| {
-                let _ = click_weak.update(cx, |insulator, cx| click_activate(insulator, window, cx));
+                let _ =
+                    click_weak.update(cx, |insulator, cx| click_activate(insulator, window, cx));
             })
             .on_key_down(move |event: &KeyDownEvent, window, cx| {
                 if !event.keystroke.modifiers.modified()

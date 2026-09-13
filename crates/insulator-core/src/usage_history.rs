@@ -80,6 +80,12 @@ fn parse_timestamp_ms(value: Option<&Value>) -> Option<i64> {
         .map(|date| date.timestamp_millis())
 }
 
+fn parse_numeric_timestamp_ms(value: Option<&Value>) -> Option<i64> {
+    value
+        .and_then(Value::as_i64)
+        .or_else(|| parse_timestamp_ms(value))
+}
+
 /// Parses one line of a Claude Code transcript.
 ///
 /// The CLI writes one record per assistant *content block*, and every one of
@@ -141,6 +147,64 @@ fn parse_claude_line(line: &str) -> Option<UsageRecord> {
     })
 }
 
+/// Parses a pi agent session record. nootch includes these records because
+/// pi can use the same Codex account outside Codex's own CLI sessions.
+fn parse_pi_line(line: &str) -> Option<UsageRecord> {
+    let record: Value = serde_json::from_str(line).ok()?;
+    let message = record.get("message")?.as_object()?;
+    if message
+        .get("provider")
+        .or_else(|| record.get("provider"))
+        .and_then(Value::as_str)
+        != Some("openai-codex")
+    {
+        return None;
+    }
+    let usage = message
+        .get("usage")
+        .or_else(|| record.get("usage"))?
+        .as_object()?;
+    let total = int(usage.get("totalTokens"));
+    let tokens = if total > 0 {
+        total
+    } else {
+        ["input", "output", "cacheRead", "cacheWrite"]
+            .into_iter()
+            .map(|key| int(usage.get(key)))
+            .sum()
+    };
+    if tokens == 0 {
+        return None;
+    }
+    let cost = usage.get("cost").and_then(|value| {
+        value
+            .as_f64()
+            .or_else(|| value.get("total").and_then(Value::as_f64))
+    });
+    Some(UsageRecord {
+        provider: UsageProvider::Codex,
+        timestamp_ms: parse_numeric_timestamp_ms(record.get("timestamp"))?,
+        model: message
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("openai-codex")
+            .to_owned(),
+        session_id: record
+            .get("sessionId")
+            .or_else(|| record.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        project: String::new(),
+        totals: TokenTotals {
+            uncached_input: tokens,
+            ..TokenTotals::default()
+        },
+        reported_cost_usd: cost.filter(|value| value.is_finite()),
+        dedupe_key: None,
+    })
+}
+
 /// Rolling state for a single Codex rollout file. `token_count` events carry
 /// no model, so the model is carried forward from the most recent
 /// `turn_context`; sessions that switch models mid-run attribute correctly
@@ -167,6 +231,10 @@ struct CodexScanState {
     /// working directory.
     cwd: String,
     last_usage_signature: Option<String>,
+    /// Codex reports cumulative session usage in `total_token_usage` and the
+    /// per-request increment in `last_token_usage`. Use the cumulative values
+    /// so long sessions do not count the whole context on every event.
+    cumulative_usage: Option<TokenTotals>,
     saw_session_meta: bool,
     fork_prefix: CodexForkPrefix,
 }
@@ -178,6 +246,7 @@ impl CodexScanState {
             session_id: String::new(),
             cwd: String::new(),
             last_usage_signature: None,
+            cumulative_usage: None,
             saw_session_meta: false,
             fork_prefix: CodexForkPrefix::NotForked,
         }
@@ -211,9 +280,8 @@ fn is_forked_codex_session(payload: &serde_json::Map<String, Value>) -> bool {
 }
 
 /// Feeds one line of a Codex rollout into `state`, returning a record when the
-/// line was a usage event. Deltas come from `last_token_usage`; summing those
-/// across a session reconciles with the session's final `total_token_usage`
-/// provided consecutive duplicate events are dropped, which this does.
+/// line was a usage event. Deltas come from the session's cumulative
+/// `total_token_usage`, matching the provider's usage dashboard.
 fn parse_codex_line(line: &str, state: &mut CodexScanState) -> Option<UsageRecord> {
     let record: Value = serde_json::from_str(line).ok()?;
     let payload = record.get("payload")?.as_object()?;
@@ -288,7 +356,8 @@ fn parse_codex_line(line: &str, state: &mut CodexScanState) -> Option<UsageRecor
     if payload.get("type").and_then(Value::as_str) != Some("token_count") {
         return None;
     }
-    let last = payload.get("info")?.get("last_token_usage")?.as_object()?;
+    let info = payload.get("info")?.as_object()?;
+    let last = info.get("last_token_usage")?.as_object()?;
 
     // Only an event that is otherwise eligible may consume the duplicate
     // signature. A token_count arriving before its turn_context (no model yet)
@@ -299,14 +368,16 @@ fn parse_codex_line(line: &str, state: &mut CodexScanState) -> Option<UsageRecor
         return None;
     }
 
-    // Codex re-emits an unchanged token_count on some stream boundaries.
-    // Summing those would double count, so identical consecutive payloads are
-    // skipped.
-    let signature = serde_json::to_string(last).ok()?;
+    // `last_token_usage` is the current request, while `total_token_usage`
+    // grows for the whole rollout. The latter is the source of truth for
+    // Codex's usage dashboard. Fall back to the request values for older
+    // transcript formats that do not include the cumulative object.
+    let cumulative = info.get("total_token_usage").and_then(Value::as_object);
+    let signature_source = cumulative.unwrap_or(last);
+    let signature = serde_json::to_string(signature_source).ok()?;
     if state.last_usage_signature.as_deref() == Some(signature.as_str()) {
         return None;
     }
-    state.last_usage_signature = Some(signature);
 
     if let CodexForkPrefix::Suppressing { anchor_ms } = state.fork_prefix {
         if timestamp_ms.saturating_sub(anchor_ms) < FORK_COPY_MAX_GAP_MS {
@@ -318,19 +389,44 @@ fn parse_codex_line(line: &str, state: &mut CodexScanState) -> Option<UsageRecor
         state.fork_prefix = CodexForkPrefix::Complete;
     }
 
-    let input = int(last.get("input_tokens"));
-    let cached_input = int(last.get("cached_input_tokens"));
-    let cache_creation = int(last.get("cache_write_input_tokens"));
-    let output = int(last.get("output_tokens"));
-    let totals = TokenTotals {
-        // Codex reports `input_tokens` inclusive of the cached portion.
-        uncached_input: input.saturating_sub(cached_input + cache_creation),
-        cached_input,
-        cache_creation,
-        output,
-        // Reported inside output_tokens, surfaced separately for the mix.
-        reasoning: int(last.get("reasoning_output_tokens")).min(output),
+    let read_totals = |usage: &serde_json::Map<String, Value>| {
+        let input = int(usage.get("input_tokens"));
+        let cached_input = int(usage
+            .get("cached_input_tokens")
+            .or_else(|| usage.get("cache_read_input_tokens")));
+        let cache_creation = int(usage
+            .get("cache_write_input_tokens")
+            .or_else(|| usage.get("cache_creation_input_tokens")));
+        let output = int(usage.get("output_tokens"));
+        TokenTotals {
+            // Codex reports `input_tokens` inclusive of the cached portion.
+            uncached_input: input.saturating_sub(cached_input + cache_creation),
+            cached_input,
+            cache_creation,
+            output,
+            // Reported inside output_tokens, surfaced separately for the mix.
+            reasoning: int(usage.get("reasoning_output_tokens")).min(output),
+        }
     };
+    let totals = if let Some(cumulative) = cumulative {
+        let current = read_totals(cumulative);
+        let previous = state.cumulative_usage.replace(current);
+        let previous = previous.unwrap_or_default();
+        TokenTotals {
+            uncached_input: current
+                .uncached_input
+                .saturating_sub(previous.uncached_input),
+            cached_input: current.cached_input.saturating_sub(previous.cached_input),
+            cache_creation: current
+                .cache_creation
+                .saturating_sub(previous.cache_creation),
+            output: current.output.saturating_sub(previous.output),
+            reasoning: current.reasoning.saturating_sub(previous.reasoning),
+        }
+    } else {
+        read_totals(last)
+    };
+    state.last_usage_signature = Some(signature);
     if totals.total() == 0 {
         return None;
     }
@@ -672,6 +768,27 @@ fn read_transcript_records(path: &Path, provider: UsageProvider) -> Option<Vec<U
     Some(records)
 }
 
+fn read_pi_transcript_records(path: &Path) -> Option<Vec<UsageRecord>> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut line = String::new();
+    let mut records = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(_) => return None,
+        }
+        if line.contains("openai-codex") {
+            if let Some(record) = parse_pi_line(&line) {
+                records.push(record);
+            }
+        }
+    }
+    Some(records)
+}
+
 /* ------------------------------------------------------------------------- */
 /* Aggregation                                                               */
 /* ------------------------------------------------------------------------- */
@@ -902,6 +1019,53 @@ pub fn scan(
                     // A read failure is not an empty transcript: caching it
                     // under this (size, mtime) would silently drop the file's
                     // usage until it changes.
+                    None => continue,
+                },
+            };
+            for record in records {
+                aggregator.add(record, rates);
+            }
+        }
+    }
+
+    // Match nootch's Codex total by also counting pi sessions that use the
+    // openai-codex provider. Its transcript files are separate from
+    // ~/.codex/sessions and must not be parsed as Codex rollout records.
+    if let Some(root) = dirs::home_dir().map(|home| home.join(".pi/agent/sessions"))
+        && root.is_dir()
+    {
+        let mut files = Vec::new();
+        skipped_files += list_transcript_files(&root, mtime_cutoff_ms, &mut files);
+        for (path, size, mtime_ms) in files {
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with("_transcript.jsonl"))
+            {
+                continue;
+            }
+            scanned_files += 1;
+            let records = match cache.get(&path) {
+                Some(entry)
+                    if entry.size == size
+                        && entry.mtime_ms == mtime_ms
+                        && entry.provider == UsageProvider::Codex =>
+                {
+                    &entry.records
+                }
+                _ => match read_pi_transcript_records(&path) {
+                    Some(records) => {
+                        &cache
+                            .entry(path)
+                            .insert_entry(FileCacheEntry {
+                                size,
+                                mtime_ms,
+                                provider: UsageProvider::Codex,
+                                records,
+                            })
+                            .into_mut()
+                            .records
+                    }
                     None => continue,
                 },
             };
@@ -1215,6 +1379,13 @@ mod tests {
             "payload": {
                 "type": "token_count",
                 "info": {
+                    "total_token_usage": {
+                        "input_tokens": input,
+                        "cached_input_tokens": 0,
+                        "cache_write_input_tokens": 0,
+                        "output_tokens": output,
+                        "reasoning_output_tokens": 0,
+                    },
                     "last_token_usage": {
                         "input_tokens": input,
                         "cached_input_tokens": 0,
@@ -1255,6 +1426,23 @@ mod tests {
     }
 
     #[test]
+    fn pi_codex_usage_records_use_reported_totals_and_cost() {
+        let line = r#"{"type":"message","id":"pi-session",
+            "timestamp":178899202456,
+            "message":{"role":"assistant","provider":"openai-codex",
+            "model":"gpt-5.6-luna","usage":{"input":100,"output":20,
+            "cacheRead":80,"cacheWrite":0,"totalTokens":200,
+            "cost":{"total":0.04}}}}"#
+            .replace('\n', " ");
+        let record = parse_pi_line(&line).expect("pi Codex usage should parse");
+        assert_eq!(record.provider, UsageProvider::Codex);
+        assert_eq!(record.session_id, "pi-session");
+        assert_eq!(record.model, "gpt-5.6-luna");
+        assert_eq!(record.totals.total(), 200);
+        assert_eq!(record.reported_cost_usd, Some(0.04));
+    }
+
+    #[test]
     fn codex_lines_carry_model_forward_and_skip_duplicates() {
         let mut state = CodexScanState::new();
         let meta = r#"{"timestamp":"2026-08-06T16:31:19.166Z","type":"session_meta",
@@ -1264,8 +1452,10 @@ mod tests {
             "payload":{"model":"gpt-5.3-codex"}}"#
             .replace('\n', " ");
         let count = r#"{"timestamp":"2026-08-06T16:31:25.000Z","type":"event_msg",
-            "payload":{"type":"token_count","info":{"last_token_usage":{
-            "input_tokens":21047,"cached_input_tokens":1000,"cache_write_input_tokens":47,
+            "payload":{"type":"token_count","info":{
+            "total_token_usage":{"input_tokens":21047,"cached_input_tokens":1000,"cache_write_input_tokens":47,
+            "output_tokens":280,"reasoning_output_tokens":165},
+            "last_token_usage":{"input_tokens":21047,"cached_input_tokens":1000,"cache_write_input_tokens":47,
             "output_tokens":280,"reasoning_output_tokens":165}}}}"#
             .replace('\n', " ");
 
@@ -1287,6 +1477,12 @@ mod tests {
 
         // The identical re-emitted event is a duplicate, not more usage.
         assert!(parse_codex_line(&count, &mut state).is_none());
+
+        // Codex's next event contains the full cumulative total, not another
+        // full request-sized usage value. Only the increment belongs to it.
+        let next = count.replace("21047", "31047").replace("280", "380");
+        let record = parse_codex_line(&next, &mut state).expect("the cumulative total grew");
+        assert_eq!(record.totals.total(), 10_000 + 100);
     }
 
     #[test]
@@ -1610,7 +1806,8 @@ mod tests {
         // Missing cache rates fall back to the input rate, not to free.
         assert_eq!(rates["gpt-5.3-codex"].cache_read, 3e-6);
 
-        let dir = std::env::temp_dir().join(format!("insulator-usage-rates-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("insulator-usage-rates-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(RATES_CACHE_FILE);
         write_rates_cache(&path, 12345, &rates);

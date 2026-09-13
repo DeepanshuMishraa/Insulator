@@ -24,6 +24,7 @@ impl Insulator {
     }
 
     pub(super) fn select_session(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
+        self.pull_requests_open = false;
         self.main_tabs_open = true;
         self.active_main_file_tab = None;
         self.active_main_review_tab = false;
@@ -279,9 +280,13 @@ impl Insulator {
                     draft.provider = provider;
                     draft.model.clone_from(&self.state.last_model);
                     draft.runtime_mode = self.state.last_runtime_mode;
-                    draft.reasoning_effort.clone_from(&self.state.last_reasoning_effort);
+                    draft
+                        .reasoning_effort
+                        .clone_from(&self.state.last_reasoning_effort);
                     draft.service_tier.clone_from(&self.state.last_service_tier);
-                    draft.context_window.clone_from(&self.state.last_context_window);
+                    draft
+                        .context_window
+                        .clone_from(&self.state.last_context_window);
                 }
             }
             self.select_session(draft_id, cx);
@@ -406,10 +411,12 @@ impl Insulator {
             let workspace = insulator_client::WorkspaceClient::new(self.daemon.client());
             cx.background_executor()
                 .spawn(async move {
-                    let _ = workspace.request(insulator_client::WorkspaceOperation::DeleteSessionRefs {
-                        cwd: project_path,
-                        session_id,
-                    });
+                    let _ = workspace.request(
+                        insulator_client::WorkspaceOperation::DeleteSessionRefs {
+                            cwd: project_path,
+                            session_id,
+                        },
+                    );
                 })
                 .detach();
         }
@@ -628,7 +635,8 @@ impl Insulator {
 
     pub(super) fn set_right_panel_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         if visible {
-            if self.selected_workspace_path().is_some() && self.right_panel_terminal_ids.is_empty() {
+            if self.selected_workspace_path().is_some() && self.right_panel_terminal_ids.is_empty()
+            {
                 self.add_right_panel_terminal(cx);
             } else {
                 for id in self.right_panel_terminal_ids.clone() {
@@ -1038,36 +1046,32 @@ impl Insulator {
     }
 
     fn remember_selected_model_traits(&mut self) {
-        let Some((provider, model, reasoning_effort, service_tier, context_window)) =
-            self.selected_session()
-                .and_then(|session| {
-                    Some((
-                        session.provider,
-                        self.model_for_session(session)?.to_owned(),
-                        session.reasoning_effort.clone(),
-                        session.service_tier.clone(),
-                        session.context_window.clone(),
-                    ))
-                })
-                .or_else(|| {
-                    let provider = self.state.last_provider;
-                    let model = self
-                        .state
-                        .last_model
-                        .clone()
-                        .or_else(|| {
-                            self.provider_probe(provider)
-                                .and_then(ProviderProbe::preferred_model)
-                                .map(|m| m.id.clone())
-                        })?;
-                    Some((
-                        provider,
-                        model,
-                        self.state.last_reasoning_effort.clone(),
-                        self.state.last_service_tier.clone(),
-                        self.state.last_context_window.clone(),
-                    ))
-                })
+        let Some((provider, model, reasoning_effort, service_tier, context_window)) = self
+            .selected_session()
+            .and_then(|session| {
+                Some((
+                    session.provider,
+                    self.model_for_session(session)?.to_owned(),
+                    session.reasoning_effort.clone(),
+                    session.service_tier.clone(),
+                    session.context_window.clone(),
+                ))
+            })
+            .or_else(|| {
+                let provider = self.state.last_provider;
+                let model = self.state.last_model.clone().or_else(|| {
+                    self.provider_probe(provider)
+                        .and_then(ProviderProbe::preferred_model)
+                        .map(|m| m.id.clone())
+                })?;
+                Some((
+                    provider,
+                    model,
+                    self.state.last_reasoning_effort.clone(),
+                    self.state.last_service_tier.clone(),
+                    self.state.last_context_window.clone(),
+                ))
+            })
         else {
             return;
         };

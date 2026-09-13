@@ -1229,7 +1229,11 @@ fn render_menu_item(
             let (label_color, value_color, chevron_color) = if highlighted {
                 (theme.text, theme.text_secondary, theme.text_secondary)
             } else {
-                (theme.text_secondary, theme.text_tertiary, theme.text_tertiary)
+                (
+                    theme.text_secondary,
+                    theme.text_tertiary,
+                    theme.text_tertiary,
+                )
             };
             row(index, highlighted, theme, handle, None)
                 .cursor_default()
@@ -1251,12 +1255,7 @@ fn render_menu_item(
                 })
                 .child(div().flex_1().min_w_0().truncate().child(label))
                 .when_some(value, |element, value| {
-                    element.child(
-                        div()
-                            .flex_none()
-                            .text_color(value_color)
-                            .child(value),
-                    )
+                    element.child(div().flex_none().text_color(value_color).child(value))
                 })
                 .child(icon("icons/chevron-right.svg", 10.0, chevron_color))
                 .into_any_element()

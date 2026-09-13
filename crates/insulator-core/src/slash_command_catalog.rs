@@ -12,9 +12,9 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde_json::{Value, json};
 use insulator_protocol::composer::{CommandScope, SlashCommand};
 use insulator_protocol::model::ProviderKind;
+use serde_json::{Value, json};
 
 const CLI_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_CAPTURE_BYTES: usize = 4 * 1024 * 1024;
@@ -801,8 +801,10 @@ mod tests {
     fn opencode_builtin_catalog_against_a_real_server() {
         let binary =
             crate::command_env::find_executable("opencode").expect("opencode is not installed");
-        let root =
-            std::env::temp_dir().join(format!("insulator-command-catalog-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "insulator-command-catalog-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&root).unwrap();
         let server = crate::opencode_pool::acquire(&binary, &root).unwrap();
         let before = server.request("GET", "/session", None).unwrap();
@@ -825,8 +827,10 @@ mod tests {
     fn opencode2_builtin_catalog_against_a_real_service() {
         let binary =
             crate::command_env::find_executable("opencode2").expect("opencode2 is not installed");
-        let root =
-            std::env::temp_dir().join(format!("insulator-command-catalog-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "insulator-command-catalog-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(root.join(".opencode/commands")).unwrap();
         std::fs::write(
             root.join(".opencode/commands/insulator-catalog-smoke.md"),

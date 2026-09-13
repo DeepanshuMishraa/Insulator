@@ -155,7 +155,10 @@ enum CommandMessage {
     ProviderControl(Vec<String>),
     FollowUp(String),
     Cancel,
-    ExtensionResponse { id: String, response: Value },
+    ExtensionResponse {
+        id: String,
+        response: Value,
+    },
     Options(SessionOptions),
     Rollback {
         turns: usize,
@@ -304,70 +307,68 @@ impl PiDriver {
         let reader_extension_dialogs = pending_extension_dialogs.clone();
         let reader_commands = commands.clone();
         let reader_events = events.clone();
-        let reader_thread =
-            thread::Builder::new()
-                .name("insulator-pi-reader".into())
-                .spawn(move || {
-                    let mut stream_state = PiStreamState::default();
-                    let mut chunks = ChunkAssembly::default();
-                    for line in BufReader::new(stdout).lines() {
-                        match line {
-                            Ok(line) if !line.trim().is_empty() => {
-                                match serde_json::from_str::<Value>(&line) {
-                                    Ok(value) => {
-                                        // A chunked frame arrives as an
-                                        // uninterrupted run of `rpc_chunk`
-                                        // envelopes that reassemble into one
-                                        // logical message.
-                                        match chunks.accept(value) {
-                                            Ok(Some(value)) => handle_pi_message_with_dialogs(
-                                                flavor,
-                                                value,
-                                                &reader_pending,
-                                                &reader_commands,
-                                                &reader_events,
-                                                &reader_extension_dialogs,
-                                                &mut stream_state,
-                                            ),
-                                            Ok(None) => {}
-                                            Err(error) => {
-                                                let _ =
-                                                    reader_events.send(DriverEvent::Error(tr!(
-                                                        "errors.provider_transport_read",
-                                                        provider = flavor.display_name(),
-                                                        error = error
-                                                    )));
-                                            }
+        let reader_thread = thread::Builder::new()
+            .name("insulator-pi-reader".into())
+            .spawn(move || {
+                let mut stream_state = PiStreamState::default();
+                let mut chunks = ChunkAssembly::default();
+                for line in BufReader::new(stdout).lines() {
+                    match line {
+                        Ok(line) if !line.trim().is_empty() => {
+                            match serde_json::from_str::<Value>(&line) {
+                                Ok(value) => {
+                                    // A chunked frame arrives as an
+                                    // uninterrupted run of `rpc_chunk`
+                                    // envelopes that reassemble into one
+                                    // logical message.
+                                    match chunks.accept(value) {
+                                        Ok(Some(value)) => handle_pi_message_with_dialogs(
+                                            flavor,
+                                            value,
+                                            &reader_pending,
+                                            &reader_commands,
+                                            &reader_events,
+                                            &reader_extension_dialogs,
+                                            &mut stream_state,
+                                        ),
+                                        Ok(None) => {}
+                                        Err(error) => {
+                                            let _ = reader_events.send(DriverEvent::Error(tr!(
+                                                "errors.provider_transport_read",
+                                                provider = flavor.display_name(),
+                                                error = error
+                                            )));
                                         }
                                     }
-                                    Err(error) => {
-                                        let _ = reader_events.send(DriverEvent::Error(tr!(
-                                            "errors.provider_invalid_json",
-                                            provider = flavor.display_name(),
-                                            error = error
-                                        )));
-                                    }
+                                }
+                                Err(error) => {
+                                    let _ = reader_events.send(DriverEvent::Error(tr!(
+                                        "errors.provider_invalid_json",
+                                        provider = flavor.display_name(),
+                                        error = error
+                                    )));
                                 }
                             }
-                            Ok(_) => {}
-                            Err(error) => {
-                                let _ = reader_events.send(DriverEvent::Error(tr!(
-                                    "errors.provider_transport_read",
-                                    provider = flavor.display_name(),
-                                    error = error
-                                )));
-                                break;
-                            }
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            let _ = reader_events.send(DriverEvent::Error(tr!(
+                                "errors.provider_transport_read",
+                                provider = flavor.display_name(),
+                                error = error
+                            )));
+                            break;
                         }
                     }
-                    // Unblock anything waiting on an RPC reply immediately; the
-                    // process thread owns the `ProcessExited` announcement so a
-                    // non-zero exit can be reported before the runtime is torn down.
-                    fail_pending(
-                        &reader_pending,
-                        &format!("{} RPC process exited", flavor.display_name()),
-                    );
-                })?;
+                }
+                // Unblock anything waiting on an RPC reply immediately; the
+                // process thread owns the `ProcessExited` announcement so a
+                // non-zero exit can be reported before the runtime is torn down.
+                fail_pending(
+                    &reader_pending,
+                    &format!("{} RPC process exited", flavor.display_name()),
+                );
+            })?;
 
         let writer_pending = pending;
         let writer_events = events.clone();
@@ -728,18 +729,17 @@ impl PiDriver {
         let last_visible_stderr = Arc::new(Mutex::new(None::<String>));
         let stderr_last_error = last_visible_stderr.clone();
         let stderr_events = events.clone();
-        let stderr_thread =
-            thread::Builder::new()
-                .name("insulator-pi-stderr".into())
-                .spawn(move || {
-                    for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                        if line.to_ascii_lowercase().contains("error") {
-                            let error = format!("{}: {}", flavor.display_name(), line.trim());
-                            *stderr_last_error.lock() = Some(error.clone());
-                            let _ = stderr_events.send(DriverEvent::Error(error));
-                        }
+        let stderr_thread = thread::Builder::new()
+            .name("insulator-pi-stderr".into())
+            .spawn(move || {
+                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                    if line.to_ascii_lowercase().contains("error") {
+                        let error = format!("{}: {}", flavor.display_name(), line.trim());
+                        *stderr_last_error.lock() = Some(error.clone());
+                        let _ = stderr_events.send(DriverEvent::Error(error));
                     }
-                })?;
+                }
+            })?;
 
         // Nothing signals or kills the agent process: it exits when the writer
         // thread drops its stdin. Something still has to reap it, or every
@@ -793,7 +793,9 @@ impl DriverControl for PiDriver {
     }
 
     fn provider_control(&self, commands: Vec<String>) {
-        let _ = self.commands.send(CommandMessage::ProviderControl(commands));
+        let _ = self
+            .commands
+            .send(CommandMessage::ProviderControl(commands));
     }
 
     fn cancel(&self) {
@@ -815,10 +817,7 @@ impl DriverControl for PiDriver {
         let Some(kind) = self.pending_extension_dialogs.lock().remove(&request_id) else {
             return;
         };
-        let answer = answers
-            .into_iter()
-            .flat_map(|answer| answer.answers)
-            .next();
+        let answer = answers.into_iter().flat_map(|answer| answer.answers).next();
         let response = match (kind, answer) {
             (ExtensionDialogKind::Confirm, Some(answer)) => {
                 json!({"confirmed": answer == "Yes"})
@@ -839,9 +838,11 @@ impl DriverControl for PiDriver {
     }
 
     fn stop_background_work(&self, _key: BackgroundWorkKey, control_id: String) {
-        let _ = self.commands.send(CommandMessage::ProviderControl(vec![
-            format!("/subagents-stop {control_id}"),
-        ]));
+        let _ = self
+            .commands
+            .send(CommandMessage::ProviderControl(vec![format!(
+                "/subagents-stop {control_id}"
+            )]));
     }
 
     fn respond(&self, _request_id: String, _option_id: String) {}

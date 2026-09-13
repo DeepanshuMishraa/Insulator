@@ -13,6 +13,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, anyhow, bail};
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::model::ProviderKind;
@@ -87,8 +88,19 @@ pub fn generate_message(
     invocation: &AgentInvocation,
 ) -> anyhow::Result<String> {
     let prompt = commit_prompt(cwd, include_unstaged)?;
+    let output = run_agent(cwd, invocation, &prompt)?;
+    normalize_message(&output).ok_or_else(|| {
+        anyhow!(
+            "{} returned no commit message",
+            invocation.provider.display_name()
+        )
+    })
+}
+
+fn run_agent(cwd: &Path, invocation: &AgentInvocation, prompt: &str) -> anyhow::Result<String> {
     let amp_settings = if invocation.provider == ProviderKind::Amp {
-        let path = std::env::temp_dir().join(format!("insulator-amp-commit-{}.json", Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("insulator-amp-commit-{}.json", Uuid::new_v4()));
         fs::write(
             &path,
             r#"{"amp.tools.enable":[],"amp.notifications.enabled":false,"amp.skills.disableClaudeCodeSkills":true}"#,
@@ -123,17 +135,12 @@ pub fn generate_message(
     let output = result?;
     if !output.status.success() {
         bail!(
-            "{} could not generate a commit message: {}",
+            "{} could not generate Git text: {}",
             invocation.provider.display_name(),
             command_error(&output)
         );
     }
-    normalize_message(&String::from_utf8_lossy(&output.stdout)).ok_or_else(|| {
-        anyhow!(
-            "{} returned no commit message",
-            invocation.provider.display_name()
-        )
-    })
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 pub fn commit(cwd: &Path, message: &str, include_unstaged: bool) -> anyhow::Result<()> {
@@ -168,6 +175,172 @@ pub fn push(cwd: &Path) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow!("no Git remote is configured for this branch"))?;
     git_success(cwd, &["push", "--set-upstream", &remote, &branch])?;
     Ok(())
+}
+
+#[derive(Deserialize)]
+struct PullRequestDraft {
+    title: String,
+    body: String,
+}
+
+pub fn create_pull_request(
+    cwd: &Path,
+    commit_message: Option<&str>,
+    include_unstaged: bool,
+    invocation: &AgentInvocation,
+) -> anyhow::Result<String> {
+    let snapshot = inspect(cwd)?;
+    let default_branch = github_default_branch(cwd)?
+        .or(default_branch(cwd)?)
+        .ok_or_else(|| anyhow!("could not determine the repository's default branch"))?;
+    if snapshot.branch == default_branch || snapshot.branch == "HEAD" {
+        bail!("switch to a non-default branch before opening a pull request");
+    }
+
+    if snapshot.has_staged || (include_unstaged && snapshot.has_unstaged) {
+        let message = match commit_message
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+        {
+            Some(message) => message.to_owned(),
+            None => generate_message(cwd, include_unstaged, invocation)?,
+        };
+        commit(cwd, &message, include_unstaged)?;
+    } else if snapshot.has_unstaged {
+        bail!("include unstaged changes or stage changes before opening a pull request");
+    }
+    push(cwd)?;
+
+    if let Some(url) = existing_pull_request_url(cwd)? {
+        return Ok(url);
+    }
+
+    let draft = generate_pull_request_draft(cwd, &default_branch, invocation)?;
+    let output = gh_capture(
+        cwd,
+        &[
+            "pr",
+            "create",
+            "--base",
+            &default_branch,
+            "--head",
+            &snapshot.branch,
+            "--title",
+            &draft.title,
+            "--body",
+            &draft.body,
+        ],
+    )?;
+    if !output.status.success() {
+        bail!("could not create pull request: {}", command_error(&output));
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find(|line| line.trim().starts_with("http"))
+        .map(|line| line.trim().to_owned())
+        .ok_or_else(|| anyhow!("GitHub created the pull request but returned no URL"))
+}
+
+fn generate_pull_request_draft(
+    cwd: &Path,
+    default_branch: &str,
+    invocation: &AgentInvocation,
+) -> anyhow::Result<PullRequestDraft> {
+    let base = comparison_ref(cwd, default_branch)?;
+    let log = git_stdout(cwd, &["log", "--format=%s%n%b", &format!("{base}..HEAD")])?;
+    let diff = git_stdout(
+        cwd,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-color",
+            &format!("{base}...HEAD"),
+            "--",
+        ],
+    )?;
+    let (context, truncated) =
+        truncate_utf8(format!("Commits:\n{log}\n\nDiff:\n{diff}"), MAX_DIFF_BYTES);
+    let prompt = format!(
+        "Write a pull request title and body for the Git changes below.\n\
+         Return valid JSON only with exactly two string fields: title and body.\n\
+         Make the title imperative and at most 72 characters.\n\
+         Make the Markdown body concise and specific, with Summary and Testing sections.\n\
+         Do not claim tests were run unless the changes themselves prove it. Do not call tools.{}\n\n{}",
+        if truncated {
+            " The diff was truncated, so state only what the visible context supports."
+        } else {
+            ""
+        },
+        context
+    );
+    parse_pull_request_draft(&run_agent(cwd, invocation, &prompt)?)
+}
+
+fn parse_pull_request_draft(output: &str) -> anyhow::Result<PullRequestDraft> {
+    let clean = strip_ansi(output);
+    let start = clean
+        .find('{')
+        .ok_or_else(|| anyhow!("the agent returned no pull request JSON"))?;
+    let end = clean
+        .rfind('}')
+        .ok_or_else(|| anyhow!("the agent returned incomplete pull request JSON"))?;
+    let mut draft: PullRequestDraft = serde_json::from_str(&clean[start..=end])?;
+    draft.title = draft
+        .title
+        .trim()
+        .trim_end_matches('.')
+        .chars()
+        .take(72)
+        .collect();
+    draft.body = draft.body.trim().to_owned();
+    if draft.title.is_empty() || draft.body.is_empty() {
+        bail!("the agent returned an empty pull request title or body");
+    }
+    Ok(draft)
+}
+
+fn github_default_branch(cwd: &Path) -> anyhow::Result<Option<String>> {
+    let output = gh_capture(
+        cwd,
+        &[
+            "repo",
+            "view",
+            "--json",
+            "defaultBranchRef",
+            "--jq",
+            ".defaultBranchRef.name",
+        ],
+    )?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_owned))
+}
+
+fn existing_pull_request_url(cwd: &Path) -> anyhow::Result<Option<String>> {
+    let output = gh_capture(cwd, &["pr", "view", "--json", "url", "--jq", ".url"])?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("http"))
+        .map(str::to_owned))
+}
+
+fn gh_capture(cwd: &Path, args: &[&str]) -> anyhow::Result<CapturedOutput> {
+    let mut command = crate::command_env::command("gh");
+    command
+        .args(args)
+        .current_dir(cwd)
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("GH_PAGER", "cat");
+    run_capture(&mut command, GIT_TIMEOUT)
 }
 
 fn commit_prompt(cwd: &Path, include_unstaged: bool) -> anyhow::Result<String> {
@@ -504,6 +677,52 @@ fn upstream(cwd: &Path) -> anyhow::Result<Option<String>> {
     )
 }
 
+fn default_branch(cwd: &Path) -> anyhow::Result<Option<String>> {
+    let remote = git_optional_stdout(
+        cwd,
+        &[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
+    )?;
+    if let Some(branch) =
+        remote.and_then(|branch| branch.strip_prefix("origin/").map(str::to_owned))
+    {
+        return Ok(Some(branch));
+    }
+    for branch in ["main", "master"] {
+        if git_capture(
+            cwd,
+            &[
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{branch}"),
+            ],
+        )?
+        .status
+        .success()
+        {
+            return Ok(Some(branch.to_owned()));
+        }
+    }
+    Ok(None)
+}
+
+fn comparison_ref(cwd: &Path, default_branch: &str) -> anyhow::Result<String> {
+    let remote = format!("refs/remotes/origin/{default_branch}");
+    if git_capture(cwd, &["show-ref", "--verify", "--quiet", &remote])?
+        .status
+        .success()
+    {
+        Ok(format!("origin/{default_branch}"))
+    } else {
+        Ok(default_branch.to_owned())
+    }
+}
+
 fn remote_for_branch(cwd: &Path, branch: &str) -> anyhow::Result<Option<String>> {
     let remotes = git_stdout(cwd, &["remote"])?;
     let mut remotes = remotes.lines().filter(|remote| !remote.is_empty());
@@ -728,6 +947,16 @@ mod tests {
             normalize_message("Commit message: Add commit dialog\n").as_deref(),
             Some("Add commit dialog")
         );
+    }
+
+    #[test]
+    fn parses_pull_request_json_from_agent_output() {
+        let draft = parse_pull_request_draft(
+            "```json\n{\"title\":\"Fix branch detection.\",\"body\":\"## Summary\\nFix it\"}\n```",
+        )
+        .unwrap();
+        assert_eq!(draft.title, "Fix branch detection");
+        assert_eq!(draft.body, "## Summary\nFix it");
     }
 
     fn has(args: &[OsString], value: &str) -> bool {

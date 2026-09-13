@@ -587,7 +587,8 @@ mod macos {
         pub fn init() -> Option<Self> {
             let preview = cfg!(debug_assertions)
                 && std::env::var_os("INSULATOR_PREVIEW_UPDATE").is_some_and(|value| value == "1");
-            let forced = std::env::var_os("INSULATOR_FORCE_UPDATER").is_some_and(|value| value == "1");
+            let forced =
+                std::env::var_os("INSULATOR_FORCE_UPDATER").is_some_and(|value| value == "1");
             if cfg!(debug_assertions) && !forced && !preview {
                 return None;
             }
@@ -1037,7 +1038,8 @@ mod windows {
         pub fn init() -> Option<Self> {
             // A debug build must never offer to replace the watcher's app
             // with a production install.
-            let forced = std::env::var_os("INSULATOR_FORCE_UPDATER").is_some_and(|value| value == "1");
+            let forced =
+                std::env::var_os("INSULATOR_FORCE_UPDATER").is_some_and(|value| value == "1");
             if cfg!(debug_assertions) && !forced {
                 return None;
             }
@@ -1421,8 +1423,10 @@ mod windows {
 
         #[test]
         fn an_absent_preference_file_leaves_automatic_checks_on() {
-            let directory = std::env::temp_dir()
-                .join(format!("insulator-updater-preference-{}", std::process::id()));
+            let directory = std::env::temp_dir().join(format!(
+                "insulator-updater-preference-{}",
+                std::process::id()
+            ));
             let _ = std::fs::remove_dir_all(&directory);
             let path = directory.join("updater.json");
 

@@ -1571,6 +1571,8 @@ environment.changes:
   en: Changes
 environment.commit_or_push:
   en: Commit or push
+environment.open_pull_request:
+  en: Open pull request
 environment.compare_branch:
   en: Compare branch
 environment.task_id:
@@ -1612,6 +1614,12 @@ commit.committed_and_pushed:
   en: Committed and pushed changes
 commit.pushed:
   en: Pushed changes
+pull_request.opening:
+  en: Opening pull request…
+pull_request.opened:
+  en: Pull request created
+pull_request.agent_unavailable:
+  en: The current agent CLI is unavailable, so it cannot write the pull request
 
 background.title:
   en: Background
@@ -1807,7 +1815,13 @@ diff.no_changes:
 diff.no_changes_description:
   en: This source has no file changes to review
 diff.filter_files:
-  en: Filter files…
+  en: Filter files
+pull_requests.search_placeholder:
+  en: Search pull requests
+pull_requests.comment_placeholder:
+  en: Leave a comment
+pull_requests.comment_label:
+  en: Pull request comment…
 diff.source_last_turn:
   en: Last Turn
 diff.source_turn:

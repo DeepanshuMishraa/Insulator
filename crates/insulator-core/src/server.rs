@@ -1085,9 +1085,9 @@ mod tests {
     #[cfg(unix)]
     use base64::Engine as _;
     use crossbeam_channel::{RecvTimeoutError, bounded};
+    use insulator_client::{DaemonClient, DaemonSupervisor};
     use serde_json::json;
     use std::path::PathBuf;
-    use insulator_client::{DaemonClient, DaemonSupervisor};
 
     #[derive(Default)]
     struct TestBackend {

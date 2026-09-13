@@ -3,10 +3,10 @@
 //! Provides `SliderState`, `SliderEvent`, `SliderValue`, and `Slider`.
 
 use gpui::{
-    App, BorderStyle, Bounds, Context, Div, ElementId, Entity, EventEmitter,
-    InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, RenderOnce, StyleRefinement, Styled,
-    Window, canvas, div, point, px, quad, rgb, size,
+    App, BorderStyle, Bounds, Context, Div, ElementId, Entity, EventEmitter, InteractiveElement,
+    IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement, Pixels, RenderOnce, StyleRefinement, Styled, Window, canvas, div, point, px,
+    quad, rgb, size,
 };
 
 use crate::theme::Theme;
@@ -245,12 +245,7 @@ impl RenderOnce for Slider {
         if !disabled {
             base = base
                 .tab_index(0)
-                .focus_visible(|style| {
-                    style
-                        .rounded(px(6.0))
-                        .border_1()
-                        .border_color(theme.accent)
-                })
+                .focus_visible(|style| style.rounded(px(6.0)).border_1().border_color(theme.accent))
                 .on_key_down({
                     let state_entity = state_entity.clone();
                     move |event: &KeyDownEvent, _, cx| {
@@ -428,8 +423,7 @@ impl RenderOnce for Slider {
                             let p = if travel <= Pixels::ZERO {
                                 0.0
                             } else {
-                                ((target_x - bounds.left() - thumb_radius) / travel)
-                                    .clamp(0.0, 1.0)
+                                ((target_x - bounds.left() - thumb_radius) / travel).clamp(0.0, 1.0)
                             };
                             let raw_val = min + p * (max - min);
                             state_entity.update(cx, |s, cx| {
@@ -459,7 +453,8 @@ impl RenderOnce for Slider {
                         {
                             return;
                         }
-                        let on_thumb = (event.position.x - thumb_center_x).abs() <= thumb_radius + px(4.0)
+                        let on_thumb = (event.position.x - thumb_center_x).abs()
+                            <= thumb_radius + px(4.0)
                             && (event.position.y - thumb_center_y).abs() <= thumb_radius + px(4.0);
                         let grab_offset = if on_thumb {
                             event.position.x - thumb_center_x
@@ -470,8 +465,7 @@ impl RenderOnce for Slider {
                         let p = if travel <= Pixels::ZERO {
                             0.0
                         } else {
-                            ((target_x - bounds.left() - thumb_radius) / travel)
-                                .clamp(0.0, 1.0)
+                            ((target_x - bounds.left() - thumb_radius) / travel).clamp(0.0, 1.0)
                         };
                         let raw_val = min + p * (max - min);
                         state_entity.update(cx, |s, cx| {
@@ -487,8 +481,7 @@ impl RenderOnce for Slider {
                 window.on_mouse_event({
                     let state_entity = state_entity.clone();
                     move |event: &MouseUpEvent, phase, window, cx| {
-                        if phase != gpui::DispatchPhase::Bubble
-                            || event.button != MouseButton::Left
+                        if phase != gpui::DispatchPhase::Bubble || event.button != MouseButton::Left
                         {
                             return;
                         }

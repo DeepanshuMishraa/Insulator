@@ -177,7 +177,10 @@ fn configure_computer_use_command(command: &mut Command, config: Option<&CodexCo
                 &config.process_directory,
             )
             .arg("-c")
-            .arg(format!("mcp_servers.insulator_js_repl.command={}", config.repl))
+            .arg(format!(
+                "mcp_servers.insulator_js_repl.command={}",
+                config.repl
+            ))
             .arg("-c")
             .arg("mcp_servers.insulator_js_repl.args=[]")
             .arg("-c")
@@ -2190,7 +2193,8 @@ mod tests {
     fn fork_releases_its_writer_before_a_new_driver_sends_a_message() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let directory = std::env::temp_dir().join(format!("insulator-codex-fork-{}", Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("insulator-codex-fork-{}", Uuid::new_v4()));
         fs::create_dir_all(&directory).unwrap();
         let binary = directory.join("codex");
         fs::write(&binary, include_str!("fixtures/codex_fork.sh")).unwrap();
@@ -2278,7 +2282,8 @@ mod tests {
     #[ignore = "requires an installed, authenticated codex"]
     fn codex_fork_preserves_history_and_both_sessions_against_real_cli() {
         let binary = crate::command_env::find_executable("codex").expect("codex is not installed");
-        let cwd = std::env::temp_dir().join(format!("insulator-codex-live-fork-{}", Uuid::new_v4()));
+        let cwd =
+            std::env::temp_dir().join(format!("insulator-codex-live-fork-{}", Uuid::new_v4()));
         fs::create_dir_all(&cwd).unwrap();
         let start = |cursor| {
             let (events, received) = crate::driver::test_event_channel();
@@ -2659,11 +2664,11 @@ mod tests {
             .map(|argument| argument.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
         assert!(disabled_arguments.is_empty());
-        assert!(
-            disabled
-                .get_envs()
-                .all(|(name, _)| { !name.to_string_lossy().starts_with("INSULATOR_COMPUTER_USE_") })
-        );
+        assert!(disabled.get_envs().all(|(name, _)| {
+            !name
+                .to_string_lossy()
+                .starts_with("INSULATOR_COMPUTER_USE_")
+        }));
 
         let config = CodexComputerUseConfig {
             server_path: PathBuf::from("/tmp/insulator-computer-use-server"),

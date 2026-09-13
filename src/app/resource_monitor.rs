@@ -249,17 +249,14 @@ fn clean_process_name(comm: &str) -> String {
 impl Insulator {
     pub(super) fn render_resource_usage_button(&self, cx: &mut Context<Self>) -> AnyElement {
         let weak = cx.entity().downgrade();
-        let handle = self.menu_handle_with(
-            RESOURCE_MONITOR_MENU_ID,
-            cx,
-            move |open, _window, cx| {
+        let handle =
+            self.menu_handle_with(RESOURCE_MONITOR_MENU_ID, cx, move |open, _window, cx| {
                 if open {
                     let _ = weak.update(cx, |this, cx| {
                         this.refresh_resource_usage(cx);
                     });
                 }
-            },
-        );
+            });
 
         let theme = Theme::current(cx);
         let is_open = handle.is_open();
@@ -608,12 +605,7 @@ fn render_resource_monitor_panel(
             .justify_between()
             .text_size(sp(11.5))
             .text_color(theme.text_secondary)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(tr!("resource_monitor.name")),
-            )
+            .child(div().flex_1().min_w_0().child(tr!("resource_monitor.name")))
             .child(
                 div()
                     .w(px(55.0))

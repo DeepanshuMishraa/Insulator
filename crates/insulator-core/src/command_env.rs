@@ -832,8 +832,8 @@ impl ShellEnvironmentCapture {
     fn create() -> Option<Self> {
         for _ in 0..16 {
             let id = SHELL_ENV_CAPTURE_ID.fetch_add(1, Ordering::Relaxed);
-            let path =
-                std::env::temp_dir().join(format!(".insulator-shell-env-{}-{id}", std::process::id()));
+            let path = std::env::temp_dir()
+                .join(format!(".insulator-shell-env-{}-{id}", std::process::id()));
             let mut options = OpenOptions::new();
             options.write(true).create_new(true);
             #[cfg(unix)]
@@ -1183,7 +1183,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn a_bare_name_resolves_through_pathext() {
-        let directory = std::env::temp_dir().join(format!("insulator-pathext-{}", std::process::id()));
+        let directory =
+            std::env::temp_dir().join(format!("insulator-pathext-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).expect("create fixture directory");
         // Only a suffixed file exists here, so the bare name resolves through PATHEXT.
@@ -1287,8 +1288,10 @@ mod tests {
     #[test]
     fn captures_environment_from_a_shell_process() {
         let id = SHELL_ENV_CAPTURE_ID.fetch_add(1, Ordering::Relaxed);
-        let directory =
-            std::env::temp_dir().join(format!("insulator-command-env-test-{}-{id}", std::process::id()));
+        let directory = std::env::temp_dir().join(format!(
+            "insulator-command-env-test-{}-{id}",
+            std::process::id()
+        ));
         fs::create_dir(&directory).expect("create shell fixture directory");
         let shell = directory.join("fake-shell");
         fs::write(

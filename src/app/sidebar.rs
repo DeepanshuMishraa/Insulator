@@ -80,7 +80,7 @@ impl SidebarGroup {
         match self {
             Self::Updated(group) => format!("updated-{}", group.index()).into(),
             Self::Project(project_id) => format!("project-{project_id}").into(),
-                Self::Projectless => "projectless".into(),
+            Self::Projectless => "projectless".into(),
             Self::Status(status) => format!("status-{}", status.as_str()).into(),
         }
     }
@@ -666,7 +666,11 @@ impl Insulator {
             )
             .child(self.render_sidebar_toggle(cx))
             .when(self.state.show_resource_usage, |bar| {
-                bar.child(div().ml(px(4.0)).child(self.render_resource_usage_button(cx)))
+                bar.child(
+                    div()
+                        .ml(px(4.0))
+                        .child(self.render_resource_usage_button(cx)),
+                )
             })
             .child(
                 div()
@@ -817,8 +821,9 @@ impl Insulator {
                     })
                     .icon("icons/folder-new.svg"),
                     MenuItem::new("Import from GitHub", move |window, cx| {
-                        let _ = github_project
-                            .update(cx, |insulator, cx| insulator.open_github_project_dialog(window, cx));
+                        let _ = github_project.update(cx, |insulator, cx| {
+                            insulator.open_github_project_dialog(window, cx)
+                        });
                     })
                     .icon("icons/github.svg"),
                 ]
@@ -863,7 +868,11 @@ impl Insulator {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(icon(icon_path, SIDEBAR_ACTION_ICON_SIZE, theme.text_secondary)),
+                    .child(icon(
+                        icon_path,
+                        SIDEBAR_ACTION_ICON_SIZE,
+                        theme.text_secondary,
+                    )),
             )
             .child(
                 div()
@@ -874,6 +883,40 @@ impl Insulator {
                     .text_color(theme.text_secondary)
                     .child(label),
             )
+    }
+
+    fn render_sidebar_pull_requests(&self, cx: &mut Context<Self>) -> Div {
+        let pull_requests = self
+            .render_sidebar_action_row(
+                "sidebar-pull-requests",
+                "icons/git-branch.svg",
+                "Pull requests".to_owned(),
+                cx,
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.open_pull_requests(cx);
+            }))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    this.open_pull_requests(cx);
+                    cx.stop_propagation();
+                }
+            }));
+        div()
+            .w_full()
+            .h(px(SIDEBAR_ACTION_ROW_HEIGHT))
+            .flex_none()
+            .child(pull_requests)
+    }
+
+    pub(super) fn open_pull_requests(&mut self, cx: &mut Context<Self>) {
+        self.pull_requests_open = true;
+        self.state.selected_session = None;
+        self.active_main_file_tab = None;
+        self.active_main_review_tab = false;
+        self.ensure_pull_requests(false, cx);
+        self.save();
+        cx.notify();
     }
 
     fn render_sidebar_new_task(&self, cx: &mut Context<Self>) -> Div {
@@ -922,6 +965,7 @@ impl Insulator {
     pub(super) fn open_home_screen(&mut self, cx: &mut Context<Self>) {
         self.state.selected_session = None;
         self.state.selected_project = None;
+        self.pull_requests_open = false;
         self.active_main_file_tab = None;
         self.active_main_review_tab = false;
         self.main_tabs.clear();
@@ -1170,7 +1214,9 @@ impl Insulator {
                     let mut labels = HashMap::new();
                     for path in paths {
                         let branch = match workspace.request(
-                            insulator_client::WorkspaceOperation::InspectBranches { cwd: path.clone() },
+                            insulator_client::WorkspaceOperation::InspectBranches {
+                                cwd: path.clone(),
+                            },
                         ) {
                             Ok(insulator_client::WorkspaceResult::Branches {
                                 snapshot: Some(snapshot),
@@ -1288,6 +1334,7 @@ impl Insulator {
                     .mt(px(6.0))
                     .child(self.render_sidebar_home(cx))
                     .child(self.render_sidebar_new_task(cx))
+                    .child(self.render_sidebar_pull_requests(cx))
                     .child(self.render_sidebar_search(cx)),
             )
             .child(
@@ -1461,13 +1508,7 @@ impl Insulator {
                         .filter(|session| session.chat_status == status)
                         .map(|session| session.id)
                         .collect::<Vec<_>>();
-                    append_sidebar_group_rows(
-                        &mut rows,
-                        group,
-                        &session_ids,
-                        is_collapsed,
-                        false,
-                    );
+                    append_sidebar_group_rows(&mut rows, group, &session_ids, is_collapsed, false);
                 }
             }
             SidebarGrouping::Project => {
@@ -1643,10 +1684,8 @@ impl Insulator {
             .entry(group)
             .or_insert_with(|| cx.focus_handle())
             .clone();
-        let show_folder_icon = matches!(
-            group,
-            SidebarGroup::Project(_) | SidebarGroup::Projectless
-        );
+        let show_folder_icon =
+            matches!(group, SidebarGroup::Project(_) | SidebarGroup::Projectless);
         let label = match group {
             SidebarGroup::Updated(group) => group.label(),
             SidebarGroup::Project(project_id) => self
@@ -1854,16 +1893,19 @@ impl Insulator {
                             .text_color(theme.text)
                             .child(label),
                     )
-                    .when((show_folder_icon || is_status_group) && chat_count > 0, |element| {
-                        element.child(
-                            div()
-                                .flex_none()
-                                .text_size(sp(14.0))
-                                .font_weight(FontWeight::NORMAL)
-                                .text_color(theme.text_tertiary)
-                                .child(format!("{chat_count}")),
-                        )
-                    })
+                    .when(
+                        (show_folder_icon || is_status_group) && chat_count > 0,
+                        |element| {
+                            element.child(
+                                div()
+                                    .flex_none()
+                                    .text_size(sp(14.0))
+                                    .font_weight(FontWeight::NORMAL)
+                                    .text_color(theme.text_tertiary)
+                                    .child(format!("{chat_count}")),
+                            )
+                        },
+                    )
                     .child(div().flex_1())
                     .when_some(status_chevron, |element, chevron| element.child(chevron)),
             )
@@ -1887,13 +1929,23 @@ impl Insulator {
                                 style
                             }
                         })
-                        .on_drop(cx.listener(move |this, dragged: &DraggedSession, _window, cx| {
-                            if dragged.status != target_status {
-                                this.set_session_chat_status(dragged.session_id, target_status, cx);
-                                crate::audio::play_arrival();
-                                this.set_sidebar_group_expanded(SidebarGroup::Status(target_status), true, cx);
-                            }
-                        }))
+                        .on_drop(
+                            cx.listener(move |this, dragged: &DraggedSession, _window, cx| {
+                                if dragged.status != target_status {
+                                    this.set_session_chat_status(
+                                        dragged.session_id,
+                                        target_status,
+                                        cx,
+                                    );
+                                    crate::audio::play_arrival();
+                                    this.set_sidebar_group_expanded(
+                                        SidebarGroup::Status(target_status),
+                                        true,
+                                        cx,
+                                    );
+                                }
+                            }),
+                        )
                 },
             )
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -2242,7 +2294,11 @@ impl Insulator {
         let icon_element = if working {
             dot_matrix_loader(theme.text_secondary, 18.0)
         } else if is_status_grouping {
-            let project = self.state.projects.iter().find(|p| p.id == session.project_id);
+            let project = self
+                .state
+                .projects
+                .iter()
+                .find(|p| p.id == session.project_id);
             let avatar_path = crate::platform::local_user_github_avatar_path();
             if let Some(path) = avatar_path.as_ref() {
                 img(path.clone())
@@ -2425,13 +2481,19 @@ impl Insulator {
                             style
                         }
                     })
-                    .on_drop(cx.listener(move |this, dragged: &DraggedSession, _window, cx| {
-                        if dragged.status != target_status {
-                            this.set_session_chat_status(dragged.session_id, target_status, cx);
-                            crate::audio::play_arrival();
-                            this.set_sidebar_group_expanded(SidebarGroup::Status(target_status), true, cx);
-                        }
-                    }))
+                    .on_drop(
+                        cx.listener(move |this, dragged: &DraggedSession, _window, cx| {
+                            if dragged.status != target_status {
+                                this.set_session_chat_status(dragged.session_id, target_status, cx);
+                                crate::audio::play_arrival();
+                                this.set_sidebar_group_expanded(
+                                    SidebarGroup::Status(target_status),
+                                    true,
+                                    cx,
+                                );
+                            }
+                        }),
+                    )
             });
         let is_pinned = self.pinned_session_ids.contains(&session_id);
         let row = if renaming {
@@ -2500,8 +2562,9 @@ impl Insulator {
                         .icon("icons/pencil.svg"),
                         MenuItem::Separator,
                         MenuItem::new(tr!("common.remove"), move |_, cx| {
-                            let _ = remove_insulator
-                                .update(cx, |insulator, cx| insulator.remove_session(session_id, cx));
+                            let _ = remove_insulator.update(cx, |insulator, cx| {
+                                insulator.remove_session(session_id, cx)
+                            });
                         })
                         .icon("icons/trash.svg"),
                     ]
@@ -2526,7 +2589,11 @@ impl Insulator {
     ) -> impl IntoElement {
         let theme = Theme::current(cx);
         let session = self.selected_session();
-        let title = session.map(localized_session_title);
+        let title = if self.pull_requests_open {
+            Some("Pull requests".to_owned())
+        } else {
+            session.map(localized_session_title)
+        };
         let agent_preset_label = session
             .filter(|session| session.provider == ProviderKind::DeepSeek && session.has_started())
             .and_then(|session| self.agent_preset_label_for_session(session));
@@ -2881,7 +2948,9 @@ impl Insulator {
                             )
                             .child(
                                 div()
-                                    .id(SharedString::from(format!("main-review-tab-close-{index}")))
+                                    .id(SharedString::from(format!(
+                                        "main-review-tab-close-{index}"
+                                    )))
                                     .w(px(16.0))
                                     .h(px(16.0))
                                     .flex()
@@ -2939,6 +3008,7 @@ impl Insulator {
                     }
                     let focus_handle = insulator.composer_focus(cx);
                     window.focus(&focus_handle, cx);
+                    insulator.save();
                     cx.notify();
                 });
             })
@@ -3034,16 +3104,17 @@ impl Insulator {
                                     .bg(theme.raised)
                                     .cursor_pointer()
                                     .focus_visible(|s| s.border_color(theme.accent))
-                                    .hover(|s| s.bg(theme.composer).border_color(theme.text_secondary))
+                                    .hover(|s| {
+                                        s.bg(theme.composer).border_color(theme.text_secondary)
+                                    })
                                     .flex()
                                     .flex_col()
                                     .justify_between()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_start()
-                                            .child(icon("icons/folder-outline.svg", 20.0, theme.text)),
-                                    )
+                                    .child(div().flex().items_start().child(icon(
+                                        "icons/folder-outline.svg",
+                                        20.0,
+                                        theme.text,
+                                    )))
                                     .child(
                                         div()
                                             .text_size(sp(14.0))
@@ -3054,12 +3125,17 @@ impl Insulator {
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.add_project(cx);
                                     }))
-                                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                            this.add_project(cx);
-                                            cx.stop_propagation();
-                                        }
-                                    })),
+                                    .on_key_down(cx.listener(
+                                        |this, event: &KeyDownEvent, _, cx| {
+                                            if matches!(
+                                                event.keystroke.key.as_str(),
+                                                "enter" | "space"
+                                            ) {
+                                                this.add_project(cx);
+                                                cx.stop_propagation();
+                                            }
+                                        },
+                                    )),
                             )
                             .child(
                                 div()
@@ -3075,16 +3151,17 @@ impl Insulator {
                                     .bg(theme.raised)
                                     .cursor_pointer()
                                     .focus_visible(|s| s.border_color(theme.accent))
-                                    .hover(|s| s.bg(theme.composer).border_color(theme.text_secondary))
+                                    .hover(|s| {
+                                        s.bg(theme.composer).border_color(theme.text_secondary)
+                                    })
                                     .flex()
                                     .flex_col()
                                     .justify_between()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_start()
-                                            .child(icon("icons/globe.svg", 20.0, theme.text)),
-                                    )
+                                    .child(div().flex().items_start().child(icon(
+                                        "icons/globe.svg",
+                                        20.0,
+                                        theme.text,
+                                    )))
                                     .child(
                                         div()
                                             .text_size(sp(14.0))
@@ -3095,12 +3172,17 @@ impl Insulator {
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_github_project_dialog(window, cx);
                                     }))
-                                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                            this.open_github_project_dialog(window, cx);
-                                            cx.stop_propagation();
-                                        }
-                                    })),
+                                    .on_key_down(cx.listener(
+                                        |this, event: &KeyDownEvent, window, cx| {
+                                            if matches!(
+                                                event.keystroke.key.as_str(),
+                                                "enter" | "space"
+                                            ) {
+                                                this.open_github_project_dialog(window, cx);
+                                                cx.stop_propagation();
+                                            }
+                                        },
+                                    )),
                             )
                             .child(
                                 div()
@@ -3116,16 +3198,17 @@ impl Insulator {
                                     .bg(theme.raised)
                                     .cursor_pointer()
                                     .focus_visible(|s| s.border_color(theme.accent))
-                                    .hover(|s| s.bg(theme.composer).border_color(theme.text_secondary))
+                                    .hover(|s| {
+                                        s.bg(theme.composer).border_color(theme.text_secondary)
+                                    })
                                     .flex()
                                     .flex_col()
                                     .justify_between()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_start()
-                                            .child(icon("icons/folder-plus.svg", 20.0, theme.text)),
-                                    )
+                                    .child(div().flex().items_start().child(icon(
+                                        "icons/folder-plus.svg",
+                                        20.0,
+                                        theme.text,
+                                    )))
                                     .child(
                                         div()
                                             .text_size(sp(14.0))
@@ -3136,12 +3219,17 @@ impl Insulator {
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.create_projectless_session(cx);
                                     }))
-                                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                            this.create_projectless_session(cx);
-                                            cx.stop_propagation();
-                                        }
-                                    })),
+                                    .on_key_down(cx.listener(
+                                        |this, event: &KeyDownEvent, _, cx| {
+                                            if matches!(
+                                                event.keystroke.key.as_str(),
+                                                "enter" | "space"
+                                            ) {
+                                                this.create_projectless_session(cx);
+                                                cx.stop_propagation();
+                                            }
+                                        },
+                                    )),
                             ),
                     ),
             )
@@ -3468,7 +3556,11 @@ pub fn parse_github_remote_url(raw: &str) -> Option<String> {
     }
 
     // https://, http://, git://
-    for prefix in &["https://github.com/", "http://github.com/", "git://github.com/"] {
+    for prefix in &[
+        "https://github.com/",
+        "http://github.com/",
+        "git://github.com/",
+    ] {
         if let Some(rest) = raw.strip_prefix(prefix) {
             let repo_path = rest.trim_end_matches(".git").trim_matches('/');
             if !repo_path.is_empty() {
@@ -3794,7 +3886,10 @@ mod tests {
             ]
         );
         assert_eq!(ChatStatus::InProgress.label(), "In progress");
-        assert_eq!(ChatStatus::InProgress.icon(), "icons/status-in-progress.svg");
+        assert_eq!(
+            ChatStatus::InProgress.icon(),
+            "icons/status-in-progress.svg"
+        );
         assert_eq!(ChatStatus::Done.label(), "Done");
         assert_eq!(ChatStatus::Done.icon(), "icons/status-done.svg");
     }
@@ -3879,8 +3974,14 @@ mod tests {
             parse_github_remote_url("git://github.com/owner/repo.git"),
             Some("https://github.com/owner/repo".to_string())
         );
-        assert_eq!(parse_github_remote_url("git@gitlab.com:owner/repo.git"), None);
-        assert_eq!(parse_github_remote_url("https://example.com/owner/repo.git"), None);
+        assert_eq!(
+            parse_github_remote_url("git@gitlab.com:owner/repo.git"),
+            None
+        );
+        assert_eq!(
+            parse_github_remote_url("https://example.com/owner/repo.git"),
+            None
+        );
         assert_eq!(parse_github_remote_url(""), None);
     }
 
