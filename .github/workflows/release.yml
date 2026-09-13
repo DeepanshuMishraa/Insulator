@@ -159,54 +159,64 @@ jobs:
 #           path: target/release/insulator-${{ needs.version.outputs.version }}-aarch64-unknown-linux-gnu.tar.gz
 #           if-no-files-found: error
 
-#   windows-x86_64:
-#     name: Windows x86_64
-#     needs: version
-#     runs-on: windows-latest
-#     timeout-minutes: 90
-#     steps:
-#       - uses: actions/checkout@v6
+  windows-x86_64:
+    name: Windows x86_64
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
 
-#       - name: Install Rust
-#         run: |
-#           rustup toolchain install 1.96.0 --profile minimal
-#           rustup default 1.96.0
-#           rustup target add x86_64-pc-windows-msvc
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.96.0 --profile minimal
+          rustup default 1.96.0
+          rustup target add x86_64-pc-windows-msvc
 
-#       - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2
 
-#       - name: Install Inno Setup
-#         run: choco install innosetup --yes --no-progress
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
 
-#       - uses: actions/cache@v6
-#         with:
-#           path: |
-#             ~/.cargo/registry
-#             ~/.cargo/git
-#             target
-#           key: windows-latest-rust-1.96.0-release-${{ hashFiles('Cargo.lock') }}
-#           restore-keys: |
-#             windows-latest-rust-1.96.0-release-
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-latest-rust-1.96.0-release-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            windows-latest-rust-1.96.0-release-
 
-#       # `target/` is restored from the release cache, so the previous
-#       # release's bundles are still sitting in `target/release` when this one
-#       # starts. Cargo does not own them, so nothing else clears them.
-#       - name: Clear stale bundles
-#         run: Remove-Item -Force -ErrorAction SilentlyContinue target/release/insulator-*.zip, target/release/Insulator-*-Setup.exe
+      # `target/` is restored from the release cache, so the previous
+      # release's bundles are still sitting in `target/release` when this one
+      # starts. Cargo does not own them, so nothing else clears them.
+      - name: Clear stale bundles
+        run: Remove-Item -Force -ErrorAction SilentlyContinue target/release/insulator-*.zip, target/release/Insulator-*-Setup.exe
 
-#       - name: Bundle
-#         env:
-#           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-#           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-#         run: bun scripts/bundle-windows.ts
+      - name: Bundle
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: bun scripts/bundle-windows.ts
 
-#       - uses: actions/upload-artifact@v7
-#         with:
-#           name: windows-x86_64
-#           path: |
-#             target/release/insulator-${{ needs.version.outputs.version }}-x86_64-pc-windows-msvc.zip
-#             target/release/Insulator-${{ needs.version.outputs.version }}-x86_64-Setup.exe
-#           if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-x86_64
+          path: |
+            target/release/insulator-${{ needs.version.outputs.version }}-x86_64-pc-windows-msvc.zip
+            target/release/Insulator-${{ needs.version.outputs.version }}-x86_64-Setup.exe
+          if-no-files-found: error
+
+      - name: Publish Windows assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release upload "${{ needs.version.outputs.tag }}"
+          --repo "${{ github.repository }}"
+          --clobber
+          "target/release/insulator-${{ needs.version.outputs.version }}-x86_64-pc-windows-msvc.zip"
+          "target/release/Insulator-${{ needs.version.outputs.version }}-x86_64-Setup.exe"
 
 #   windows-arm64:
 #     name: Windows arm64
