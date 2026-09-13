@@ -8,10 +8,13 @@ use gpui::{
 pub mod menu;
 pub mod motion;
 pub mod scrollbar;
+pub mod shimmer;
 pub mod slider;
 pub mod text_field;
 pub mod tooltip;
 
+#[allow(unused_imports)]
+pub use shimmer::{ShimmerSpread, ShimmerStyle, ShimmerText};
 #[allow(unused_imports)]
 pub use slider::{Slider, SliderEvent, SliderState, SliderValue};
 

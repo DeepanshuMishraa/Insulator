@@ -1512,15 +1512,28 @@ pub struct Insulator {
     pull_requests_error: Option<String>,
     pull_request_detail: Option<pull_requests::PullRequest>,
     pull_request_detail_tab: pull_requests::PullRequestDetailTab,
-    pull_request_detail_loading: bool,
+    pull_request_detail_loading: HashSet<(String, u64)>,
     pull_request_commits: HashMap<(String, u64), Vec<pull_requests::PullRequestCommit>>,
-    pull_request_commits_loading: bool,
+    pull_request_commits_loading: HashSet<(String, u64)>,
     pull_request_commits_error: Option<String>,
+    pull_request_checks: HashMap<(String, u64), Vec<pull_requests::PullRequestCheck>>,
+    pull_request_checks_loading: HashSet<(String, u64)>,
+    pull_request_checks_error: Option<String>,
+    pull_request_comments: HashMap<(String, u64), Vec<pull_requests::PullRequestComment>>,
+    pull_request_comments_loading: HashSet<(String, u64)>,
+    pull_request_comments_error: Option<String>,
+    pull_request_comment_input: Entity<TextInput>,
+    pull_request_comment_posting: bool,
+    pull_request_collapsed_comments: HashSet<String>,
     pull_request_diffs: HashMap<(String, u64), Arc<ReviewDiffSnapshot>>,
-    pull_request_diffs_loading: bool,
+    pull_request_diffs_loading: HashSet<(String, u64)>,
     pull_request_diffs_error: Option<String>,
     pull_request_markdown: RefCell<Option<((String, u64), MarkdownView)>>,
     pull_requests_search: Entity<TextInput>,
+    pull_requests_scroll_handle: ScrollHandle,
+    pull_requests_scrollbar: Rc<ScrollbarState>,
+    pull_request_detail_scroll_handle: ScrollHandle,
+    pull_request_detail_scrollbar: Rc<ScrollbarState>,
     active_main_file_tab: Option<String>,
     active_main_review_tab: bool,
     main_tabs_scroll_handle: ScrollHandle,
@@ -2269,6 +2282,13 @@ impl Insulator {
             TextInput::new(window, cx)
                 .clear_on_escape()
                 .placeholder("Search pull requests")
+        });
+        let pull_request_comment_input = cx.new(|cx| {
+            TextInput::new(window, cx)
+                .multi_line()
+                .auto_height()
+                .placeholder("Leave a comment")
+                .accessibility_label("Pull request comment")
         });
         let right_panel_diff_filter =
             cx.new(|cx| TextInput::new(window, cx).placeholder(tr!("diff.filter_files")));
@@ -3263,15 +3283,28 @@ impl Insulator {
                 pull_requests_error: None,
                 pull_request_detail: None,
                 pull_request_detail_tab: pull_requests::PullRequestDetailTab::Summary,
-                pull_request_detail_loading: false,
+                pull_request_detail_loading: HashSet::new(),
                 pull_request_commits: cached_commits,
-                pull_request_commits_loading: false,
+                pull_request_commits_loading: HashSet::new(),
                 pull_request_commits_error: None,
+                pull_request_checks: HashMap::new(),
+                pull_request_checks_loading: HashSet::new(),
+                pull_request_checks_error: None,
+                pull_request_comments: HashMap::new(),
+                pull_request_comments_loading: HashSet::new(),
+                pull_request_comments_error: None,
+                pull_request_comment_input,
+                pull_request_comment_posting: false,
+                pull_request_collapsed_comments: HashSet::new(),
                 pull_request_diffs: cached_diffs,
-                pull_request_diffs_loading: false,
+                pull_request_diffs_loading: HashSet::new(),
                 pull_request_diffs_error: None,
                 pull_request_markdown: RefCell::new(None),
                 pull_requests_search,
+                pull_requests_scroll_handle: ScrollHandle::new(),
+                pull_requests_scrollbar: ScrollbarState::new(),
+                pull_request_detail_scroll_handle: ScrollHandle::new(),
+                pull_request_detail_scrollbar: ScrollbarState::new(),
                 active_main_file_tab: initial_active_main_file_tab,
                 active_main_review_tab: initial_active_main_review_tab,
                 main_tabs_scroll_handle: ScrollHandle::new(),

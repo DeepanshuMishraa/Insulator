@@ -2,6 +2,13 @@ use super::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
+use std::time::Duration;
+
+use gpui::Point;
+
+use crate::theme::ActiveTheme as _;
+use crate::ui::scrollbar;
+use crate::ui::shimmer::{ShimmerStyle, ShimmerText};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PullRequestDetailTab {
@@ -27,6 +34,24 @@ pub(super) struct PullRequestCommit {
     oid: String,
     message: String,
     authored_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(super) struct PullRequestCheck {
+    name: String,
+    state: String,
+    bucket: String,
+    #[serde(default)]
+    link: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(super) struct PullRequestComment {
+    author: String,
+    body: String,
+    created_at: String,
+    #[serde(default)]
+    location: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -368,6 +393,102 @@ fn without_html_comments(body: &str) -> String {
     plain.replace("&nbsp;", " ").trim().to_owned()
 }
 
+fn load_pull_request_checks(request: &PullRequest) -> anyhow::Result<Vec<PullRequestCheck>> {
+    let output = std::process::Command::new("gh")
+        .args([
+            "pr",
+            "checks",
+            &request.number.to_string(),
+            "--repo",
+            &request.repository,
+            "--json",
+            "name,state,bucket,link",
+        ])
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("GH_PAGER", "cat")
+        .stdin(Stdio::null())
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "gh pr checks failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+fn load_pull_request_comments(request: &PullRequest) -> anyhow::Result<Vec<PullRequestComment>> {
+    #[derive(Deserialize)]
+    struct Response {
+        body: String,
+        created_at: String,
+        user: Option<GhCommentUser>,
+        path: Option<String>,
+        line: Option<u64>,
+    }
+    #[derive(Deserialize)]
+    struct GhCommentUser {
+        login: String,
+    }
+    fn load_endpoint(endpoint: &str) -> anyhow::Result<Vec<Response>> {
+        let output = std::process::Command::new("gh")
+            .args(["api", "--paginate", "--slurp", endpoint])
+            .env("GH_PROMPT_DISABLED", "1")
+            .env("GH_PAGER", "cat")
+            .stdin(Stdio::null())
+            .output()?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "GitHub comments lookup failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        let pages: Vec<Vec<Response>> = serde_json::from_slice(&output.stdout)?;
+        Ok(pages.into_iter().flatten().collect())
+    }
+
+    let issue_endpoint = format!("repos/{}/issues/{}/comments", request.repository, request.number);
+    let review_endpoint = format!("repos/{}/pulls/{}/comments", request.repository, request.number);
+    let mut comments = load_endpoint(&issue_endpoint)?;
+    comments.extend(load_endpoint(&review_endpoint)?);
+    Ok(comments
+        .into_iter()
+        .map(|comment| PullRequestComment {
+            author: comment.user.map(|user| user.login).unwrap_or_else(|| "unknown".into()),
+            body: comment.body,
+            created_at: comment.created_at,
+            location: comment.path.map(|path| match comment.line {
+                Some(line) => format!("{path}:{line}"),
+                None => path,
+            }),
+        })
+        .collect())
+}
+
+fn post_pull_request_comment(request: &PullRequest, body: &str) -> anyhow::Result<()> {
+    let output = std::process::Command::new("gh")
+        .args([
+            "pr",
+            "comment",
+            &request.number.to_string(),
+            "--repo",
+            &request.repository,
+            "--body",
+            body,
+        ])
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("GH_PAGER", "cat")
+        .stdin(Stdio::null())
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "posting pull-request comment failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 fn load_pull_request_commits(request: &PullRequest) -> anyhow::Result<Vec<PullRequestCommit>> {
     let output = std::process::Command::new("gh")
         .args([
@@ -506,35 +627,137 @@ impl Insulator {
         request: PullRequest,
         cx: &mut Context<Self>,
     ) {
-        if request.body_loaded {
+        let request_key = (request.repository.clone(), request.number);
+        if request.body_loaded || self.pull_request_detail_loading.contains(&request_key) {
             return;
         }
-        self.pull_request_detail_loading = true;
+        self.pull_request_detail_loading.insert(request_key.clone());
         let entity = cx.entity().downgrade();
-        let request_key = (request.repository.clone(), request.number);
+        let key = request_key.clone();
         cx.spawn(async move |_, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move { load_pull_request_body(&request) })
                 .await;
             let _ = entity.update(cx, |this, cx| {
-                this.pull_request_detail_loading = false;
-                if let Ok((body, url)) = result
-                    && let Some(detail) = this.pull_request_detail.as_mut()
-                    && detail.repository == request_key.0
-                    && detail.number == request_key.1
-                {
-                    detail.body = body.clone();
-                    detail.body_loaded = true;
-                    detail.url = url.clone();
+                this.pull_request_detail_loading.remove(&key);
+                if let Ok((body, url)) = result {
                     if let Some(entry) = this.pull_requests.iter_mut().find(|entry| {
-                        entry.repository == request_key.0 && entry.number == request_key.1
+                        entry.repository == key.0 && entry.number == key.1
                     }) {
-                        entry.body = body;
+                        entry.body = body.clone();
                         entry.body_loaded = true;
-                        entry.url = url;
+                        entry.url = url.clone();
                         save_cached_pull_requests(&this.pull_requests);
                     }
+                    if let Some(detail) = this.pull_request_detail.as_mut()
+                        && detail.repository == key.0
+                        && detail.number == key.1
+                    {
+                        detail.body = body;
+                        detail.body_loaded = true;
+                        detail.url = url;
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn ensure_pull_request_checks(
+        &mut self,
+        request: PullRequest,
+        cx: &mut Context<Self>,
+    ) {
+        let key = (request.repository.clone(), request.number);
+        if self.pull_request_checks.contains_key(&key)
+            || self.pull_request_checks_loading.contains(&key)
+        {
+            return;
+        }
+        self.pull_request_checks_loading.insert(key.clone());
+        let entity = cx.entity().downgrade();
+        let request_key = key.clone();
+        cx.spawn(async move |_, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { load_pull_request_checks(&request) })
+                .await;
+            let _ = entity.update(cx, |this, cx| {
+                this.pull_request_checks_loading.remove(&request_key);
+                match result {
+                    Ok(checks) => {
+                        this.pull_request_checks.insert(request_key, checks);
+                        this.pull_request_checks_error = None;
+                    }
+                    Err(error) => this.pull_request_checks_error = Some(error.to_string()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn ensure_pull_request_comments(
+        &mut self,
+        request: PullRequest,
+        cx: &mut Context<Self>,
+    ) {
+        let key = (request.repository.clone(), request.number);
+        if self.pull_request_comments.contains_key(&key)
+            || self.pull_request_comments_loading.contains(&key)
+        {
+            return;
+        }
+        self.pull_request_comments_loading.insert(key.clone());
+        let entity = cx.entity().downgrade();
+        let request_key = key.clone();
+        cx.spawn(async move |_, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { load_pull_request_comments(&request) })
+                .await;
+            let _ = entity.update(cx, |this, cx| {
+                this.pull_request_comments_loading.remove(&request_key);
+                match result {
+                    Ok(comments) => {
+                        this.pull_request_comments.insert(request_key, comments);
+                        this.pull_request_comments_error = None;
+                    }
+                    Err(error) => this.pull_request_comments_error = Some(error.to_string()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn submit_pull_request_comment(
+        &mut self,
+        request: PullRequest,
+        cx: &mut Context<Self>,
+    ) {
+        let body = self.pull_request_comment_input.read(cx).content().trim().to_owned();
+        if body.is_empty() || self.pull_request_comment_posting {
+            return;
+        }
+        self.pull_request_comment_posting = true;
+        let entity = cx.entity().downgrade();
+        let request_for_load = request.clone();
+        cx.spawn(async move |_, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { post_pull_request_comment(&request_for_load, &body) })
+                .await;
+            let _ = entity.update(cx, |this, cx| {
+                this.pull_request_comment_posting = false;
+                if result.is_ok() {
+                    this.pull_request_comment_input.update(cx, |input, cx| input.clear(cx));
+                    this.pull_request_comments.remove(&(request.repository.clone(), request.number));
+                    this.ensure_pull_request_comments(request.clone(), cx);
+                } else if let Err(error) = result {
+                    this.pull_request_comments_error = Some(error.to_string());
                 }
                 cx.notify();
             });
@@ -548,29 +771,32 @@ impl Insulator {
         cx: &mut Context<Self>,
     ) {
         let key = (request.repository.clone(), request.number);
-        if self.pull_request_diffs.contains_key(&key) || self.pull_request_diffs_loading {
+        if self.pull_request_diffs.contains_key(&key)
+            || self.pull_request_diffs_loading.contains(&key)
+        {
             return;
         }
-        self.pull_request_diffs_loading = true;
+        self.pull_request_diffs_loading.insert(key.clone());
         let entity = cx.entity().downgrade();
+        let request_key = key.clone();
         cx.spawn(async move |_, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move { load_pull_request_diff(&request) })
                 .await;
             let _ = entity.update(cx, |this, cx| {
-                this.pull_request_diffs_loading = false;
+                this.pull_request_diffs_loading.remove(&request_key);
                 match result {
                     Ok(diff) => {
                         if let Some(entry) = this
                             .pull_requests
                             .iter_mut()
-                            .find(|entry| entry.repository == key.0 && entry.number == key.1)
+                            .find(|entry| entry.repository == request_key.0 && entry.number == request_key.1)
                         {
                             entry.cached_diff = Some(diff.1.clone());
                             save_cached_pull_requests(&this.pull_requests);
                         }
-                        this.pull_request_diffs.insert(key, Arc::new(diff.0));
+                        this.pull_request_diffs.insert(request_key, Arc::new(diff.0));
                         this.pull_request_diffs_error = None;
                     }
                     Err(error) => this.pull_request_diffs_error = Some(error.to_string()),
@@ -587,29 +813,32 @@ impl Insulator {
         cx: &mut Context<Self>,
     ) {
         let key = (request.repository.clone(), request.number);
-        if self.pull_request_commits.contains_key(&key) || self.pull_request_commits_loading {
+        if self.pull_request_commits.contains_key(&key)
+            || self.pull_request_commits_loading.contains(&key)
+        {
             return;
         }
-        self.pull_request_commits_loading = true;
+        self.pull_request_commits_loading.insert(key.clone());
         let entity = cx.entity().downgrade();
+        let request_key = key.clone();
         cx.spawn(async move |_, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move { load_pull_request_commits(&request) })
                 .await;
             let _ = entity.update(cx, |this, cx| {
-                this.pull_request_commits_loading = false;
+                this.pull_request_commits_loading.remove(&request_key);
                 match result {
                     Ok(commits) => {
                         if let Some(entry) = this
                             .pull_requests
                             .iter_mut()
-                            .find(|entry| entry.repository == key.0 && entry.number == key.1)
+                            .find(|entry| entry.repository == request_key.0 && entry.number == request_key.1)
                         {
                             entry.cached_commits = commits.clone();
                             save_cached_pull_requests(&this.pull_requests);
                         }
-                        this.pull_request_commits.insert(key, commits);
+                        this.pull_request_commits.insert(request_key, commits);
                         this.pull_request_commits_error = None;
                     }
                     Err(error) => this.pull_request_commits_error = Some(error.to_string()),
@@ -618,6 +847,176 @@ impl Insulator {
             });
         })
         .detach();
+    }
+
+    fn render_pull_request_checks_section(
+        &self,
+        key: &(String, u64),
+        theme: &Theme,
+    ) -> AnyElement {
+        let is_loading = self.pull_request_checks_loading.contains(key)
+            || (!self.pull_request_checks.contains_key(key) && self.pull_request_checks_error.is_none());
+        let content = if is_loading {
+            div().text_color(theme.text_secondary).child("Loading checks…")
+        } else if let Some(error) = &self.pull_request_checks_error {
+            div().text_color(theme.danger).child(SharedString::from(error.clone()))
+        } else if let Some(checks) = self.pull_request_checks.get(key) {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .children(checks.iter().map(|check| {
+                    let color = match check.bucket.as_str() {
+                        "pass" => theme.success,
+                        "fail" | "cancel" => theme.danger,
+                        _ => theme.text_secondary,
+                    };
+                    div()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(icon(
+                            if check.bucket == "pass" {
+                                "icons/check.svg"
+                            } else {
+                                "icons/circle.svg"
+                            },
+                            14.0,
+                            color,
+                        ))
+                        .child(div().min_w_0().flex_1().text_color(theme.text).child(SharedString::from(check.name.clone())))
+                        .child(div().text_color(theme.text_secondary).child(SharedString::from(check.state.clone())))
+                }))
+        } else {
+            div().text_color(theme.text_secondary).child("No checks reported.")
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(10.0))
+            .child(div().text_size(sp(15.0)).font_weight(FontWeight::MEDIUM).text_color(theme.text).child("Checks"))
+            .child(content)
+            .into_any_element()
+    }
+
+    fn render_pull_request_comments_section(
+        &self,
+        key: &(String, u64),
+        request: PullRequest,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let is_loading = self.pull_request_comments_loading.contains(key)
+            || (!self.pull_request_comments.contains_key(key) && self.pull_request_comments_error.is_none());
+        let comments = self.pull_request_comments.get(key);
+        let comments_body = if is_loading {
+            div().text_color(theme.text_secondary).child("Loading comments…").into_any_element()
+        } else if let Some(error) = &self.pull_request_comments_error {
+            div().text_color(theme.danger).child(SharedString::from(error.clone())).into_any_element()
+        } else if let Some(comments) = comments {
+            let palette = MarkdownPalette::from_theme(theme);
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(10.0))
+                .children(comments.iter().enumerate().map(|(index, comment)| {
+                    let comment_key = format!("{}:{}:{index}", key.0, key.1);
+                    let collapsed = self.pull_request_collapsed_comments.contains(&comment_key);
+                    let entity = cx.entity().downgrade();
+                    let toggle_key = comment_key.clone();
+                    let header = div()
+                        .id(SharedString::from(format!("pull-request-comment-header-{index}")))
+                        .w_full()
+                        .px(px(10.0))
+                        .py(px(9.0))
+                        .rounded(px(7.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .hover(|element| element.bg(theme.overlay_strong))
+                        .on_click(move |_, _, cx| {
+                            let _ = entity.update(cx, |this, cx| {
+                                if !this.pull_request_collapsed_comments.remove(&toggle_key) {
+                                    this.pull_request_collapsed_comments.insert(toggle_key.clone());
+                                }
+                                cx.notify();
+                            });
+                        })
+                        .child(icon(
+                            if collapsed { "icons/chevron-right.svg" } else { "icons/chevron-down.svg" },
+                            13.0,
+                            theme.text_tertiary,
+                        ))
+                        .child(div().min_w_0().flex_1().text_color(theme.text).font_weight(FontWeight::MEDIUM).child(SharedString::from(format!("{}  ·  {}", comment.author, comment.created_at))))
+                        .when_some(comment.location.as_ref(), |element, location| {
+                            element.child(div().text_color(theme.text_tertiary).child(SharedString::from(location.clone())))
+                        });
+                    let mut card = div().w_full().rounded(px(8.0)).bg(theme.overlay).child(header);
+                    if !collapsed {
+                        let body = without_html_comments(&comment.body);
+                        let mut view = MarkdownView::new();
+                        view.set_text(&body, false);
+                        let context = MarkdownCtx::new(
+                            format!("pull-request-comment-{}-{index}", key.1),
+                            &palette,
+                            MarkdownMetrics::document(self.state.ui_font_size, self.state.code_font_size),
+                            self.transcript_selection.clone(),
+                        )
+                        .with_math_enabled(self.state.render_math)
+                        .with_link_handler(self.markdown_link_handler.clone());
+                        let rendered = md::render::markdown(&view, &context).unwrap_or_else(|| {
+                            md::render::plain_text(body, crate::theme::active_ui_font_family(), FontWeight::NORMAL, theme.text_secondary, &context)
+                        });
+                        card = card.child(div().px(px(32.0)).pb(px(12.0)).child(rendered));
+                    }
+                    card
+                }))
+                .into_any_element()
+        } else {
+            div().text_color(theme.text_secondary).child("No comments yet.").into_any_element()
+        };
+        let entity = cx.entity().downgrade();
+        let request = request.clone();
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(10.0))
+            .child(div().text_size(sp(15.0)).font_weight(FontWeight::MEDIUM).text_color(theme.text).child(SharedString::from(format!("Comments  ·  {}", comments.map_or(0, Vec::len)))))
+            .child(comments_body)
+            .child(
+                div()
+                    .w_full()
+                    .min_h(px(44.0))
+                    .px(px(10.0))
+                    .py(px(7.0))
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(theme.border_strong)
+                    .bg(theme.inset)
+                    .flex()
+                    .items_end()
+                    .gap(px(8.0))
+                    .child(div().min_w_0().flex_1().child(self.pull_request_comment_input.clone()))
+                    .child(
+                        div()
+                            .id("pull-request-submit-comment")
+                            .size(px(28.0))
+                            .rounded(px(7.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(self.pull_request_comment_posting, |element| element.opacity(0.5))
+                            .hover(|element| element.bg(theme.overlay))
+                            .child(icon("icons/arrow-up.svg", 15.0, theme.text))
+                            .on_click(move |_, _, cx| {
+                                let _ = entity.update(cx, |this, cx| {
+                                    this.submit_pull_request_comment(request.clone(), cx);
+                                });
+                            }),
+                    ),
+            )
+            .into_any_element()
     }
 
     pub(super) fn render_pull_requests(
@@ -669,7 +1068,7 @@ impl Insulator {
                     .pb(px(12.0))
                     .flex()
                     .items_center()
-                    .gap(px(5.0))
+                    .gap(px(6.0))
                     .children(PullRequestTab::ALL.into_iter().map(|tab| {
                         let selected = tab == selected_tab;
                         let click_pull_requests = pull_requests.clone();
@@ -680,25 +1079,41 @@ impl Insulator {
                                 tab.label()
                             )))
                             .tab_index(0)
-                            .h(px(34.0))
-                            .px(px(13.0))
-                            .rounded(px(8.0))
+                            .h(px(32.0))
+                            .px(px(14.0))
+                            .rounded(px(7.0))
                             .flex()
                             .items_center()
                             .justify_center()
                             .cursor_default()
-                            .text_size(sp(13.5))
+                            .text_size(sp(13.0))
+                            .font_weight(if selected {
+                                FontWeight::MEDIUM
+                            } else {
+                                FontWeight::NORMAL
+                            })
                             .text_color(if selected {
                                 theme.text
                             } else {
                                 theme.text_secondary
                             })
-                            .when(selected, |element| element.bg(theme.overlay))
-                            .hover(|element| element.bg(theme.overlay))
+                            .border_1()
+                            .border_color(if selected {
+                                theme.border
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .when(selected, |element| element.bg(theme.overlay_strong))
+                            .when(!selected, |element| {
+                                element.hover(|element| {
+                                    element.bg(theme.overlay).text_color(theme.text)
+                                })
+                            })
                             .active(|element| element.bg(theme.overlay_strong))
                             .on_click(move |_, _, cx| {
                                 let _ = click_pull_requests.update(cx, |this, cx| {
                                     this.pull_requests_tab = tab;
+                                    this.pull_requests_scroll_handle.set_offset(Point::default());
                                     cx.notify();
                                 });
                             })
@@ -706,6 +1121,7 @@ impl Insulator {
                                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                                     let _ = key_pull_requests.update(cx, |this, cx| {
                                         this.pull_requests_tab = tab;
+                                        this.pull_requests_scroll_handle.set_offset(Point::default());
                                         cx.notify();
                                     });
                                     cx.stop_propagation();
@@ -744,46 +1160,92 @@ impl Insulator {
             )
             .child(
                 div()
-                    .id("pull-requests-list")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .px(px(32.0))
-                    .children(if self.pull_requests_loading {
-                        vec![
-                            div()
-                                .py(px(40.0))
-                                .text_color(theme.text_secondary)
-                                .child("Loading pull requests...")
-                                .into_any_element(),
-                        ]
-                    } else if let Some(error) = &self.pull_requests_error {
-                        vec![
-                            div()
-                                .py(px(40.0))
-                                .text_color(theme.danger)
-                                .child(SharedString::from(error.clone()))
-                                .into_any_element(),
-                        ]
-                    } else if entries.is_empty() {
-                        vec![
-                            div()
-                                .py(px(40.0))
-                                .text_color(theme.text_secondary)
-                                .child(format!(
-                                    "No {} pull requests found",
-                                    selected_tab.label().to_lowercase()
-                                ))
-                                .into_any_element(),
-                        ]
-                    } else {
-                        entries
-                            .into_iter()
-                            .map(|entry| {
-                                render_pull_request_row(entry, theme, cx.entity().downgrade())
-                            })
-                            .collect()
-                    }),
+                    .relative()
+                    .child(
+                        div()
+                            .id("pull-requests-list")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.pull_requests_scroll_handle)
+                            .px(px(32.0))
+                            .pb(px(48.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.0))
+                            .children(if self.pull_requests_loading {
+                                let loading_style = ShimmerStyle::new()
+                                    .duration(Duration::from_secs(3))
+                                    .highlight_color(cx.theme().primary)
+                                    .spread(0.45)
+                                    .reverse(true)
+                                    .once(false);
+
+                                vec![
+                                    div()
+                                        .w_full()
+                                        .py(px(80.0))
+                                        .flex()
+                                        .flex_col()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap(px(14.0))
+                                        .child(crate::app::components::dot_matrix_loader(
+                                            theme.text_secondary,
+                                            22.0,
+                                        ))
+                                        .child(
+                                            ShimmerText::new("Loading pull requests…")
+                                                .with_shimmer_style(loading_style)
+                                                .text_size(sp(14.0))
+                                                .text_color(theme.text_secondary),
+                                        )
+                                        .into_any_element(),
+                                ]
+                            } else if let Some(error) = &self.pull_requests_error {
+                                vec![
+                                    div()
+                                        .py(px(40.0))
+                                        .text_color(theme.danger)
+                                        .child(SharedString::from(error.clone()))
+                                        .into_any_element(),
+                                ]
+                            } else if entries.is_empty() {
+                                vec![
+                                    div()
+                                        .py(px(40.0))
+                                        .text_color(theme.text_secondary)
+                                        .child(format!(
+                                            "No {} pull requests found",
+                                            selected_tab.label().to_lowercase()
+                                        ))
+                                        .into_any_element(),
+                                ]
+                            } else {
+                                let selected_key = self
+                                    .pull_request_detail
+                                    .as_ref()
+                                    .map(|detail| (detail.repository.clone(), detail.number));
+                                entries
+                                    .into_iter()
+                                    .map(|entry| {
+                                        let is_selected = selected_key.as_ref()
+                                            == Some(&(entry.repository.clone(), entry.number));
+                                        render_pull_request_row(
+                                            entry,
+                                            theme,
+                                            is_selected,
+                                            cx.entity().downgrade(),
+                                        )
+                                    })
+                                    .collect()
+                            }),
+                    )
+                    .child(scrollbar::vertical(
+                        &self.pull_requests_scroll_handle,
+                        &self.pull_requests_scrollbar,
+                    )),
             )
             .into_any_element()
     }
@@ -792,6 +1254,7 @@ impl Insulator {
 fn render_pull_request_row(
     entry: &PullRequest,
     theme: Theme,
+    is_selected: bool,
     insulator: WeakEntity<Insulator>,
 ) -> AnyElement {
     let state_color = match entry.state.as_str() {
@@ -808,27 +1271,56 @@ fn render_pull_request_row(
         )))
         .w_full()
         .max_w(px(980.0))
+        .rounded(px(8.0))
         .cursor_pointer()
-        .hover(|element| element.bg(theme.overlay))
+        .px(px(14.0))
+        .py(px(12.0))
+        .flex()
+        .items_center()
+        .gap(px(12.0))
+        .when(is_selected, |element| {
+            element
+                .bg(theme.overlay_strong)
+                .border_1()
+                .border_color(theme.border)
+                .hover(|element| element.bg(theme.overlay_strong))
+        })
+        .when(!is_selected, |element| {
+            element
+                .border_1()
+                .border_color(gpui::transparent_black())
+                .hover(|element| {
+                    element
+                        .bg(theme.overlay)
+                        .border_color(theme.border)
+                })
+                .active(|element| element.bg(theme.overlay_strong))
+        })
         .on_click(move |_, _, cx| {
             let _ = insulator.update(cx, |this, cx| {
                 this.pull_request_detail = Some(request.clone());
-                this.pull_request_detail_loading = !request.body_loaded;
                 this.pull_request_detail_tab = PullRequestDetailTab::Summary;
-                if !request.body_loaded {
-                    this.ensure_pull_request_body(request.clone(), cx);
-                }
+                this.pull_request_detail_scroll_handle.set_offset(Point::default());
+                this.ensure_pull_request_body(request.clone(), cx);
                 this.ensure_pull_request_commits(request.clone(), cx);
+                this.ensure_pull_request_checks(request.clone(), cx);
+                this.ensure_pull_request_comments(request.clone(), cx);
+                this.ensure_pull_request_diff(request.clone(), cx);
                 this.set_right_panel_visible(true, cx);
             });
         })
-        .px(px(12.0))
-        .py(px(12.0))
-        .border_b_1()
-        .border_color(theme.border)
-        .flex()
-        .items_start()
-        .gap(px(12.0))
+        .child(
+            div()
+                .w(px(3.0))
+                .h(px(28.0))
+                .rounded(px(2.0))
+                .flex_none()
+                .bg(if is_selected {
+                    theme.accent
+                } else {
+                    gpui::transparent_black()
+                }),
+        )
         .child(icon("icons/git-branch.svg", 17.0, state_color))
         .child(
             div()
@@ -836,10 +1328,15 @@ fn render_pull_request_row(
                 .flex_1()
                 .flex()
                 .flex_col()
-                .gap(px(5.0))
+                .gap(px(4.0))
                 .child(
                     div()
                         .text_size(sp(14.0))
+                        .font_weight(if is_selected {
+                            FontWeight::MEDIUM
+                        } else {
+                            FontWeight::NORMAL
+                        })
                         .text_color(theme.text)
                         .child(SharedString::from(format!(
                             "{}  #{}",
@@ -865,11 +1362,11 @@ fn render_pull_request_row(
         .child(
             div()
                 .flex_none()
-                .px(px(8.0))
-                .py(px(3.0))
+                .px(px(9.0))
+                .py(px(3.5))
                 .rounded(px(999.0))
                 .bg(state_color.opacity(if theme.is_dark { 0.18 } else { 0.12 }))
-                .text_size(sp(12.0))
+                .text_size(sp(11.5))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(state_color)
                 .child(SharedString::from(entry.state.to_ascii_uppercase())),
@@ -901,10 +1398,35 @@ impl Insulator {
             request.url.clone()
         };
         let body = without_html_comments(&request.body);
-        let description = if self.pull_request_detail_loading {
+        let loading_style = ShimmerStyle::new()
+            .duration(Duration::from_secs(3))
+            .highlight_color(cx.theme().primary)
+            .spread(0.45)
+            .reverse(true)
+            .once(false);
+
+        let is_body_loading = !request.body_loaded
+            || self.pull_request_detail_loading.contains(&commit_key);
+
+        let description = if is_body_loading {
             div()
-                .text_color(theme.text_secondary)
-                .child("Loading description...")
+                .w_full()
+                .py(px(60.0))
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(14.0))
+                .child(crate::app::components::dot_matrix_loader(
+                    theme.text_secondary,
+                    20.0,
+                ))
+                .child(
+                    ShimmerText::new("Loading description…")
+                        .with_shimmer_style(loading_style)
+                        .text_size(sp(13.5))
+                        .text_color(theme.text_secondary),
+                )
                 .into_any_element()
         } else if body.is_empty() {
             div()
@@ -970,45 +1492,76 @@ impl Insulator {
                         .text_color(theme.text_secondary)
                         .child(description),
                 )
+                .child(self.render_pull_request_checks_section(&commit_key, &theme))
+                .child(self.render_pull_request_comments_section(
+                    &commit_key,
+                    request.clone(),
+                    &theme,
+                    cx,
+                ))
                 .into_any_element(),
             PullRequestDetailTab::Commits => {
-                let content = if self.pull_request_commits_loading {
+                let is_commits_loading = self.pull_request_commits_loading.contains(&commit_key)
+                    || (!self.pull_request_commits.contains_key(&commit_key)
+                        && self.pull_request_commits_error.is_none());
+                let content = if is_commits_loading {
                     div()
-                        .text_color(theme.text_secondary)
-                        .child("Loading commits...")
+                        .w_full()
+                        .py(px(60.0))
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(14.0))
+                        .child(crate::app::components::dot_matrix_loader(
+                            theme.text_secondary,
+                            20.0,
+                        ))
+                        .child(
+                            ShimmerText::new("Loading commits…")
+                                .with_shimmer_style(loading_style)
+                                .text_size(sp(13.5))
+                                .text_color(theme.text_secondary),
+                        )
                 } else if let Some(error) = &self.pull_request_commits_error {
                     div()
                         .text_color(theme.danger)
                         .child(SharedString::from(error.clone()))
                 } else if let Some(commits) = commits {
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(10.0))
-                        .children(commits.iter().map(|commit| {
-                            div()
-                                .px(px(10.0))
-                                .py(px(9.0))
-                                .rounded(px(7.0))
-                                .bg(theme.overlay)
-                                .child(
-                                    div()
-                                        .text_size(sp(13.0))
-                                        .text_color(theme.text)
-                                        .child(SharedString::from(commit.message.clone())),
-                                )
-                                .child(
-                                    div()
-                                        .mt(px(4.0))
-                                        .text_size(sp(11.0))
-                                        .text_color(theme.text_secondary)
-                                        .child(SharedString::from(format!(
-                                            "{}  ·  {}",
-                                            &commit.oid[..commit.oid.len().min(7)],
-                                            commit.authored_at
-                                        ))),
-                                )
-                        }))
+                    if commits.is_empty() {
+                        div()
+                            .text_color(theme.text_secondary)
+                            .child("No commits found.")
+                    } else {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(10.0))
+                            .children(commits.iter().map(|commit| {
+                                div()
+                                    .px(px(10.0))
+                                    .py(px(9.0))
+                                    .rounded(px(7.0))
+                                    .bg(theme.overlay)
+                                    .child(
+                                        div()
+                                            .text_size(sp(13.0))
+                                            .text_color(theme.text)
+                                            .child(SharedString::from(commit.message.clone())),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt(px(4.0))
+                                            .text_size(sp(11.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(SharedString::from(format!(
+                                                "{}  ·  {}",
+                                                &commit.oid[..commit.oid.len().min(7)],
+                                                commit.authored_at
+                                            ))),
+                                    )
+                            }))
+                    }
                 } else {
                     div()
                         .text_color(theme.text_secondary)
@@ -1017,10 +1570,28 @@ impl Insulator {
                 content.into_any_element()
             }
             PullRequestDetailTab::Code => {
-                if self.pull_request_diffs_loading {
+                let is_diffs_loading = self.pull_request_diffs_loading.contains(&commit_key)
+                    || (!self.pull_request_diffs.contains_key(&commit_key)
+                        && self.pull_request_diffs_error.is_none());
+                if is_diffs_loading {
                     div()
-                        .text_color(theme.text_secondary)
-                        .child("Loading changes...")
+                        .size_full()
+                        .py(px(80.0))
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(14.0))
+                        .child(crate::app::components::dot_matrix_loader(
+                            theme.text_secondary,
+                            22.0,
+                        ))
+                        .child(
+                            ShimmerText::new("Loading changes…")
+                                .with_shimmer_style(loading_style)
+                                .text_size(sp(13.5))
+                                .text_color(theme.text_secondary),
+                        )
                         .into_any_element()
                 } else if let Some(error) = &self.pull_request_diffs_error {
                     div()
@@ -1132,11 +1703,13 @@ impl Insulator {
             .child(
                 div()
                     .flex_none()
-                    .h(px(52.0))
-                    .px(px(12.0))
+                    .h(px(46.0))
+                    .px(px(16.0))
+                    .border_b_1()
+                    .border_color(theme.border)
                     .flex()
                     .items_center()
-                    .gap(px(4.0))
+                    .gap(px(6.0))
                     .children(PullRequestDetailTab::ALL.into_iter().map(|tab| {
                         let active = tab == selected_tab;
                         let detail_entity = detail_entity.clone();
@@ -1147,21 +1720,41 @@ impl Insulator {
                                 tab.label()
                             )))
                             .tab_index(0)
-                            .h(px(34.0))
-                            .px(px(10.0))
-                            .rounded(px(8.0))
+                            .h(px(32.0))
+                            .px(px(12.0))
+                            .rounded(px(7.0))
                             .flex()
                             .items_center()
+                            .justify_center()
+                            .cursor_default()
+                            .text_size(sp(13.0))
+                            .font_weight(if active {
+                                FontWeight::MEDIUM
+                            } else {
+                                FontWeight::NORMAL
+                            })
                             .text_color(if active {
                                 theme.text
                             } else {
                                 theme.text_secondary
                             })
-                            .when(active, |element| element.bg(theme.overlay))
-                            .hover(|element| element.bg(theme.overlay))
+                            .border_1()
+                            .border_color(if active {
+                                theme.border
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .when(active, |element| element.bg(theme.overlay_strong))
+                            .when(!active, |element| {
+                                element.hover(|element| {
+                                    element.bg(theme.overlay).text_color(theme.text)
+                                })
+                            })
+                            .active(|element| element.bg(theme.overlay_strong))
                             .on_click(move |_, _, cx| {
                                 let _ = detail_entity.update(cx, |this, cx| {
                                     this.pull_request_detail_tab = tab;
+                                    this.pull_request_detail_scroll_handle.set_offset(Point::default());
                                     if tab == PullRequestDetailTab::Commits {
                                         this.ensure_pull_request_commits(
                                             request_for_tab.clone(),
@@ -1186,13 +1779,25 @@ impl Insulator {
                     .child(detail_body)
             } else {
                 div()
-                    .id("pull-request-detail-scroll")
+                    .id("pull-request-detail-scroll-pane")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .px(px(24.0))
-                    .py(px(24.0))
-                    .child(detail_body)
+                    .relative()
+                    .child(
+                        div()
+                            .id("pull-request-detail-scroll")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.pull_request_detail_scroll_handle)
+                            .px(px(24.0))
+                            .py(px(24.0))
+                            .pb(px(48.0))
+                            .child(detail_body),
+                    )
+                    .child(scrollbar::vertical(
+                        &self.pull_request_detail_scroll_handle,
+                        &self.pull_request_detail_scrollbar,
+                    ))
             })
     }
 }

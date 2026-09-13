@@ -1,6 +1,8 @@
 use std::sync::{OnceLock, RwLock};
 
-use gpui::{App, Global, Hsla, Rems, Window, WindowAppearance, hsla, rems, rgb, transparent_black};
+use gpui::{
+    App, Context, Global, Hsla, Rems, Window, WindowAppearance, hsla, rems, rgb, transparent_black,
+};
 
 pub use insulator_client::theme::{ColorTheme, ThemePreference};
 pub use insulator_protocol::theme::WindowStyle;
@@ -90,6 +92,7 @@ pub struct Theme {
 
     /// Brand coral. Logo, caret, live-activity pulses — nothing structural.
     pub accent: Hsla,
+    pub primary: Hsla,
     pub resize_handle: Hsla,
     /// Meter fills in the usage panel. Quota-meter blue by convention;
     /// warning/danger take over as a lane fills.
@@ -122,6 +125,29 @@ impl Theme {
             Self::dark()
         }
     }
+
+    pub fn primary(&self) -> Hsla {
+        self.primary
+    }
+}
+
+pub trait ActiveTheme {
+    fn theme(&self) -> Theme;
+}
+
+impl ActiveTheme for App {
+    fn theme(&self) -> Theme {
+        Theme::current(self)
+    }
+}
+
+impl<T> ActiveTheme for Context<'_, T> {
+    fn theme(&self) -> Theme {
+        Theme::current(self)
+    }
+}
+
+impl Theme {
 
     pub fn from_color_theme(color_theme: ColorTheme) -> Self {
         // Preserve the original Insulator graphite palettes as selectable themes,
@@ -269,6 +295,7 @@ impl Theme {
             text_tertiary: rgb(muted).into(),
             text_ghost: rgb(muted).into(),
             accent: rgb(accent).into(),
+            primary: rgb(accent).into(),
             resize_handle: rgb(accent).into(),
             gauge: rgb(accent).into(),
             selection: rgb(accent).into(),
@@ -315,6 +342,7 @@ impl Theme {
             text_ghost: rgb(0x575757).into(),
 
             accent: rgb(0xE2795B).into(),
+            primary: rgb(0xE2795B).into(),
             resize_handle: rgb(0x3B82F6).into(),
             gauge: rgb(0x3B82F6).into(),
 
@@ -364,6 +392,7 @@ impl Theme {
             text_ghost: rgb(0xA4A4A4).into(),
 
             accent: rgb(0xC85F44).into(),
+            primary: rgb(0xC85F44).into(),
             resize_handle: rgb(0x2563EB).into(),
             gauge: rgb(0x2563EB).into(),
 
