@@ -676,7 +676,9 @@ impl Insulator {
                 .await;
             let _ = entity.update(cx, |this, cx| {
                 this.pull_request_detail_loading.remove(&key);
-                if let Ok((body, url)) = result {
+                match result {
+                    Ok((body, url)) => {
+                    this.pull_request_body_error.remove(&key);
                     if let Some(entry) = this.pull_requests.iter_mut().find(|entry| {
                         entry.repository == key.0 && entry.number == key.1
                     }) {
@@ -692,6 +694,10 @@ impl Insulator {
                         detail.body = body;
                         detail.body_loaded = true;
                         detail.url = url;
+                    }
+                    }
+                    Err(error) => {
+                        this.pull_request_body_error.insert(key, error.to_string());
                     }
                 }
                 cx.notify();
@@ -786,6 +792,8 @@ impl Insulator {
             return;
         }
         self.pull_request_comment_posting = true;
+        let submitted_body = body.clone();
+        let submitted_key = request_key.clone();
         let entity = cx.entity().downgrade();
         let request_for_load = request.clone();
         cx.spawn(async move |_, cx| {
@@ -796,7 +804,14 @@ impl Insulator {
             let _ = entity.update(cx, |this, cx| {
                 this.pull_request_comment_posting = false;
                 if result.is_ok() {
-                    this.pull_request_comment_input.update(cx, |input, cx| input.clear(cx));
+                    let still_current_pr = this
+                        .pull_request_detail
+                        .as_ref()
+                        .is_some_and(|detail| (detail.repository.clone(), detail.number) == submitted_key);
+                    let still_submitted = this.pull_request_comment_input.read(cx).content().trim() == submitted_body;
+                    if still_current_pr && still_submitted {
+                        this.pull_request_comment_input.update(cx, |input, cx| input.clear(cx));
+                    }
                     this.pull_request_comments.remove(&(request.repository.clone(), request.number));
                     this.ensure_pull_request_comments(request.clone(), cx);
                 } else if let Err(error) = result {
@@ -1379,7 +1394,6 @@ fn render_pull_request_row(
                 this.ensure_pull_request_commits(request.clone(), cx);
                 this.ensure_pull_request_checks(request.clone(), cx);
                 this.ensure_pull_request_comments(request.clone(), cx);
-                this.ensure_pull_request_diff(request.clone(), cx);
                 this.set_right_panel_visible(true, cx);
             });
         })
@@ -1480,9 +1494,12 @@ impl Insulator {
             .once(false);
 
         let is_body_loading = !request.body_loaded
+            && !self.pull_request_body_error.contains_key(&commit_key)
             || self.pull_request_detail_loading.contains(&commit_key);
 
-        let description = if is_body_loading {
+        let description = if let Some(error) = self.pull_request_body_error.get(&commit_key) {
+            div().text_color(theme.danger).child(SharedString::from(error.clone()))
+        } else if is_body_loading {
             div()
                 .w_full()
                 .py(px(60.0))

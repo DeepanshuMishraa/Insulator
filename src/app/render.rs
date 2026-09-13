@@ -94,7 +94,7 @@ impl Insulator {
                 let maximum = SIDEBAR_MAX_WIDTH
                     .min(f32::from(window.viewport_size().width) - MAIN_PANEL_MIN_WIDTH - right_panel_width)
                     .max(SIDEBAR_MIN_WIDTH);
-                (self.sidebar_width, SIDEBAR_MIN_WIDTH, maximum, self.sidebar_width + delta)
+                (self.sidebar_width, SIDEBAR_MIN_WIDTH, maximum, sidebar_width + delta)
             }
             PanelResizeTarget::RightPanel => {
                 let maximum = RIGHT_PANEL_MAX_WIDTH
