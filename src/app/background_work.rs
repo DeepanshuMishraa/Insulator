@@ -874,7 +874,7 @@ impl Insulator {
             )
         });
         let can_open_pull_request = has_non_default_branch
-            && snapshot.is_some_and(|snapshot| !snapshot.pull_request_open);
+            && snapshot.is_some_and(|snapshot| snapshot.pull_request_open == Some(false));
         let environment = Some(EnvironmentSummary {
             commit_status: self.commit_operation_status_label(),
             pull_request_status: self.pull_request_operation_status_label(),

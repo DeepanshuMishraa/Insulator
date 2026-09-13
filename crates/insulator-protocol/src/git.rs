@@ -18,7 +18,9 @@ pub struct BranchSnapshot {
     pub current: Option<String>,
     pub detached_head: Option<String>,
     pub default_branch: Option<String>,
-    pub pull_request_open: bool,
+    /// `None` means the GitHub lookup failed or timed out.
+    #[serde(default)]
+    pub pull_request_open: Option<bool>,
     pub branches: Vec<BranchEntry>,
     pub additions: u64,
     pub deletions: u64,

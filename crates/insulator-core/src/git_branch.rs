@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::process::{Output, Stdio};
+use std::process::{Child, Output, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -114,7 +114,7 @@ pub fn inspect(cwd: &Path) -> anyhow::Result<Option<BranchSnapshot>> {
         .or_else(|| current.clone());
     let pull_request_open = current
         .as_deref()
-        .is_some_and(|branch| has_open_pull_request(cwd, branch));
+        .and_then(|branch| has_open_pull_request(cwd, branch));
     let (additions, deletions) = worktree_line_counts(&repository);
 
     Ok(Some(BranchSnapshot {
@@ -316,13 +316,13 @@ fn optional_stdout(cwd: &Path, args: &[&str]) -> anyhow::Result<Option<String>> 
     bail!("{}", command_error(&output))
 }
 
-fn has_open_pull_request(cwd: &Path, branch: &str) -> bool {
+fn has_open_pull_request(cwd: &Path, branch: &str) -> Option<bool> {
     let key = (cwd.to_path_buf(), branch.to_owned());
     let cache = OPEN_PULL_REQUEST_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(mut cache) = cache.lock() {
         cache.retain(|_, (checked_at, _)| checked_at.elapsed() < PULL_REQUEST_CACHE_TTL);
         if let Some((_, open)) = cache.get(&key) {
-            return *open;
+            return Some(*open);
         }
     }
 
@@ -335,39 +335,95 @@ fn has_open_pull_request(cwd: &Path, branch: &str) -> bool {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let open = crate::command_env::spawn(&mut command)
+    prepare_pull_request_process_group(&mut command);
+    let result = crate::command_env::spawn(&mut command)
         .ok()
-        .and_then(|mut child| {
-            let deadline = Instant::now() + PULL_REQUEST_LOOKUP_TIMEOUT;
-            loop {
-                match child.try_wait() {
-                    Ok(Some(status)) => {
-                        if !status.success() {
-                            return None;
-                        }
-                        return child.wait_with_output().ok();
-                    }
-                    Ok(None) if Instant::now() < deadline => {
-                        thread::sleep(Duration::from_millis(25));
-                    }
-                    _ => {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return None;
-                    }
-                }
-            }
-        })
-        .is_some_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "OPEN");
+        .and_then(read_timed_pull_request_output)
+        .and_then(|output| {
+            output
+                .status
+                .success()
+                .then(|| String::from_utf8_lossy(&output.stdout).trim() == "OPEN")
+        });
 
-    if open {
+    if let Some(open) = result {
         if let Ok(mut cache) = cache.lock() {
             cache.retain(|_, (checked_at, _)| checked_at.elapsed() < PULL_REQUEST_CACHE_TTL);
-            cache.insert(key, (Instant::now(), true));
+            cache.insert(key, (Instant::now(), open));
         }
     }
-    open
+    result
 }
+
+fn read_timed_pull_request_output(mut child: Child) -> Option<Output> {
+    let stdout = child.stdout.take()?;
+    let stderr = child.stderr.take()?;
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = std::io::BufReader::new(stdout).read_to_end(&mut bytes);
+        bytes
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = std::io::BufReader::new(stderr).read_to_end(&mut bytes);
+        bytes
+    });
+    let deadline = Instant::now() + PULL_REQUEST_LOOKUP_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(25));
+            }
+            _ => {
+                terminate_process_group(&mut child);
+                return None;
+            }
+        }
+    };
+    // A helper may inherit either pipe after gh itself exits. Kill the
+    // dedicated process group before joining readers so EOF cannot extend the
+    // lookup beyond its deadline.
+    terminate_process_group(&mut child);
+    let stdout = stdout_reader.join().ok()?;
+    let stderr = stderr_reader.join().ok()?;
+    Some(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn terminate_process_group(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        if let Ok(pid) = i32::try_from(child.id()) {
+            // The child is placed in its own process group before spawning.
+            unsafe {
+                libc::killpg(pid, libc::SIGKILL);
+            }
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+fn prepare_pull_request_process_group(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt as _;
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn prepare_pull_request_process_group(_command: &mut std::process::Command) {}
 
 fn command_error(output: &Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
