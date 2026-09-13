@@ -4,10 +4,14 @@
 //! from the background executor; render paths consume only the cached
 //! [`BranchSnapshot`] values they return.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::Output;
+use std::sync::{Mutex, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::ffi::OsString;
@@ -19,6 +23,11 @@ const MAX_UNTRACKED_FILES: usize = 2_048;
 const MAX_UNTRACKED_FILE_BYTES: u64 = 8 * 1_024 * 1_024;
 const MAX_UNTRACKED_TOTAL_BYTES: u64 = 32 * 1_024 * 1_024;
 const BINARY_PROBE_BYTES: usize = 8_000;
+const PULL_REQUEST_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
+const PULL_REQUEST_CACHE_TTL: Duration = Duration::from_secs(30);
+
+static OPEN_PULL_REQUEST_CACHE: OnceLock<Mutex<HashMap<(PathBuf, String), (Instant, bool)>>> =
+    OnceLock::new();
 
 pub use insulator_protocol::git::{BranchEntry, BranchSnapshot};
 
@@ -308,16 +317,50 @@ fn optional_stdout(cwd: &Path, args: &[&str]) -> anyhow::Result<Option<String>> 
 }
 
 fn has_open_pull_request(cwd: &Path, branch: &str) -> bool {
-    let output = crate::command_env::plain_command("gh")
-        .args(["pr", "view", "--head", branch, "--json", "state", "--jq", ".state"])
+    let key = (cwd.to_path_buf(), branch.to_owned());
+    let cache = OPEN_PULL_REQUEST_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(cache) = cache.lock()
+        && let Some((checked_at, open)) = cache.get(&key)
+        && checked_at.elapsed() < PULL_REQUEST_CACHE_TTL
+    {
+        return *open;
+    }
+
+    let mut command = crate::command_env::command("gh");
+    command
+        .args(["pr", "view", branch, "--json", "state", "--jq", ".state"])
         .current_dir(cwd)
         .env("GH_PROMPT_DISABLED", "1")
-        .env("GH_PAGER", "cat")
-        .output();
-    output
+        .env("GH_PAGER", "cat");
+    let open = crate::command_env::spawn(&mut command)
         .ok()
-        .filter(|output| output.status.success())
-        .is_some_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "OPEN")
+        .and_then(|mut child| {
+            let deadline = Instant::now() + PULL_REQUEST_LOOKUP_TIMEOUT;
+            loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        if !status.success() {
+                            return None;
+                        }
+                        return child.wait_with_output().ok();
+                    }
+                    Ok(None) if Instant::now() < deadline => {
+                        thread::sleep(Duration::from_millis(25));
+                    }
+                    _ => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return None;
+                    }
+                }
+            }
+        })
+        .is_some_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "OPEN");
+
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(key, (Instant::now(), open));
+    }
+    open
 }
 
 fn command_error(output: &Output) -> String {

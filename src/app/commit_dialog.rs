@@ -148,7 +148,6 @@ impl Insulator {
             workspace: workspace.clone(),
             pending: CommitPending::PullRequest,
         });
-        self.show_success_toast(tr!("pull_request.opening"));
         cx.notify();
 
         let workspace_client = insulator_client::WorkspaceClient::new(self.daemon.client());

@@ -29,7 +29,7 @@ pub use insulator_protocol::persistence::{
 use insulator_protocol::theme::{ColorTheme, ThemePreference, WindowStyle};
 
 const STATE_VERSION: u32 = 5;
-const APP_STATE_VERSION: u32 = 2;
+const APP_STATE_VERSION: u32 = 1;
 
 pub const DEFAULT_SIDEBAR_WIDTH: f32 = 252.0;
 pub const DEFAULT_RIGHT_PANEL_WIDTH: f32 = 460.0;
