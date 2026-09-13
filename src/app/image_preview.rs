@@ -56,28 +56,22 @@ impl Insulator {
         if !insulator_protocol::blob::is_reference(reference) && !attachment_reference {
             return None;
         }
-        if let Some(state) = self.remote_images.borrow().get(reference) {
-            return match state {
-                RemoteImageState::Ready(image) => Some(image.clone()),
-                RemoteImageState::Loading | RemoteImageState::Unavailable => None,
-            };
-        }
+        let cache_key = reference.to_owned();
+        let token = match self.remote_images.borrow_mut().read(&cache_key) {
+            Query::Ready(image) => return image.as_ref().clone(),
+            Query::Pending => return None,
+            Query::Missing(token) => token,
+        };
 
         let Some(format) = name
             .and_then(image_format_for_name)
             .or_else(|| image_format_for_name(reference))
         else {
-            self.remote_images
-                .borrow_mut()
-                .insert(reference.to_owned(), RemoteImageState::Unavailable);
+            self.remote_images.borrow_mut().fulfill(token, None);
             return None;
         };
 
-        self.remote_images
-            .borrow_mut()
-            .insert(reference.to_owned(), RemoteImageState::Loading);
-        let cache_key = reference.to_owned();
-        let fetch_reference = cache_key.clone();
+        let fetch_reference = cache_key;
         let daemon_path = daemon_path.map(Path::to_path_buf);
         let daemon = self.daemon.clone();
         cx.spawn(async move |insulator, cx| {
@@ -93,11 +87,9 @@ impl Insulator {
                 })
                 .await;
             let _ = insulator.update(cx, |insulator, cx| {
-                insulator.remote_images.borrow_mut().insert(
-                    cache_key,
-                    image.map_or(RemoteImageState::Unavailable, RemoteImageState::Ready),
-                );
-                cx.notify();
+                if insulator.remote_images.borrow_mut().fulfill(token, image) {
+                    cx.notify();
+                }
             });
         })
         .detach();

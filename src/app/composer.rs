@@ -3154,7 +3154,7 @@ impl Insulator {
             ) {
                 self.remote_images
                     .borrow_mut()
-                    .insert(reference.clone(), RemoteImageState::Ready(image.clone()));
+                    .insert(reference.clone(), Some(image.clone()));
             }
         }
         let attachments = self

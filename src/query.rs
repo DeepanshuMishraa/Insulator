@@ -137,6 +137,21 @@ impl<K: Clone + Eq + Hash, V> QueryCache<K, V> {
         }
     }
 
+    /// Stores a value without a preceding fetch, replacing any in-flight slot.
+    pub fn insert(&mut self, key: K, value: V) {
+        self.generation += 1;
+        self.clock += 1;
+        self.entries.insert(
+            key,
+            Cached {
+                slot: Slot::Ready(Arc::new(value)),
+                generation: self.generation,
+                last_used: self.clock,
+            },
+        );
+        self.evict_over_capacity();
+    }
+
     /// Stores a fetched value. Returns whether it was accepted — a token from
     /// before an invalidation is dropped, so stale results cannot win.
     pub fn fulfill(&mut self, token: FetchToken<K>, value: V) -> bool {
@@ -302,6 +317,30 @@ mod tests {
         assert!(cache.peek(&"a").is_some(), "recently read survives");
         assert!(cache.peek(&"c").is_some());
         assert!(cache.peek(&"b").is_none(), "coldest was evicted");
+    }
+
+    #[test]
+    fn direct_inserts_stay_bounded() {
+        let mut cache = QueryCache::new(2);
+        cache.insert("a", 1);
+        cache.insert("b", 2);
+        cache.insert("c", 3);
+
+        assert_eq!(cache.len(), 2);
+        assert!(cache.peek(&"a").is_none());
+        assert_eq!(*cache.peek(&"c").unwrap(), 3);
+    }
+
+    #[test]
+    fn direct_insert_supersedes_an_in_flight_fetch() {
+        let mut cache = QueryCache::new(2);
+        let Query::Missing(token) = cache.read(&"a") else {
+            panic!()
+        };
+        cache.insert("a", "new");
+
+        assert!(!cache.fulfill(token, "old"));
+        assert_eq!(*cache.peek(&"a").unwrap(), "new");
     }
 
     #[test]

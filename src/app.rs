@@ -163,6 +163,9 @@ const MAX_CACHED_MESSAGE_SOURCE_BYTES: usize = 512 * 1024;
 /// practice. 8 is generous and caps the tree cache, the only large one, at a
 /// few hundred KB.
 const MAX_CACHED_WORKSPACES: usize = 8;
+/// Decoded screenshots are several MiB each. Keep enough for the visible
+/// transcript without retaining every image viewed during a long-running app.
+const MAX_CACHED_REMOTE_IMAGES: usize = 16;
 const STREAM_REMEASURE_TAIL_ROWS: usize = 3;
 /// Top-level markdown blocks the live reasoning peek renders, counted from
 /// the tail. The peek is a 400 px viewport pinned to the newest thought, so
@@ -340,13 +343,6 @@ struct ComposerAttachment {
     is_image: bool,
     /// Daemon-issued durable reference retained by task persistence.
     blob_reference: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-enum RemoteImageState {
-    Loading,
-    Ready(Arc<gpui::Image>),
-    Unavailable,
 }
 
 /// One accepted composer submission. `prompt` preserves the composer and
@@ -1429,7 +1425,7 @@ pub struct Insulator {
     /// In-memory GPUI images for daemon-owned bytes. A missing entry schedules
     /// one background fetch only when a visible row asks to render it; the
     /// desktop never creates another attachment file.
-    remote_images: RefCell<HashMap<String, RemoteImageState>>,
+    remote_images: RefCell<QueryCache<String, Option<Arc<gpui::Image>>>>,
     /// Coalesced edge trigger for provider and background result queues. The
     /// payloads stay in their typed channels; this channel only wakes the UI.
     event_wake_tx: smol::channel::Sender<()>,
@@ -1531,7 +1527,10 @@ pub struct Insulator {
     pull_request_diffs_error: HashMap<(String, u64), String>,
     pull_request_markdown: RefCell<Option<((String, u64), MarkdownView)>>,
     pull_requests_search: Entity<TextInput>,
-    pull_requests_scroll_handle: ScrollHandle,
+    /// Virtualized filtered PR rows. GitHub accounts can return hundreds of
+    /// requests, so frames must only build what is visible.
+    pull_requests_list_state: ListState,
+    pull_requests_rows: RefCell<Vec<usize>>,
     pull_requests_scrollbar: Rc<ScrollbarState>,
     pull_request_detail_scroll_handle: ScrollHandle,
     pull_request_detail_scrollbar: Rc<ScrollbarState>,
@@ -2175,7 +2174,6 @@ impl Insulator {
         let mut state = store.load_or_fresh(cwd);
         let cached_pull_requests = pull_requests::load_cached_pull_requests();
         let cached_commits = pull_requests::cached_commits(&cached_pull_requests);
-        let cached_diffs = pull_requests::cached_diffs(&cached_pull_requests);
         let home_directory = crate::projectless::home_directory();
         state.apply_daemon_settings(daemon.settings());
         if let Err(error) = daemon.update_settings(state.daemon_settings()) {
@@ -2546,6 +2544,7 @@ impl Insulator {
         let transcript_rows = ListState::new(0, ListAlignment::Bottom, px(2048.0));
         let anchored_transcript_rows = ListState::new(0, ListAlignment::Top, px(2048.0));
         let sidebar_list_state = ListState::new(0, ListAlignment::Top, px(256.0));
+        let pull_requests_list_state = ListState::new(0, ListAlignment::Top, px(256.0));
         let usage_projects_list = ListState::new(0, ListAlignment::Top, px(256.0));
         let branch_picker_list_state = ListState::new(0, ListAlignment::Top, px(152.0));
         let transcript_is_scrolled = Rc::new(Cell::new(false));
@@ -3243,7 +3242,7 @@ impl Insulator {
                 composer_attachments,
                 image_preview: None,
                 image_preview_generation: 0,
-                remote_images: RefCell::new(HashMap::new()),
+                remote_images: RefCell::new(QueryCache::new(MAX_CACHED_REMOTE_IMAGES)),
                 event_wake_tx,
                 task_state_sync_tx,
                 task_state_sync_events,
@@ -3298,12 +3297,13 @@ impl Insulator {
                 pull_request_comment_input,
                 pull_request_comment_posting: false,
                 pull_request_collapsed_comments: HashSet::new(),
-                pull_request_diffs: cached_diffs,
+                pull_request_diffs: HashMap::new(),
                 pull_request_diffs_loading: HashSet::new(),
                 pull_request_diffs_error: HashMap::new(),
                 pull_request_markdown: RefCell::new(None),
                 pull_requests_search,
-                pull_requests_scroll_handle: ScrollHandle::new(),
+                pull_requests_list_state,
+                pull_requests_rows: RefCell::new(Vec::new()),
                 pull_requests_scrollbar: ScrollbarState::new(),
                 pull_request_detail_scroll_handle: ScrollHandle::new(),
                 pull_request_detail_scrollbar: ScrollbarState::new(),
@@ -3512,8 +3512,6 @@ impl Insulator {
             // The skill library too: the Skills settings page must open onto
             // data, not a scan.
             this.ensure_skills_catalog(false, cx);
-            // Refresh GitHub pull requests at launch while cached rows remain visible.
-            this.ensure_pull_requests(false, cx);
             // And the header's "open project in app" targets, so its menu
             // lists installed apps and icons without ever probing on a frame.
             this.detect_open_in_apps(cx);

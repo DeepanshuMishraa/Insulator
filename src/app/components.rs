@@ -100,7 +100,7 @@ impl RenderOnce for DotMatrixLoader {
                     .child(grid)
                     .into_any_element()
             })
-            .every(1),
+            .every(2),
         )
     }
 }

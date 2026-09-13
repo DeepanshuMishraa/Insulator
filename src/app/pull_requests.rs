@@ -140,6 +140,7 @@ struct GhRepository {
 }
 
 const GH_FIELDS: &str = "number,title,author,body,state,updatedAt,url,repository";
+const PULL_REQUEST_ROW_HEIGHT: f32 = 60.0;
 
 fn load_owned_repository_pull_requests() -> anyhow::Result<Vec<GhPullRequest>> {
     let login = std::process::Command::new("gh")
@@ -261,30 +262,6 @@ pub(super) fn cached_commits(
         .collect()
 }
 
-pub(super) fn cached_diffs(
-    entries: &[PullRequest],
-) -> HashMap<(String, u64), Arc<ReviewDiffSnapshot>> {
-    entries
-        .iter()
-        .filter_map(|entry| {
-            entry.cached_diff.as_ref().map(|patch| {
-                let snapshot = crate::review_diff::parse_collected(
-                    ReviewDiffSource::Committed,
-                    "",
-                    patch,
-                    true,
-                );
-                if snapshot.files.is_empty() {
-                    None
-                } else {
-                    Some(((entry.repository.clone(), entry.number), Arc::new(snapshot)))
-                }
-            })
-        })
-        .flatten()
-        .collect()
-}
-
 fn preserve_cached_details(entries: &mut [PullRequest], cached: &[PullRequest]) {
     let cached = cached
         .iter()
@@ -349,6 +326,18 @@ fn load_pull_request_body(request: &PullRequest) -> anyhow::Result<(String, Stri
 }
 
 fn load_pull_request_diff(request: &PullRequest) -> anyhow::Result<(ReviewDiffSnapshot, String)> {
+    if let Some(patch) = request.cached_diff.as_ref() {
+        let snapshot = crate::review_diff::parse_collected(
+            ReviewDiffSource::Committed,
+            "",
+            patch,
+            true,
+        );
+        if !snapshot.files.is_empty() {
+            return Ok((snapshot, patch.clone()));
+        }
+    }
+
     #[derive(Deserialize)]
     struct File {
         filename: String,
@@ -1145,24 +1134,81 @@ impl Insulator {
         let entries = self
             .pull_requests
             .iter()
-            .filter(|entry| match selected_tab {
+            .enumerate()
+            .filter(|(_, entry)| match selected_tab {
                 PullRequestTab::All => true,
                 PullRequestTab::Open => entry.state == "open",
                 PullRequestTab::Closed => entry.state == "closed",
                 PullRequestTab::Merged => entry.state == "merged",
             })
-            .filter(|entry| {
+            .filter(|(_, entry)| {
                 query.is_empty()
                     || entry.title.to_ascii_lowercase().contains(&query)
                     || entry.repository.to_ascii_lowercase().contains(&query)
             })
+            .map(|(index, _)| index)
             .collect::<Vec<_>>();
+        self.sync_pull_request_rows(&entries);
         let search = TextField::new("pull-requests-search", self.pull_requests_search.clone())
             .icon("icons/search.svg", 15.0)
             .flex_1()
             .max_w(px(760.0));
         let pull_requests = cx.entity().downgrade();
         let refresh = cx.entity().downgrade();
+        let body = if self.pull_requests_loading {
+            let loading_style = ShimmerStyle::new()
+                .duration(Duration::from_secs(3))
+                .highlight_color(cx.theme().primary)
+                .spread(0.45)
+                .reverse(true)
+                .once(false);
+            div()
+                .size_full()
+                .py(px(80.0))
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(14.0))
+                .child(crate::app::components::dot_matrix_loader(
+                    theme.text_secondary,
+                    22.0,
+                ))
+                .child(
+                    ShimmerText::new("Loading pull requests…")
+                        .with_shimmer_style(loading_style)
+                        .text_size(sp(14.0))
+                        .text_color(theme.text_secondary),
+                )
+                .into_any_element()
+        } else if let Some(error) = &self.pull_requests_error {
+            div()
+                .px(px(32.0))
+                .py(px(40.0))
+                .text_color(theme.danger)
+                .child(SharedString::from(error.clone()))
+                .into_any_element()
+        } else if entries.is_empty() {
+            div()
+                .px(px(32.0))
+                .py(px(40.0))
+                .text_color(theme.text_secondary)
+                .child(format!(
+                    "No {} pull requests found",
+                    selected_tab.label().to_lowercase()
+                ))
+                .into_any_element()
+        } else {
+            let entity = cx.entity().downgrade();
+            list(self.pull_requests_list_state.clone(), move |row, _window, cx| {
+                entity
+                    .upgrade()
+                    .map(|entity| entity.update(cx, |this, cx| this.pull_request_row(row, cx)))
+                    .unwrap_or_else(|| div().into_any_element())
+            })
+            .size_full()
+            .into_any_element()
+        };
 
         div()
             .size_full()
@@ -1223,7 +1269,10 @@ impl Insulator {
                             .on_click(move |_, _, cx| {
                                 let _ = click_pull_requests.update(cx, |this, cx| {
                                     this.pull_requests_tab = tab;
-                                    this.pull_requests_scroll_handle.set_offset(Point::default());
+                                    this.pull_requests_list_state.scroll_to(ListOffset {
+                                        item_ix: 0,
+                                        offset_in_item: px(0.0),
+                                    });
                                     cx.notify();
                                 });
                             })
@@ -1231,7 +1280,10 @@ impl Insulator {
                                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                                     let _ = key_pull_requests.update(cx, |this, cx| {
                                         this.pull_requests_tab = tab;
-                                        this.pull_requests_scroll_handle.set_offset(Point::default());
+                                        this.pull_requests_list_state.scroll_to(ListOffset {
+                                            item_ix: 0,
+                                            offset_in_item: px(0.0),
+                                        });
                                         cx.notify();
                                     });
                                     cx.stop_propagation();
@@ -1270,93 +1322,50 @@ impl Insulator {
             )
             .child(
                 div()
+                    .id("pull-requests-list")
                     .flex_1()
                     .min_h_0()
                     .relative()
-                    .child(
-                        div()
-                            .id("pull-requests-list")
-                            .size_full()
-                            .overflow_y_scroll()
-                            .track_scroll(&self.pull_requests_scroll_handle)
-                            .px(px(32.0))
-                            .pb(px(48.0))
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.0))
-                            .children(if self.pull_requests_loading {
-                                let loading_style = ShimmerStyle::new()
-                                    .duration(Duration::from_secs(3))
-                                    .highlight_color(cx.theme().primary)
-                                    .spread(0.45)
-                                    .reverse(true)
-                                    .once(false);
-
-                                vec![
-                                    div()
-                                        .w_full()
-                                        .py(px(80.0))
-                                        .flex()
-                                        .flex_col()
-                                        .items_center()
-                                        .justify_center()
-                                        .gap(px(14.0))
-                                        .child(crate::app::components::dot_matrix_loader(
-                                            theme.text_secondary,
-                                            22.0,
-                                        ))
-                                        .child(
-                                            ShimmerText::new("Loading pull requests…")
-                                                .with_shimmer_style(loading_style)
-                                                .text_size(sp(14.0))
-                                                .text_color(theme.text_secondary),
-                                        )
-                                        .into_any_element(),
-                                ]
-                            } else if let Some(error) = &self.pull_requests_error {
-                                vec![
-                                    div()
-                                        .py(px(40.0))
-                                        .text_color(theme.danger)
-                                        .child(SharedString::from(error.clone()))
-                                        .into_any_element(),
-                                ]
-                            } else if entries.is_empty() {
-                                vec![
-                                    div()
-                                        .py(px(40.0))
-                                        .text_color(theme.text_secondary)
-                                        .child(format!(
-                                            "No {} pull requests found",
-                                            selected_tab.label().to_lowercase()
-                                        ))
-                                        .into_any_element(),
-                                ]
-                            } else {
-                                let selected_key = self
-                                    .pull_request_detail
-                                    .as_ref()
-                                    .map(|detail| (detail.repository.clone(), detail.number));
-                                entries
-                                    .into_iter()
-                                    .map(|entry| {
-                                        let is_selected = selected_key.as_ref()
-                                            == Some(&(entry.repository.clone(), entry.number));
-                                        render_pull_request_row(
-                                            entry,
-                                            theme,
-                                            is_selected,
-                                            cx.entity().downgrade(),
-                                        )
-                                    })
-                                    .collect()
-                            }),
-                    )
+                    .child(body)
                     .child(scrollbar::vertical(
-                        &self.pull_requests_scroll_handle,
+                        &self.pull_requests_list_state,
                         &self.pull_requests_scrollbar,
                     )),
             )
+            .into_any_element()
+    }
+
+    fn sync_pull_request_rows(&self, rows: &[usize]) {
+        let mut cached = self.pull_requests_rows.borrow_mut();
+        if cached.as_slice() == rows {
+            return;
+        }
+        *cached = rows.to_vec();
+        self.pull_requests_list_state
+            .reset_with_uniform_height(rows.len(), px(PULL_REQUEST_ROW_HEIGHT + 4.0));
+    }
+
+    fn pull_request_row(&self, row: usize, cx: &mut Context<Self>) -> AnyElement {
+        let rows = self.pull_requests_rows.borrow();
+        let Some(entry) = rows
+            .get(row)
+            .and_then(|index| self.pull_requests.get(*index))
+        else {
+            return div().into_any_element();
+        };
+        let is_selected = self.pull_request_detail.as_ref().is_some_and(|selected| {
+            selected.repository == entry.repository && selected.number == entry.number
+        });
+        div()
+            .h(px(PULL_REQUEST_ROW_HEIGHT + 4.0))
+            .px(px(32.0))
+            .pb(px(4.0))
+            .child(render_pull_request_row(
+                entry,
+                Theme::current(cx),
+                is_selected,
+                cx.entity().downgrade(),
+            ))
             .into_any_element()
     }
 }
@@ -1381,10 +1390,11 @@ fn render_pull_request_row(
         )))
         .w_full()
         .max_w(px(980.0))
+        .h(px(PULL_REQUEST_ROW_HEIGHT))
+        .flex_none()
         .rounded(px(8.0))
         .cursor_pointer()
         .px(px(14.0))
-        .py(px(12.0))
         .flex()
         .items_center()
         .gap(px(12.0))
@@ -1940,6 +1950,31 @@ mod tests {
             super::without_html_comments("<!-- generated -->\n## Summary\n<p>Done</p>"),
             "## Summary\nDone"
         );
+    }
+
+    #[test]
+    fn cached_diff_is_parsed_without_a_github_request() {
+        let request = super::PullRequest {
+            number: 1,
+            title: "Title".into(),
+            author: "author".into(),
+            body: String::new(),
+            body_loaded: false,
+            repository: "owner/repo".into(),
+            state: "open".into(),
+            url: String::new(),
+            updated_at: String::new(),
+            cached_commits: Vec::new(),
+            cached_diff: Some(
+                "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -0,0 +1 @@\n+hello\n"
+                    .into(),
+            ),
+        };
+
+        let (snapshot, patch) = super::load_pull_request_diff(&request).unwrap();
+
+        assert_eq!(snapshot.files.len(), 1);
+        assert!(patch.contains("+hello"));
     }
 
     #[test]

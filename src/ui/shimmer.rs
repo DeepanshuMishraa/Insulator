@@ -261,6 +261,7 @@ impl RenderOnce for ShimmerText {
                 }
                 .into_any_element()
             })
+            .every(2)
             .into_any_element()
         };
 
