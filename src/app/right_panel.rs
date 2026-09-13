@@ -2908,7 +2908,18 @@ impl Insulator {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         if self.pull_request_detail.is_some() {
-            return self.render_pull_request_detail_panel(width, cx);
+            return div()
+                .id("right-panel")
+                .w(px(width))
+                .h_full()
+                .flex_none()
+                .relative()
+                .child(self.render_pull_request_detail_panel(width, cx))
+                .child(self.render_panel_resize_handle(
+                    "right-panel-resize-handle",
+                    PanelResizeTarget::RightPanel,
+                    cx,
+                ));
         }
         let theme = Theme::current(cx);
 
