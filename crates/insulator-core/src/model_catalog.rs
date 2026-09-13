@@ -1539,11 +1539,19 @@ opencode/big-pickle
     /// parser must not turn that into an empty catalogue.
     #[test]
     fn opencode_verbose_parsing_ignores_a_plain_listing() {
-        assert!(parse_opencode_verbose_models("opencode-go/deepseek-v4-flash
-").is_empty());
+        assert!(
+            parse_opencode_verbose_models(
+                "opencode-go/deepseek-v4-flash
+"
+            )
+            .is_empty()
+        );
         assert_eq!(
-            parse_opencode_models("opencode-go/deepseek-v4-flash
-").len(),
+            parse_opencode_models(
+                "opencode-go/deepseek-v4-flash
+"
+            )
+            .len(),
             1
         );
     }
@@ -2040,7 +2048,11 @@ mod opencode_effort_smoke {
             .iter()
             .filter(|model| !model.reasoning_efforts.is_empty())
             .collect();
-        println!("models={} with efforts={}", models.len(), with_efforts.len());
+        println!(
+            "models={} with efforts={}",
+            models.len(),
+            with_efforts.len()
+        );
         for model in with_efforts.iter().take(4) {
             println!(
                 "  {} -> {:?} (default {:?})",
@@ -2054,6 +2066,9 @@ mod opencode_effort_smoke {
             );
         }
         assert!(!models.is_empty(), "expected a catalogue");
-        assert!(!with_efforts.is_empty(), "expected some models to expose variants");
+        assert!(
+            !with_efforts.is_empty(),
+            "expected some models to expose variants"
+        );
     }
 }

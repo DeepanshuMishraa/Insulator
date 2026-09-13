@@ -104,9 +104,10 @@ pub fn list_provider_sessions(
             .collect()
     };
 
-    let request = Client.builder().name("insulator-session-catalog").connect_with(
-        agent,
-        async move |connection: ConnectionTo<Agent>| {
+    let request = Client
+        .builder()
+        .name("insulator-session-catalog")
+        .connect_with(agent, async move |connection: ConnectionTo<Agent>| {
             let initialize = connection
                 .send_request(initialize_request())
                 .block_task()
@@ -169,8 +170,7 @@ pub fn list_provider_sessions(
             found.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
             found.truncate(limit);
             Ok(found)
-        },
-    );
+        });
     smol::block_on(smol::future::race(
         async move { request.await.map_err(anyhow::Error::new) },
         async move {

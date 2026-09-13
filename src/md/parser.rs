@@ -514,7 +514,10 @@ fn parse_inline_event(cursor: &mut Cursor, pieces: &mut Vec<InlinePiece>, style:
             if style == &InlineStyle::default() && looks_like_bare_math(&text) {
                 pieces.push(InlinePiece::DisplayMath(text.trim().to_owned()));
             } else {
-                push_run(InlineRun { text, style: style.clone() });
+                push_run(InlineRun {
+                    text,
+                    style: style.clone(),
+                });
             }
         }
         Event::Code(text) => {
@@ -1119,8 +1122,9 @@ mod tests {
 
     #[test]
     fn explicit_links_and_inline_code_are_not_relinkified() {
-        let tree =
-            parse("[docs at https://example.com](https://insulator.gg) and `https://example.com/code`");
+        let tree = parse(
+            "[docs at https://example.com](https://insulator.gg) and `https://example.com/code`",
+        );
         let Block::Paragraph { runs } = &tree.blocks[0].block else {
             panic!("expected a paragraph");
         };

@@ -312,8 +312,7 @@ impl Insulator {
                     } else if matches!(
                         session.provider,
                         ProviderKind::Codex | ProviderKind::Claude | ProviderKind::OpenCode2
-                    )
-                    {
+                    ) {
                         // Some providers start turns on their own: Codex goal
                         // continuation pursues an active goal whenever the
                         // thread is idle, and Claude Code re-enters the model
@@ -481,7 +480,11 @@ impl Insulator {
                 }
             }
             DriverEvent::ExtensionStatus { key, text } => {
-                let current = self.pi_plan_modes.get(&session_id).copied().unwrap_or_default();
+                let current = self
+                    .pi_plan_modes
+                    .get(&session_id)
+                    .copied()
+                    .unwrap_or_default();
                 let mode = match (key.as_str(), text.is_some()) {
                     ("pi-plan", true) => Some(super::composer::PiPlanMode::Plan),
                     ("plannotator", true) => Some(super::composer::PiPlanMode::Plannotator),
@@ -499,7 +502,8 @@ impl Insulator {
             }
             DriverEvent::SetEditorText(text) => {
                 if self.state.selected_session == Some(session_id) {
-                    self.composer.update(cx, |input, cx| input.set_content(text, cx));
+                    self.composer
+                        .update(cx, |input, cx| input.set_content(text, cx));
                 }
             }
             DriverEvent::ComputerUseUpdated(state) => {

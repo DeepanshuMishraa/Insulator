@@ -827,7 +827,9 @@ impl Insulator {
     pub(super) fn render_provider_model_control(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let session = self.selected_session();
-        let provider = session.map(|session| session.provider).unwrap_or(self.state.last_provider);
+        let provider = session
+            .map(|session| session.provider)
+            .unwrap_or(self.state.last_provider);
         let selected_model = session
             .and_then(|session| self.model_for_session(session))
             .or(self.state.last_model.as_deref())
@@ -838,24 +840,28 @@ impl Insulator {
             });
         let selected_model_name = self.model_display_name(provider, selected_model);
         let locked_provider: Option<ProviderKind> = None;
-        let picker_enabled = session.map(|session| session.can_choose_model(provider)).unwrap_or(true);
+        let picker_enabled = session
+            .map(|session| session.can_choose_model(provider))
+            .unwrap_or(true);
 
-        let current_model_meta = self
-            .provider_probe(provider)
-            .and_then(|probe| {
-                let name = selected_model.as_deref().unwrap_or("");
-                probe.models.iter().find(|m| m.id == name).cloned()
-            });
+        let current_model_meta = self.provider_probe(provider).and_then(|probe| {
+            let name = selected_model.as_deref().unwrap_or("");
+            probe.models.iter().find(|m| m.id == name).cloned()
+        });
 
         let selected_effort = session
             .and_then(|s| s.reasoning_effort.as_deref())
             .or(self.state.last_reasoning_effort.as_deref())
             .filter(|selected| {
+                current_model_meta.as_ref().map_or(false, |m| {
+                    m.reasoning_efforts.iter().any(|opt| opt.id == *selected)
+                })
+            })
+            .or_else(|| {
                 current_model_meta
                     .as_ref()
-                    .map_or(false, |m| m.reasoning_efforts.iter().any(|opt| opt.id == *selected))
+                    .and_then(|m| m.default_reasoning_effort.as_deref())
             })
-            .or_else(|| current_model_meta.as_ref().and_then(|m| m.default_reasoning_effort.as_deref()))
             .or_else(|| {
                 current_model_meta
                     .as_ref()
@@ -875,11 +881,15 @@ impl Insulator {
             .or(self.state.last_service_tier.as_deref())
             .filter(|selected| {
                 *selected == "default"
-                    || current_model_meta
-                        .as_ref()
-                        .map_or(false, |m| m.service_tiers.iter().any(|opt| opt.id == *selected))
+                    || current_model_meta.as_ref().map_or(false, |m| {
+                        m.service_tiers.iter().any(|opt| opt.id == *selected)
+                    })
             })
-            .or_else(|| current_model_meta.as_ref().and_then(|m| m.default_service_tier.as_deref()))
+            .or_else(|| {
+                current_model_meta
+                    .as_ref()
+                    .and_then(|m| m.default_service_tier.as_deref())
+            })
             .unwrap_or("default")
             .to_owned();
 
@@ -932,11 +942,7 @@ impl Insulator {
                         .text_color(theme.text_secondary)
                         .child(SharedString::from(label)),
                 )
-                .child(
-                    div()
-                        .text_color(theme.text_ghost)
-                        .child("·"),
-                )
+                .child(div().text_color(theme.text_ghost).child("·"))
                 .child(
                     div()
                         .flex()
@@ -1223,7 +1229,9 @@ impl Insulator {
                 );
 
                 for &tab in &rail_tabs {
-                    let ModelPickerTab::Provider(kind) = tab else { continue };
+                    let ModelPickerTab::Provider(kind) = tab else {
+                        continue;
+                    };
                     let selected = selected_tab == ModelPickerTab::Provider(kind);
                     let tab_weak = weak.clone();
                     tabs_list = tabs_list.child(
@@ -1281,10 +1289,7 @@ impl Insulator {
                     .border_color(theme.border)
                     .flex_none()
                     .child(tabs_list)
-                    .child(scrollbar::horizontal(
-                        &tabs_scroll,
-                        &tabs_scrollbar_state,
-                    ));
+                    .child(scrollbar::horizontal(&tabs_scroll, &tabs_scrollbar_state));
 
                 let search_input = div()
                     .h(px(40.0))
@@ -1768,102 +1773,99 @@ impl Insulator {
 
                 // Build submenu floating card when a menu is open
                 let active_submenu_card: Option<AnyElement> = match active_submenu {
-                    ModelPickerSubmenu::Reasoning => {
-                        footer_model_meta.as_ref().map(|model_meta| {
-                            let mut items = div()
-                                .id("submenu-reasoning-items")
-                                .w(px(280.0))
-                                .max_h(px(220.0))
-                                .overflow_y_scroll()
-                                .p(px(4.0))
-                                .flex()
-                                .flex_col()
-                                .gap(px(2.0));
+                    ModelPickerSubmenu::Reasoning => footer_model_meta.as_ref().map(|model_meta| {
+                        let mut items = div()
+                            .id("submenu-reasoning-items")
+                            .w(px(280.0))
+                            .max_h(px(220.0))
+                            .overflow_y_scroll()
+                            .p(px(4.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0));
 
-                            for option in &model_meta.reasoning_efforts {
-                                let is_selected =
-                                    footer_effort.as_deref() == Some(option.id.as_str());
-                                let opt_id = option.id.clone();
-                                let opt_desc = option.description.clone();
-                                let opt_label = option.label.clone();
-                                let weak = weak.clone();
-                                items = items.child(
-                                    div()
-                                        .id(SharedString::from(format!("effort-item-{}", option.id)))
-                                        .w_full()
-                                        .px(px(8.0))
-                                        .py(px(5.0))
-                                        .rounded(px(5.0))
-                                        .cursor_default()
-                                        .flex()
-                                        .items_center()
-                                        .justify_between()
-                                        .gap(px(8.0))
-                                        .when(is_selected, |el| el.bg(theme.overlay_strong))
-                                        .when(!is_selected, |el| el.hover(|el| el.bg(theme.overlay)))
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap(px(6.0))
-                                                .child(
-                                                    div()
-                                                        .w(px(14.0))
-                                                        .flex_none()
-                                                        .flex()
-                                                        .items_center()
-                                                        .justify_center()
-                                                        .when(is_selected, |el| {
-                                                            el.child(icon(
-                                                                "icons/check.svg",
-                                                                12.0,
-                                                                theme.accent,
-                                                            ))
-                                                        }),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_size(sp(12.0))
-                                                        .font_weight(if is_selected {
-                                                            FontWeight::SEMIBOLD
-                                                        } else {
-                                                            FontWeight::MEDIUM
-                                                        })
-                                                        .text_color(theme.text)
-                                                        .child(SharedString::from(opt_label)),
-                                                ),
-                                        )
-                                        .when_some(opt_desc, |el, desc| {
-                                            el.child(
+                        for option in &model_meta.reasoning_efforts {
+                            let is_selected = footer_effort.as_deref() == Some(option.id.as_str());
+                            let opt_id = option.id.clone();
+                            let opt_desc = option.description.clone();
+                            let opt_label = option.label.clone();
+                            let weak = weak.clone();
+                            items = items.child(
+                                div()
+                                    .id(SharedString::from(format!("effort-item-{}", option.id)))
+                                    .w_full()
+                                    .px(px(8.0))
+                                    .py(px(5.0))
+                                    .rounded(px(5.0))
+                                    .cursor_default()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap(px(8.0))
+                                    .when(is_selected, |el| el.bg(theme.overlay_strong))
+                                    .when(!is_selected, |el| el.hover(|el| el.bg(theme.overlay)))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(6.0))
+                                            .child(
                                                 div()
-                                                    .truncate()
-                                                    .text_size(sp(10.5))
-                                                    .text_color(theme.text_secondary)
-                                                    .child(SharedString::from(desc)),
+                                                    .w(px(14.0))
+                                                    .flex_none()
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .when(is_selected, |el| {
+                                                        el.child(icon(
+                                                            "icons/check.svg",
+                                                            12.0,
+                                                            theme.accent,
+                                                        ))
+                                                    }),
                                             )
-                                        })
-                                        .on_click(move |_, _, cx| {
-                                            cx.stop_propagation();
-                                            let _ = weak.update(cx, |this, cx| {
-                                                this.set_reasoning_effort(opt_id.clone(), cx);
-                                                this.model_picker_submenu = ModelPickerSubmenu::None;
-                                            });
-                                        }),
-                                );
-                            }
-                            div()
-                                .absolute()
-                                .bottom(px(46.0))
-                                .left(px(8.0))
-                                .rounded(px(8.0))
-                                .border_1()
-                                .border_color(theme.border_strong)
-                                .bg(submenu_bg)
-                                .shadow_xl()
-                                .child(items)
-                                .into_any_element()
-                        })
-                    }
+                                            .child(
+                                                div()
+                                                    .text_size(sp(12.0))
+                                                    .font_weight(if is_selected {
+                                                        FontWeight::SEMIBOLD
+                                                    } else {
+                                                        FontWeight::MEDIUM
+                                                    })
+                                                    .text_color(theme.text)
+                                                    .child(SharedString::from(opt_label)),
+                                            ),
+                                    )
+                                    .when_some(opt_desc, |el, desc| {
+                                        el.child(
+                                            div()
+                                                .truncate()
+                                                .text_size(sp(10.5))
+                                                .text_color(theme.text_secondary)
+                                                .child(SharedString::from(desc)),
+                                        )
+                                    })
+                                    .on_click(move |_, _, cx| {
+                                        cx.stop_propagation();
+                                        let _ = weak.update(cx, |this, cx| {
+                                            this.set_reasoning_effort(opt_id.clone(), cx);
+                                            this.model_picker_submenu = ModelPickerSubmenu::None;
+                                        });
+                                    }),
+                            );
+                        }
+                        div()
+                            .absolute()
+                            .bottom(px(46.0))
+                            .left(px(8.0))
+                            .rounded(px(8.0))
+                            .border_1()
+                            .border_color(theme.border_strong)
+                            .bg(submenu_bg)
+                            .shadow_xl()
+                            .child(items)
+                            .into_any_element()
+                    }),
                     ModelPickerSubmenu::Permissions => {
                         let mut items = div()
                             .id("submenu-perms-items")
@@ -1984,7 +1986,9 @@ impl Insulator {
                                     .items_center()
                                     .gap(px(8.0))
                                     .when(standard_selected, |el| el.bg(theme.overlay_strong))
-                                    .when(!standard_selected, |el| el.hover(|el| el.bg(theme.overlay)))
+                                    .when(!standard_selected, |el| {
+                                        el.hover(|el| el.bg(theme.overlay))
+                                    })
                                     .child(
                                         div()
                                             .w(px(14.0))
@@ -2037,7 +2041,9 @@ impl Insulator {
                                         .items_center()
                                         .gap(px(8.0))
                                         .when(is_selected, |el| el.bg(theme.overlay_strong))
-                                        .when(!is_selected, |el| el.hover(|el| el.bg(theme.overlay)))
+                                        .when(!is_selected, |el| {
+                                            el.hover(|el| el.bg(theme.overlay))
+                                        })
                                         .child(
                                             div()
                                                 .w(px(14.0))
@@ -2046,46 +2052,47 @@ impl Insulator {
                                                 .items_center()
                                                 .justify_center()
                                                 .when(is_selected, |el| {
-                                                el.child(icon(
-                                                    "icons/check.svg",
-                                                    12.0,
-                                                    theme.accent,
-                                                ))
-                                            }),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(sp(12.0))
-                                            .font_weight(if is_selected {
-                                                FontWeight::SEMIBOLD
-                                            } else {
-                                                FontWeight::MEDIUM
-                                            })
-                                            .text_color(theme.text)
-                                            .child(SharedString::from(opt_label)),
-                                    )
-                                    .on_click(move |_, _, cx| {
-                                        cx.stop_propagation();
-                                        let _ = weak_tier.update(cx, |this, cx| {
-                                            this.set_service_tier(opt_id.clone(), cx);
-                                            this.model_picker_submenu = ModelPickerSubmenu::None;
-                                        });
-                                    }),
-                            );
-                        }
-                        div()
-                            .absolute()
-                            .bottom(px(46.0))
-                            .left(px(8.0))
-                            .rounded(px(8.0))
-                            .border_1()
-                            .border_color(theme.border_strong)
-                            .bg(submenu_bg)
-                            .shadow_xl()
-                            .child(items)
-                            .into_any_element()
-                    })
-                }
+                                                    el.child(icon(
+                                                        "icons/check.svg",
+                                                        12.0,
+                                                        theme.accent,
+                                                    ))
+                                                }),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(sp(12.0))
+                                                .font_weight(if is_selected {
+                                                    FontWeight::SEMIBOLD
+                                                } else {
+                                                    FontWeight::MEDIUM
+                                                })
+                                                .text_color(theme.text)
+                                                .child(SharedString::from(opt_label)),
+                                        )
+                                        .on_click(move |_, _, cx| {
+                                            cx.stop_propagation();
+                                            let _ = weak_tier.update(cx, |this, cx| {
+                                                this.set_service_tier(opt_id.clone(), cx);
+                                                this.model_picker_submenu =
+                                                    ModelPickerSubmenu::None;
+                                            });
+                                        }),
+                                );
+                            }
+                            div()
+                                .absolute()
+                                .bottom(px(46.0))
+                                .left(px(8.0))
+                                .rounded(px(8.0))
+                                .border_1()
+                                .border_color(theme.border_strong)
+                                .bg(submenu_bg)
+                                .shadow_xl()
+                                .child(items)
+                                .into_any_element()
+                        })
+                    }
                     ModelPickerSubmenu::AgentPreset => {
                         let mut items = div()
                             .id("submenu-preset-items")
@@ -2105,10 +2112,7 @@ impl Insulator {
                             let weak = weak.clone();
                             items = items.child(
                                 div()
-                                    .id(SharedString::from(format!(
-                                        "preset-item-{}",
-                                        preset.id
-                                    )))
+                                    .id(SharedString::from(format!("preset-item-{}", preset.id)))
                                     .w_full()
                                     .px(px(8.0))
                                     .py(px(5.0))
@@ -2321,7 +2325,9 @@ impl Insulator {
     /// scroll offset from an earlier open never leaks into a fresh list.
     pub(super) fn reveal_selected_picker_model(&self) {
         let session = self.selected_session();
-        let provider = session.map(|session| session.provider).unwrap_or(self.state.last_provider);
+        let provider = session
+            .map(|session| session.provider)
+            .unwrap_or(self.state.last_provider);
         let selected_model = session
             .and_then(|session| self.model_for_session(session))
             .or(self.state.last_model.as_deref())
@@ -2368,7 +2374,11 @@ impl Insulator {
             return;
         }
         let session_id = session.id;
-        let current = self.pi_plan_modes.get(&session_id).copied().unwrap_or_default();
+        let current = self
+            .pi_plan_modes
+            .get(&session_id)
+            .copied()
+            .unwrap_or_default();
         let commands = pi_plan_mode_commands(current, target);
         self.pi_plan_modes.insert(session_id, target);
         if let Some(runtime) = self.runtimes.get(&session_id) {
@@ -2382,12 +2392,19 @@ impl Insulator {
         if session.provider != ProviderKind::Pi {
             return None;
         }
-        let has_plan = self.slash_command_index.iter().any(|command| command.name == "plan");
+        let has_plan = self
+            .slash_command_index
+            .iter()
+            .any(|command| command.name == "plan");
         let has_plannotator = self
             .slash_command_index
             .iter()
             .any(|command| command.name == "plannotator-plan-mode");
-        let selected = self.pi_plan_modes.get(&session.id).copied().unwrap_or_default();
+        let selected = self
+            .pi_plan_modes
+            .get(&session.id)
+            .copied()
+            .unwrap_or_default();
         let theme = Theme::current(cx);
         let weak = cx.entity().downgrade();
         let handle = self.menu_handle("pi-plan-mode", cx);
@@ -2425,7 +2442,9 @@ impl Insulator {
     pub(super) fn render_model_traits_control(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let theme = Theme::current(cx);
         let session = self.selected_session();
-        let provider = session.map(|session| session.provider).unwrap_or(self.state.last_provider);
+        let provider = session
+            .map(|session| session.provider)
+            .unwrap_or(self.state.last_provider);
         let model_name = session
             .and_then(|session| self.model_for_session(session))
             .or(self.state.last_model.as_deref())
@@ -2745,7 +2764,12 @@ impl Insulator {
             })?;
         let selected_label = self
             .provider_probe(ProviderKind::DeepSeek)
-            .and_then(|probe| probe.agent_presets.iter().find(|preset| preset.id == selected_id))
+            .and_then(|probe| {
+                probe
+                    .agent_presets
+                    .iter()
+                    .find(|preset| preset.id == selected_id)
+            })
             .map(|preset| preset.display_name())
             .unwrap_or_else(|| selected_id.clone());
         let theme = Theme::current(cx);
@@ -3179,7 +3203,12 @@ impl Insulator {
 
     fn execute_pi_plan_command(&mut self, prompt: &str, cx: &mut Context<Self>) -> bool {
         let target = match prompt.trim() {
-            "/plan" if self.slash_command_index.iter().any(|command| command.name == "plan") => {
+            "/plan"
+                if self
+                    .slash_command_index
+                    .iter()
+                    .any(|command| command.name == "plan") =>
+            {
                 PiPlanMode::Plan
             }
             "/plannotator-plan-mode"
@@ -3198,9 +3227,17 @@ impl Insulator {
         if session.provider != ProviderKind::Pi {
             return false;
         }
-        let current = self.pi_plan_modes.get(&session.id).copied().unwrap_or_default();
+        let current = self
+            .pi_plan_modes
+            .get(&session.id)
+            .copied()
+            .unwrap_or_default();
         self.set_pi_plan_mode(
-            if current == target { PiPlanMode::Off } else { target },
+            if current == target {
+                PiPlanMode::Off
+            } else {
+                target
+            },
             cx,
         );
         self.composer.update(cx, |input, cx| input.clear(cx));
@@ -3311,10 +3348,9 @@ impl Insulator {
             .selected_session()
             .and_then(|s| s.service_tier.as_deref())
             .or(self.state.last_service_tier.as_deref());
-        let Some(next_tier) = crate::composer_complete::toggled_fast_service_tier(
-            current_tier,
-            &model.service_tiers,
-        ) else {
+        let Some(next_tier) =
+            crate::composer_complete::toggled_fast_service_tier(current_tier, &model.service_tiers)
+        else {
             return false;
         };
         let enabled = next_tier != "default";
@@ -3786,98 +3822,129 @@ impl Insulator {
             // scroll viewport, via `padding_x`) rather than on the card,
             // so the field's overlay scrollbar can hug the card's edge.
             .py(px(10.0))
-                .drag_over::<ExternalPaths>(move |style, _, _, _| {
-                    style.bg(drop_wash).border_color(drop_ring)
-                })
-                .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                    this.stage_dropped_files(paths, window, cx);
-                }))
-                // Anchor for the bounds probe the autocomplete popup aligns to.
-                .relative()
-                .child(super::autocomplete::composer_card_bounds_probe(
-                    self.composer_autocomplete.card_bounds_cell(),
-                ))
-                // Only while the popup has selectable rows: the key context
-                // routes arrows, `enter`, `tab` and `escape` here as actions,
-                // out from under the focused field. The loading state takes
-                // only Escape, so it can dismiss without swallowing input.
-                .when(autocomplete_actionable, |card| {
-                    card.key_context("ComposerAutocomplete")
-                        .on_action(cx.listener(|this, _: &SelectNextEntry, window, cx| {
-                            this.move_autocomplete_highlight("down", window, cx);
-                        }))
-                        .on_action(cx.listener(|this, _: &SelectPreviousEntry, window, cx| {
-                            this.move_autocomplete_highlight("up", window, cx);
-                        }))
-                        .on_action(cx.listener(|this, _: &ConfirmEntry, window, cx| {
-                            this.accept_autocomplete(None, window, cx);
-                        }))
-                        .on_action(cx.listener(|this, _: &DismissMenu, _, cx| {
-                            this.dismiss_autocomplete(cx);
-                        }))
-                })
-                .when(autocomplete_loading, |card| {
-                    card.key_context("ComposerAutocompleteLoading")
-                        .on_action(cx.listener(|this, _: &DismissMenu, _, cx| {
-                            this.dismiss_autocomplete(cx);
-                        }))
-                })
-                .children(autocomplete)
-                .children(self.render_file_editor_selection_badge(cx))
-                .when(!self.composer_attachments.is_empty(), |card| {
-                    card.child(self.render_composer_attachments(cx))
-                })
-                .child(div().pt(px(2.0)).child(self.composer.clone()))
-                .child(
-                    div()
-                        .mt(px(8.0))
-                        .px(px(10.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(4.0))
-                        .text_size(sp(12.5))
-                        .line_height(sp(14.0))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .flex()
-                                .items_center()
-                                .gap(px(4.0))
-                                .overflow_hidden()
-                                .child(self.render_provider_model_control(cx))
-                                .children(self.render_pi_plan_mode_control(cx))
-                                .children(self.render_goal_control(cx)),
-                        )
-                        .child(
-                            div()
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .gap(px(4.0))
-                                .child(match submit_action {
-                                    ComposerSubmitAction::Preparing => div()
-                                        .id("send-or-stop")
-                                        .flex_none()
-                                        .w(px(26.0))
-                                        .h(px(26.0))
-                                        .rounded_full()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .cursor_default()
-                                        .bg(theme.overlay_strong)
-                                        .child(dot_matrix_loader(theme.text_secondary, 15.0))
-                                        .tooltip(Tooltip::text(tr!("composer.preparing_task"))),
-                                    ComposerSubmitAction::Stop => div()
-                                        .id("working-actions")
-                                        .flex_none()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(6.0))
-                                        .child(
+            .drag_over::<ExternalPaths>(move |style, _, _, _| {
+                style.bg(drop_wash).border_color(drop_ring)
+            })
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.stage_dropped_files(paths, window, cx);
+            }))
+            // Anchor for the bounds probe the autocomplete popup aligns to.
+            .relative()
+            .child(super::autocomplete::composer_card_bounds_probe(
+                self.composer_autocomplete.card_bounds_cell(),
+            ))
+            // Only while the popup has selectable rows: the key context
+            // routes arrows, `enter`, `tab` and `escape` here as actions,
+            // out from under the focused field. The loading state takes
+            // only Escape, so it can dismiss without swallowing input.
+            .when(autocomplete_actionable, |card| {
+                card.key_context("ComposerAutocomplete")
+                    .on_action(cx.listener(|this, _: &SelectNextEntry, window, cx| {
+                        this.move_autocomplete_highlight("down", window, cx);
+                    }))
+                    .on_action(cx.listener(|this, _: &SelectPreviousEntry, window, cx| {
+                        this.move_autocomplete_highlight("up", window, cx);
+                    }))
+                    .on_action(cx.listener(|this, _: &ConfirmEntry, window, cx| {
+                        this.accept_autocomplete(None, window, cx);
+                    }))
+                    .on_action(cx.listener(|this, _: &DismissMenu, _, cx| {
+                        this.dismiss_autocomplete(cx);
+                    }))
+            })
+            .when(autocomplete_loading, |card| {
+                card.key_context("ComposerAutocompleteLoading")
+                    .on_action(cx.listener(|this, _: &DismissMenu, _, cx| {
+                        this.dismiss_autocomplete(cx);
+                    }))
+            })
+            .children(autocomplete)
+            .children(self.render_file_editor_selection_badge(cx))
+            .when(!self.composer_attachments.is_empty(), |card| {
+                card.child(self.render_composer_attachments(cx))
+            })
+            .child(div().pt(px(2.0)).child(self.composer.clone()))
+            .child(
+                div()
+                    .mt(px(8.0))
+                    .px(px(10.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .text_size(sp(12.5))
+                    .line_height(sp(14.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .overflow_hidden()
+                            .child(self.render_provider_model_control(cx))
+                            .children(self.render_pi_plan_mode_control(cx))
+                            .children(self.render_goal_control(cx)),
+                    )
+                    .child(
+                        div().flex_none().flex().items_center().gap(px(4.0)).child(
+                            match submit_action {
+                                ComposerSubmitAction::Preparing => div()
+                                    .id("send-or-stop")
+                                    .flex_none()
+                                    .w(px(26.0))
+                                    .h(px(26.0))
+                                    .rounded_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_default()
+                                    .bg(theme.overlay_strong)
+                                    .child(dot_matrix_loader(theme.text_secondary, 15.0))
+                                    .tooltip(Tooltip::text(tr!("composer.preparing_task"))),
+                                ComposerSubmitAction::Stop => div()
+                                    .id("working-actions")
+                                    .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .child(
+                                        div()
+                                            .id("send-or-stop")
+                                            .flex_none()
+                                            .w(px(26.0))
+                                            .h(px(26.0))
+                                            .rounded_full()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .cursor_default()
+                                            .bg(theme.overlay_strong)
+                                            .hover(|element| element.bg(theme.danger_soft))
+                                            .active(|element| element.opacity(0.8))
+                                            .when(escape_stop_armed, |element| {
+                                                element.child(
+                                                    div()
+                                                        .text_size(sp(12.5))
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .text_color(theme.text)
+                                                        .child("Esc"),
+                                                )
+                                            })
+                                            .when(!escape_stop_armed, |element| {
+                                                element.child(icon(
+                                                    "icons/stop.svg",
+                                                    18.0,
+                                                    theme.text,
+                                                ))
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.cancel_turn(cx);
+                                            })),
+                                    )
+                                    .when(can_send, |element| {
+                                        element.child(
                                             div()
-                                                .id("send-or-stop")
+                                                .id("queue-follow-up")
                                                 .flex_none()
                                                 .w(px(26.0))
                                                 .h(px(26.0))
@@ -3886,105 +3953,83 @@ impl Insulator {
                                                 .items_center()
                                                 .justify_center()
                                                 .cursor_default()
-                                                .bg(theme.overlay_strong)
-                                                .hover(|element| element.bg(theme.danger_soft))
-                                                .active(|element| element.opacity(0.8))
-                                                .when(escape_stop_armed, |element| {
-                                                    element.child(
-                                                        div()
-                                                            .text_size(sp(12.5))
-                                                            .font_weight(FontWeight::SEMIBOLD)
-                                                            .text_color(theme.text)
-                                                            .child("Esc"),
-                                                    )
-                                                })
-                                                .when(!escape_stop_armed, |element| {
-                                                    element.child(icon("icons/stop.svg", 18.0, theme.text))
-                                                })
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.cancel_turn(cx);
-                                                })),
-                                        )
-                                        .when(can_send, |element| {
-                                            element.child(
-                                                div()
-                                                    .id("queue-follow-up")
-                                                    .flex_none()
-                                                    .w(px(26.0))
-                                                    .h(px(26.0))
-                                                    .rounded_full()
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .cursor_default()
-                                                    .bg(theme.inverse)
-                                                    .hover(|element| element.opacity(0.9))
-                                                    .active(|element| element.opacity(0.8))
-                                                    .child(icon(
-                                                        "icons/arrow-up.svg",
-                                                        16.0,
-                                                        theme.on_inverse,
-                                                    ))
-                                                    .tooltip(Tooltip::text(tr!("composer.queue_followup")))
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        let prompt =
-                                                            this.composer.read(cx).content(cx).to_owned();
-                                                        if let Some(submission) =
-                                                            this.submission_with_attachments(&prompt, cx)
-                                                        {
-                                                            this.composer
-                                                                .update(cx, |input, cx| input.clear(cx));
-                                                            this.submit_composer_submission(submission, cx);
-                                                        }
-                                                    })),
-                                            )
-                                        }),
-                                    ComposerSubmitAction::Send => div()
-                                        .id("send-or-stop")
-                                        .flex_none()
-                                        .w(px(26.0))
-                                        .h(px(26.0))
-                                        .rounded_full()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .bg(if can_send {
-                                            theme.inverse
-                                        } else {
-                                            theme.overlay_strong
-                                        })
-                                        .when(can_send, |element| {
-                                            element
-                                                .cursor_default()
+                                                .bg(theme.inverse)
                                                 .hover(|element| element.opacity(0.9))
                                                 .active(|element| element.opacity(0.8))
-                                        })
-                                        .child(icon(
-                                            "icons/arrow-up.svg",
-                                            16.0,
-                                            if can_send {
-                                                theme.on_inverse
-                                            } else {
-                                                theme.text_ghost
-                                            },
-                                        ))
-                                        // Says why the button is dead, for the case
-                                        // the draft is ready and the machine is not.
-                                        .when(no_providers, |element| {
-                                            element.tooltip(Tooltip::text(tr!("composer.no_providers")))
-                                        })
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            let prompt = this.composer.read(cx).content(cx).to_owned();
-                                            if let Some(submission) =
-                                                this.submission_with_attachments(&prompt, cx)
-                                            {
-                                                this.composer.update(cx, |input, cx| input.clear(cx));
-                                                this.submit_composer_submission(submission, cx);
-                                            }
-                                        })),
-                                }),
+                                                .child(icon(
+                                                    "icons/arrow-up.svg",
+                                                    16.0,
+                                                    theme.on_inverse,
+                                                ))
+                                                .tooltip(Tooltip::text(tr!(
+                                                    "composer.queue_followup"
+                                                )))
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    let prompt = this
+                                                        .composer
+                                                        .read(cx)
+                                                        .content(cx)
+                                                        .to_owned();
+                                                    if let Some(submission) = this
+                                                        .submission_with_attachments(&prompt, cx)
+                                                    {
+                                                        this.composer.update(cx, |input, cx| {
+                                                            input.clear(cx)
+                                                        });
+                                                        this.submit_composer_submission(
+                                                            submission, cx,
+                                                        );
+                                                    }
+                                                })),
+                                        )
+                                    }),
+                                ComposerSubmitAction::Send => div()
+                                    .id("send-or-stop")
+                                    .flex_none()
+                                    .w(px(26.0))
+                                    .h(px(26.0))
+                                    .rounded_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .bg(if can_send {
+                                        theme.inverse
+                                    } else {
+                                        theme.overlay_strong
+                                    })
+                                    .when(can_send, |element| {
+                                        element
+                                            .cursor_default()
+                                            .hover(|element| element.opacity(0.9))
+                                            .active(|element| element.opacity(0.8))
+                                    })
+                                    .child(icon(
+                                        "icons/arrow-up.svg",
+                                        16.0,
+                                        if can_send {
+                                            theme.on_inverse
+                                        } else {
+                                            theme.text_ghost
+                                        },
+                                    ))
+                                    // Says why the button is dead, for the case
+                                    // the draft is ready and the machine is not.
+                                    .when(no_providers, |element| {
+                                        element.tooltip(Tooltip::text(tr!("composer.no_providers")))
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        let prompt = this.composer.read(cx).content(cx).to_owned();
+                                        if let Some(submission) =
+                                            this.submission_with_attachments(&prompt, cx)
+                                        {
+                                            this.composer.update(cx, |input, cx| input.clear(cx));
+                                            this.submit_composer_submission(submission, cx);
+                                        }
+                                    })),
+                            },
                         ),
-                )
+                    ),
+            )
     }
 
     fn render_branch_selector(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -3998,7 +4043,8 @@ impl Insulator {
         };
         self.selected_project()
             .filter(|project| !project.is_projectless())?;
-        let branch_enabled = session.map(|s| !s.is_busy()).unwrap_or(true) && !self.branch_operation_pending;
+        let branch_enabled =
+            session.map(|s| !s.is_busy()).unwrap_or(true) && !self.branch_operation_pending;
         let planned_worktree = matches!(workspace, SessionWorkspace::NewWorktree { .. });
         let snapshot = self.branch_snapshot_for_workspace(&workspace_path, cx)?;
         let selected_branch = match &workspace {
@@ -4607,11 +4653,7 @@ impl Insulator {
                             .child(worktree_selector)
                             .children(branch_selector),
                     )
-                    .child(
-                        div()
-                            .flex_none()
-                            .children(usage_meter),
-                    ),
+                    .child(div().flex_none().children(usage_meter)),
             )
     }
 }
@@ -4931,7 +4973,12 @@ fn model_picker_empty_state(
                 .child(icon("icons/settings.svg", 11.0, theme.text_tertiary))
                 .child(tr!("models.open_provider_settings"))
                 .on_click(move |_, window, cx| {
-                    open_provider_settings_from_picker(&click_insulator, &click_popover, window, cx);
+                    open_provider_settings_from_picker(
+                        &click_insulator,
+                        &click_popover,
+                        window,
+                        cx,
+                    );
                 })
                 .on_key_down(move |event: &KeyDownEvent, window, cx| {
                     if matches!(event.keystroke.key.as_str(), "enter" | "space") {
@@ -5079,7 +5126,10 @@ pub(super) fn visible_picker_models(
                     .iter()
                     .any(|(kind, model)| *kind == recent.provider && model.id == recent.model)
                 {
-                    models.push((recent.provider, ProviderModel::new(&recent.model, &recent.model)));
+                    models.push((
+                        recent.provider,
+                        ProviderModel::new(&recent.model, &recent.model),
+                    ));
                 }
             }
         }

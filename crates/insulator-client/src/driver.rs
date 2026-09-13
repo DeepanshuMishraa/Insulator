@@ -4,12 +4,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, SendError, Sender, unbounded};
-use uuid::Uuid;
 use insulator_protocol::computer_use::ComputerToolRequest;
 use insulator_protocol::model::{
     BackgroundWorkKey, DriverEvent, GoalOperation, ProviderResumeCursor, RuntimeMode,
     UserInputAnswer,
 };
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct DriverEventSender {

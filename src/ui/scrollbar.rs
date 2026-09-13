@@ -376,12 +376,9 @@ pub fn horizontal(surface: &ScrollHandle, state: &Rc<ScrollbarState>) -> impl In
                     } else {
                         let half = geometry.thumb.size.width / 2.0;
                         state.grab_offset.set(Some(f32::from(half)));
-                        let target_offset = offset_for_thumb_left(
-                            track.left(),
-                            event.position.x - half,
-                            &geometry,
-                        )
-                        .clamp(Pixels::ZERO, geometry.max_offset);
+                        let target_offset =
+                            offset_for_thumb_left(track.left(), event.position.x - half, &geometry)
+                                .clamp(Pixels::ZERO, geometry.max_offset);
                         surface.set_offset(point(-target_offset, surface.offset().y));
                     }
                     window.refresh();
@@ -398,12 +395,9 @@ pub fn horizontal(surface: &ScrollHandle, state: &Rc<ScrollbarState>) -> impl In
                     let Some(grab) = state.grab_offset.get() else {
                         return;
                     };
-                    let target_offset = offset_for_thumb_left(
-                        track.left(),
-                        event.position.x - px(grab),
-                        &geometry,
-                    )
-                    .clamp(Pixels::ZERO, geometry.max_offset);
+                    let target_offset =
+                        offset_for_thumb_left(track.left(), event.position.x - px(grab), &geometry)
+                            .clamp(Pixels::ZERO, geometry.max_offset);
                     surface.set_offset(point(-target_offset, surface.offset().y));
                     window.refresh();
                 }
@@ -712,22 +706,26 @@ mod tests {
 
     #[test]
     fn a_horizontal_surface_that_does_not_scroll_has_no_thumb() {
-        assert!(horizontal_geometry(
-            horizontal_track(),
-            px(400.0),
-            Pixels::ZERO,
-            Pixels::ZERO,
-            px(3.5)
-        )
-        .is_none());
-        assert!(horizontal_geometry(
-            horizontal_track(),
-            Pixels::ZERO,
-            px(900.0),
-            Pixels::ZERO,
-            px(3.5)
-        )
-        .is_none());
+        assert!(
+            horizontal_geometry(
+                horizontal_track(),
+                px(400.0),
+                Pixels::ZERO,
+                Pixels::ZERO,
+                px(3.5)
+            )
+            .is_none()
+        );
+        assert!(
+            horizontal_geometry(
+                horizontal_track(),
+                Pixels::ZERO,
+                px(900.0),
+                Pixels::ZERO,
+                px(3.5)
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -743,8 +741,7 @@ mod tests {
     #[test]
     fn horizontal_thumb_position_and_offset_are_inverse() {
         let track = horizontal_track();
-        let geom =
-            horizontal_geometry(track, px(400.0), px(1200.0), px(600.0), px(3.5)).unwrap();
+        let geom = horizontal_geometry(track, px(400.0), px(1200.0), px(600.0), px(3.5)).unwrap();
         assert_eq!(geom.thumb.left(), track.left() + px(150.0));
         assert_eq!(
             offset_for_thumb_left(track.left(), geom.thumb.left(), &geom),

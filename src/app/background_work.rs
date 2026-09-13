@@ -436,9 +436,8 @@ pub(super) fn strip_ansi(text: &str) -> String {
 
 pub(super) fn is_usage_summary(text: &str) -> bool {
     let text = strip_ansi(text).trim().to_owned();
-    let tps_tracker = text.contains("tok/s")
-        && text.contains("tokens in ")
-        && text.ends_with(" streaming");
+    let tps_tracker =
+        text.contains("tok/s") && text.contains("tokens in ") && text.ends_with(" streaming");
     let pi_status_anim = text
         .split_once(" tokens · ")
         .is_some_and(|(count, elapsed)| !count.is_empty() && elapsed.ends_with('s'));
@@ -1906,9 +1905,10 @@ fn render_environment_summary_section(
                 .child(tr!("environment.title")),
         )
         .child(commit)
-        .when(environment.can_open_pull_request || pull_request_pending, |section| {
-            section.child(pull_request)
-        })
+        .when(
+            environment.can_open_pull_request || pull_request_pending,
+            |section| section.child(pull_request),
+        )
         .child(compare)
 }
 
@@ -2291,7 +2291,10 @@ mod tests {
     #[test]
     fn toast_text_strips_ansi_sequences() {
         let message = "\u{1b}[38;2;181;189;104m✓ 429 tok/s  \u{1b}[38;2;102;102;102m169 tokens in 0.4s streaming\u{1b}[39m";
-        assert_eq!(strip_ansi(message), "✓ 429 tok/s  169 tokens in 0.4s streaming");
+        assert_eq!(
+            strip_ansi(message),
+            "✓ 429 tok/s  169 tokens in 0.4s streaming"
+        );
         assert!(is_usage_summary(message));
         assert!(is_usage_summary("429 tokens · 1s"));
         assert!(!is_usage_summary("Started 3 subagents"));

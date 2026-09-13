@@ -67,6 +67,8 @@ pub(super) struct PullRequest {
     author: String,
     #[serde(default)]
     body: String,
+    #[serde(default)]
+    body_loaded: bool,
     repository: String,
     state: String,
     #[serde(default)]
@@ -217,8 +219,9 @@ fn preserve_cached_details(entries: &mut [PullRequest], cached: &[PullRequest]) 
         let Some(previous) = cached.get(&(entry.repository.as_str(), entry.number)) else {
             continue;
         };
-        if entry.body.is_empty() {
+        if !entry.body_loaded {
             entry.body.clone_from(&previous.body);
+            entry.body_loaded = previous.body_loaded;
         }
         if entry.url.is_empty() {
             entry.url.clone_from(&previous.url);
@@ -444,6 +447,7 @@ fn load_pull_requests() -> anyhow::Result<Vec<PullRequest>> {
                 title: request.title.clone(),
                 author: request.author.login.clone(),
                 body: request.body.clone().unwrap_or_default(),
+                body_loaded: request.body.is_some(),
                 repository: request.repository.name_with_owner.clone(),
                 state,
                 url: request.url.clone(),
@@ -502,7 +506,7 @@ impl Insulator {
         request: PullRequest,
         cx: &mut Context<Self>,
     ) {
-        if !request.body.is_empty() {
+        if request.body_loaded {
             return;
         }
         self.pull_request_detail_loading = true;
@@ -521,11 +525,13 @@ impl Insulator {
                     && detail.number == request_key.1
                 {
                     detail.body = body.clone();
+                    detail.body_loaded = true;
                     detail.url = url.clone();
                     if let Some(entry) = this.pull_requests.iter_mut().find(|entry| {
                         entry.repository == request_key.0 && entry.number == request_key.1
                     }) {
                         entry.body = body;
+                        entry.body_loaded = true;
                         entry.url = url;
                         save_cached_pull_requests(&this.pull_requests);
                     }
@@ -807,9 +813,9 @@ fn render_pull_request_row(
         .on_click(move |_, _, cx| {
             let _ = insulator.update(cx, |this, cx| {
                 this.pull_request_detail = Some(request.clone());
-                this.pull_request_detail_loading = request.body.is_empty();
+                this.pull_request_detail_loading = !request.body_loaded;
                 this.pull_request_detail_tab = PullRequestDetailTab::Summary;
-                if request.body.is_empty() {
+                if !request.body_loaded {
                     this.ensure_pull_request_body(request.clone(), cx);
                 }
                 this.ensure_pull_request_commits(request.clone(), cx);
@@ -1214,6 +1220,7 @@ mod tests {
             title: "Old title".into(),
             author: "contributor".into(),
             body: "Cached body".into(),
+            body_loaded: true,
             repository: "owner/repo".into(),
             state: "open".into(),
             url: "https://github.com/owner/repo/pull/1".into(),
@@ -1228,6 +1235,7 @@ mod tests {
         let mut refreshed = vec![super::PullRequest {
             title: "New title".into(),
             body: String::new(),
+            body_loaded: false,
             url: String::new(),
             cached_commits: Vec::new(),
             cached_diff: None,

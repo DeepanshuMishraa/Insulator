@@ -142,7 +142,8 @@ impl DaemonProcess {
     ) -> anyhow::Result<Self> {
         let settings = settings.validate()?;
         let token = settings.token.clone();
-        let app_executable = std::env::current_exe().context("could not locate Insulator executable")?;
+        let app_executable =
+            std::env::current_exe().context("could not locate Insulator executable")?;
         let mut command = ProcessCommand::new(executable);
         // The desktop is a GUI-subsystem binary on Windows, so a console
         // child would get a console window of its own. `stderr` still reaches

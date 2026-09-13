@@ -99,7 +99,8 @@ pub fn generate_message(
 
 fn run_agent(cwd: &Path, invocation: &AgentInvocation, prompt: &str) -> anyhow::Result<String> {
     let amp_settings = if invocation.provider == ProviderKind::Amp {
-        let path = std::env::temp_dir().join(format!("insulator-amp-commit-{}.json", Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("insulator-amp-commit-{}.json", Uuid::new_v4()));
         fs::write(
             &path,
             r#"{"amp.tools.enable":[],"amp.notifications.enabled":false,"amp.skills.disableClaudeCodeSkills":true}"#,
@@ -197,7 +198,10 @@ pub fn create_pull_request(
     }
 
     if snapshot.has_staged || (include_unstaged && snapshot.has_unstaged) {
-        let message = match commit_message.map(str::trim).filter(|message| !message.is_empty()) {
+        let message = match commit_message
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+        {
             Some(message) => message.to_owned(),
             None => generate_message(cwd, include_unstaged, invocation)?,
         };
@@ -246,12 +250,16 @@ fn generate_pull_request_draft(
     let log = git_stdout(cwd, &["log", "--format=%s%n%b", &format!("{base}..HEAD")])?;
     let diff = git_stdout(
         cwd,
-        &["diff", "--no-ext-diff", "--no-color", &format!("{base}...HEAD"), "--"],
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-color",
+            &format!("{base}...HEAD"),
+            "--",
+        ],
     )?;
-    let (context, truncated) = truncate_utf8(
-        format!("Commits:\n{log}\n\nDiff:\n{diff}"),
-        MAX_DIFF_BYTES,
-    );
+    let (context, truncated) =
+        truncate_utf8(format!("Commits:\n{log}\n\nDiff:\n{diff}"), MAX_DIFF_BYTES);
     let prompt = format!(
         "Write a pull request title and body for the Git changes below.\n\
          Return valid JSON only with exactly two string fields: title and body.\n\
@@ -270,10 +278,20 @@ fn generate_pull_request_draft(
 
 fn parse_pull_request_draft(output: &str) -> anyhow::Result<PullRequestDraft> {
     let clean = strip_ansi(output);
-    let start = clean.find('{').ok_or_else(|| anyhow!("the agent returned no pull request JSON"))?;
-    let end = clean.rfind('}').ok_or_else(|| anyhow!("the agent returned incomplete pull request JSON"))?;
+    let start = clean
+        .find('{')
+        .ok_or_else(|| anyhow!("the agent returned no pull request JSON"))?;
+    let end = clean
+        .rfind('}')
+        .ok_or_else(|| anyhow!("the agent returned incomplete pull request JSON"))?;
     let mut draft: PullRequestDraft = serde_json::from_str(&clean[start..=end])?;
-    draft.title = draft.title.trim().trim_end_matches('.').chars().take(200).collect();
+    draft.title = draft
+        .title
+        .trim()
+        .trim_end_matches('.')
+        .chars()
+        .take(72)
+        .collect();
     draft.body = draft.body.trim().to_owned();
     if draft.title.is_empty() || draft.body.is_empty() {
         bail!("the agent returned an empty pull request title or body");
@@ -669,13 +687,23 @@ fn default_branch(cwd: &Path) -> anyhow::Result<Option<String>> {
             "refs/remotes/origin/HEAD",
         ],
     )?;
-    if let Some(branch) = remote.and_then(|branch| branch.strip_prefix("origin/").map(str::to_owned)) {
+    if let Some(branch) =
+        remote.and_then(|branch| branch.strip_prefix("origin/").map(str::to_owned))
+    {
         return Ok(Some(branch));
     }
     for branch in ["main", "master"] {
-        if git_capture(cwd, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch}")])?
-            .status
-            .success()
+        if git_capture(
+            cwd,
+            &[
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{branch}"),
+            ],
+        )?
+        .status
+        .success()
         {
             return Ok(Some(branch.to_owned()));
         }

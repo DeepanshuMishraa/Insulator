@@ -88,9 +88,11 @@ pub fn execute(operation: WorkspaceOperation) -> anyhow::Result<WorkspaceResult>
                 cwd: crate::projectless::migrate_workspace(&path)?.cwd,
             }
         }
-        WorkspaceOperation::CloneRepository { url, destination } => WorkspaceResult::ClonedRepository {
-            path: clone_github_repository(&url, &destination)?,
-        },
+        WorkspaceOperation::CloneRepository { url, destination } => {
+            WorkspaceResult::ClonedRepository {
+                path: clone_github_repository(&url, &destination)?,
+            }
+        }
         WorkspaceOperation::InspectBranches { cwd } => WorkspaceResult::Branches {
             snapshot: crate::git_branch::inspect(&cwd)?,
         },

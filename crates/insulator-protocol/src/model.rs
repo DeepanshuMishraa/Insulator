@@ -4676,7 +4676,10 @@ mod tests {
         let activities = &session.transcript_blocks[0].activities;
         assert!(activities[0].detail.is_none());
         assert!(activities[0].arguments.is_some());
-        assert_eq!(activities[0].file_changes[0].path, "/tmp/insulator/README.md");
+        assert_eq!(
+            activities[0].file_changes[0].path,
+            "/tmp/insulator/README.md"
+        );
         assert_eq!(activities[0].file_changes[0].additions, Some(2));
         assert_eq!(activities[0].file_changes[0].deletions, Some(1));
     }

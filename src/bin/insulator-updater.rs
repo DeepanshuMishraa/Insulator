@@ -257,8 +257,9 @@ mod linux {
                 Ok(())
             }
             RelaunchState::Exited(status) => {
-                let message =
-                    format!("the updated Insulator build exited before its window opened ({status})");
+                let message = format!(
+                    "the updated Insulator build exited before its window opened ({status})"
+                );
                 rollback(handoff, &backup, &message)?;
                 bail!(message)
             }
@@ -489,7 +490,10 @@ mod linux {
             apply_update(&handoff).unwrap();
 
             assert!(install.join("bin/insulator").is_file());
-            assert_eq!(fs::read(install.join("bin/insulator-daemon")).unwrap(), b"new");
+            assert_eq!(
+                fs::read(install.join("bin/insulator-daemon")).unwrap(),
+                b"new"
+            );
             assert!(
                 fs::read_dir(&directory).unwrap().all(|entry| {
                     !entry

@@ -4606,7 +4606,9 @@ impl Insulator {
                             .upgrade()
                             .map(|entity| {
                                 entity.update(cx, |this, cx| {
-                                    this.render_right_panel_diff_line_from_snapshot(&snapshot, index, cx)
+                                    this.render_right_panel_diff_line_from_snapshot(
+                                        &snapshot, index, cx,
+                                    )
                                 })
                             })
                             .unwrap_or_else(|| div().into_any_element())

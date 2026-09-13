@@ -631,49 +631,34 @@ mod tests {
 
     #[test]
     fn resolve_offscreen_forward_and_backward() {
-        let initial_reg = registry_with_keys(&[
-            ("r1", 0, "alpha"),
-            ("r2", 0, "beta"),
-            ("r3", 0, "gamma"),
-        ]);
+        let initial_reg =
+            registry_with_keys(&[("r1", 0, "alpha"), ("r2", 0, "beta"), ("r3", 0, "gamma")]);
         let initial_spans = initial_reg.resolve((0, 0), (1, 4));
-        assert_eq!(selected(&initial_reg, &initial_spans), vec!["alpha", "beta"]);
+        assert_eq!(
+            selected(&initial_reg, &initial_spans),
+            vec!["alpha", "beta"]
+        );
 
         // Scrolled down: r1 is offscreen, visible is r2, r3, r4
-        let scrolled_reg = registry_with_keys(&[
-            ("r2", 0, "beta"),
-            ("r3", 0, "gamma"),
-            ("r4", 0, "delta"),
-        ]);
-        let offscreen_spans = scrolled_reg.resolve_offscreen(
-            (1, 3),
-            DragDirection::Forward,
-            &initial_spans,
-        );
+        let scrolled_reg =
+            registry_with_keys(&[("r2", 0, "beta"), ("r3", 0, "gamma"), ("r4", 0, "delta")]);
+        let offscreen_spans =
+            scrolled_reg.resolve_offscreen((1, 3), DragDirection::Forward, &initial_spans);
         assert_eq!(
             selected(&scrolled_reg, &offscreen_spans),
             vec!["alpha", "beta", "gam"]
         );
 
         // Backward drag: started at r4, dragged backward to r3
-        let reg_end = registry_with_keys(&[
-            ("r2", 0, "beta"),
-            ("r3", 0, "gamma"),
-            ("r4", 0, "delta"),
-        ]);
+        let reg_end =
+            registry_with_keys(&[("r2", 0, "beta"), ("r3", 0, "gamma"), ("r4", 0, "delta")]);
         let end_spans = reg_end.resolve((2, 5), (1, 1));
         assert_eq!(selected(&reg_end, &end_spans), vec!["amma", "delta"]);
 
         // Scrolled up: r3 and r4 are offscreen, visible is r1, r2
-        let scrolled_up_reg = registry_with_keys(&[
-            ("r1", 0, "alpha"),
-            ("r2", 0, "beta"),
-        ]);
-        let backward_spans = scrolled_up_reg.resolve_offscreen(
-            (0, 2),
-            DragDirection::Backward,
-            &end_spans,
-        );
+        let scrolled_up_reg = registry_with_keys(&[("r1", 0, "alpha"), ("r2", 0, "beta")]);
+        let backward_spans =
+            scrolled_up_reg.resolve_offscreen((0, 2), DragDirection::Backward, &end_spans);
         assert_eq!(
             selected(&scrolled_up_reg, &backward_spans),
             vec!["pha", "beta", "amma", "delta"]

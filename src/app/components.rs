@@ -53,52 +53,52 @@ impl RenderOnce for DotMatrixLoader {
         let dot_gap = (size * 0.12).max(1.5);
         self.base.child(
             motion::pulse(Duration::from_millis(1200), move |phase| {
-        let mut grid = div()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(px(dot_gap));
+                let mut grid = div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(dot_gap));
 
-        for row in 0..3 {
-            let mut row_el = div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .gap(px(dot_gap));
-            for col in 0..3 {
-                let t_off = 0.10 + col as f32 * 0.09 + row as f32 * 0.025;
-                let t_on = 0.50 + col as f32 * 0.09 + row as f32 * 0.025;
-                let active = if phase < 0.10 {
-                    true
-                } else if phase < 0.50 {
-                    phase < t_off
-                } else if phase < 0.85 {
-                    phase >= t_on
-                } else {
-                    true
-                };
+                for row in 0..3 {
+                    let mut row_el = div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(dot_gap));
+                    for col in 0..3 {
+                        let t_off = 0.10 + col as f32 * 0.09 + row as f32 * 0.025;
+                        let t_on = 0.50 + col as f32 * 0.09 + row as f32 * 0.025;
+                        let active = if phase < 0.10 {
+                            true
+                        } else if phase < 0.50 {
+                            phase < t_off
+                        } else if phase < 0.85 {
+                            phase >= t_on
+                        } else {
+                            true
+                        };
 
-                let opacity = if active { 0.95 } else { 0.0 };
-                row_el = row_el.child(
-                    div()
-                        .size(px(dot_size))
-                        .rounded_full()
-                        .bg(color)
-                        .opacity(opacity),
-                );
-            }
-            grid = grid.child(row_el);
-        }
+                        let opacity = if active { 0.95 } else { 0.0 };
+                        row_el = row_el.child(
+                            div()
+                                .size(px(dot_size))
+                                .rounded_full()
+                                .bg(color)
+                                .opacity(opacity),
+                        );
+                    }
+                    grid = grid.child(row_el);
+                }
 
-        div()
-            .size(px(size))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(grid)
-            .into_any_element()
+                div()
+                    .size(px(size))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(grid)
+                    .into_any_element()
             })
             .every(1),
         )
@@ -297,11 +297,10 @@ pub(super) fn render_message_footer(
         .line_height(sp(14.0))
         .text_color(footer_color)
         .child(format_message_time(footer_time))
-        .when_some(response_tokens_per_second(message, footer_time), |element, tps| {
-            element
-                .child(" • ")
-                .child(format!("{tps} tok/s"))
-        });
+        .when_some(
+            response_tokens_per_second(message, footer_time),
+            |element, tps| element.child(" • ").child(format!("{tps} tok/s")),
+        );
     let copy_button = div()
         .id(SharedString::from(format!("copy-message-{message_id}")))
         .w(px(27.0))
@@ -1920,7 +1919,9 @@ mod message_time_tests {
             None,
             true,
         )
-        .with_arguments(Some(serde_json::json!({"query": "Insulator GPUI"}).to_string()));
+        .with_arguments(Some(
+            serde_json::json!({"query": "Insulator GPUI"}).to_string(),
+        ));
         assert_eq!(
             activity_display_title(&web_search),
             "Searched the web for Insulator GPUI"

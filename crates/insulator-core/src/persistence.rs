@@ -30,8 +30,8 @@ use crate::computer_use::ComputerAppGrant;
 use crate::i18n::AppLanguage;
 use crate::identity::DATA_DIRECTORY_NAME;
 use crate::model::{
-    AgentSession, FavoriteModel, Message, MessageAttachment, MessageRole, Project,
-    ProviderKind, RuntimeMode, SessionWorkspace,
+    AgentSession, FavoriteModel, Message, MessageAttachment, MessageRole, Project, ProviderKind,
+    RuntimeMode, SessionWorkspace,
 };
 use crate::theme::{ColorTheme, ThemePreference};
 pub use insulator_protocol::persistence::{
@@ -61,7 +61,6 @@ fn default_right_panel_visibility() -> bool {
 fn default_computer_use_enabled() -> bool {
     false
 }
-
 
 fn default_provider() -> ProviderKind {
     ProviderKind::Codex
@@ -576,7 +575,12 @@ impl PersistedState {
                     .iter()
                     .any(|project| project.id == *selected_project)
             })
-            .or_else(|| self.projects.iter().find(|p| !p.is_projectless()).map(|p| p.id))
+            .or_else(|| {
+                self.projects
+                    .iter()
+                    .find(|p| !p.is_projectless())
+                    .map(|p| p.id)
+            })
         else {
             return;
         };
@@ -1564,7 +1568,9 @@ fn session_skeleton(row: SessionColumns) -> Option<AgentSession> {
     ) = row;
     let parsed_chat_status = chat_status
         .as_deref()
-        .and_then(|status| serde_json::from_value(serde_json::Value::String(status.to_owned())).ok())
+        .and_then(|status| {
+            serde_json::from_value(serde_json::Value::String(status.to_owned())).ok()
+        })
         .unwrap_or_default();
     Some(AgentSession {
         id: Uuid::parse_str(&id).ok()?,
@@ -2649,7 +2655,10 @@ mod tests {
         restored.apply_daemon_settings(daemon_settings);
         assert_eq!(restored.projects[0].name, "project");
         assert_eq!(restored.sessions.len(), 1);
-        assert_eq!(restored.sessions[0].conversation_root_id, Some(conversation_root_id));
+        assert_eq!(
+            restored.sessions[0].conversation_root_id,
+            Some(conversation_root_id)
+        );
         assert_eq!(restored.sessions[0].model.as_deref(), Some("gpt-5.6-luna"));
         assert_eq!(restored.last_model.as_deref(), Some("gpt-5.6-luna"));
         assert_eq!(restored.last_reasoning_effort.as_deref(), Some("xhigh"));
@@ -2709,7 +2718,11 @@ mod tests {
 
         // 1. Unhydrated reload: verify skeleton gets Done from sessions table
         let mut loaded_state = store.load().unwrap();
-        let loaded_session = loaded_state.sessions.iter().find(|s| s.id == session_id).unwrap();
+        let loaded_session = loaded_state
+            .sessions
+            .iter()
+            .find(|s| s.id == session_id)
+            .unwrap();
         assert!(!loaded_session.detail_loaded);
         assert_eq!(loaded_session.chat_status, ChatStatus::Done);
 
@@ -2724,7 +2737,11 @@ mod tests {
         store.save(&mut loaded_state).unwrap();
 
         let reloaded = store.load().unwrap();
-        let reloaded_session = reloaded.sessions.iter().find(|s| s.id == session_id).unwrap();
+        let reloaded_session = reloaded
+            .sessions
+            .iter()
+            .find(|s| s.id == session_id)
+            .unwrap();
         assert_eq!(reloaded_session.chat_status, ChatStatus::InReview);
 
         fs::remove_dir_all(directory).ok();

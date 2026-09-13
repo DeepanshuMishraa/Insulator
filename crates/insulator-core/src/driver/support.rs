@@ -510,7 +510,9 @@ mod tests {
     fn computer_use_config() -> computer_use_runtime::ComputerUseConfig {
         computer_use_runtime::ComputerUseConfig {
             server_path: PathBuf::from("/tmp/Insulator Computer Use"),
-            repl_path: PathBuf::from("/Applications/Insulator.app/Contents/Resources/insulator_js_repl"),
+            repl_path: PathBuf::from(
+                "/Applications/Insulator.app/Contents/Resources/insulator_js_repl",
+            ),
             skill_path: PathBuf::from(
                 "/Applications/Insulator.app/Contents/Resources/skills/insulator-computer-use/SKILL.md",
             ),

@@ -1793,9 +1793,26 @@ impl Insulator {
         self.state.right_panel_surfaces = self
             .right_panel_surfaces
             .iter()
-            .map(PersistedRightPanelSurface::from)
+            .filter_map(|surface| match surface {
+                RightPanelSurface::BackgroundWork { .. } => None,
+                surface => Some(PersistedRightPanelSurface::from(surface)),
+            })
             .collect();
-        self.state.right_panel_active_surface = self.right_panel_active_surface;
+        self.state.right_panel_active_surface =
+            self.right_panel_active_surface.and_then(|active| {
+                let surface = self.right_panel_surfaces.get(active)?;
+                if matches!(surface, RightPanelSurface::BackgroundWork { .. }) {
+                    return None;
+                }
+                Some(
+                    self.right_panel_surfaces[..active]
+                        .iter()
+                        .filter(|surface| {
+                            !matches!(surface, RightPanelSurface::BackgroundWork { .. })
+                        })
+                        .count(),
+                )
+            });
         self.state.pinned_sessions = self.pinned_session_ids.iter().copied().collect();
         self.state.pinned_sessions.sort_unstable();
         self.last_stream_save = Instant::now();

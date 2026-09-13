@@ -6,8 +6,8 @@ use super::runtime::{merge_remote_session_catalog, session_has_active_provider_t
 use super::settings::visible_settings_pages;
 use super::{
     ESCAPE_STOP_CONFIRMATION_TIMEOUT, EscapeStopConfirmation, EscapeStopPress, EscapeStopTarget,
-    MainTab, NAVIGATION_RAIL_TICK_HEIGHT, NAVIGATION_RAIL_TURN_HEIGHT, PendingUserInput, SessionNavigation,
-    StreamDeltaKind, TranscriptRowKind::*, active_navigation_turn_index,
+    MainTab, NAVIGATION_RAIL_TICK_HEIGHT, NAVIGATION_RAIL_TURN_HEIGHT, PendingUserInput,
+    SessionNavigation, StreamDeltaKind, TranscriptRowKind::*, active_navigation_turn_index,
     append_text_delta_to_session, assistant_response_footer, assistant_response_footer_index,
     assistant_response_footer_time, compact_driver_error, disclosure_leading_space, fenced_code,
     fitted_file_tree_width, fitted_panel_widths, folded_transcript_row_kinds,
@@ -136,13 +136,14 @@ fn live_runtime_keeps_generated_title_when_remote_projection_is_stale() {
     let remote = local.list_projection();
 
     let mut catalog = vec![local];
-    merge_remote_session_catalog(
-        &mut catalog,
-        vec![remote],
-        |session_id| session_id == local_id,
-    );
+    merge_remote_session_catalog(&mut catalog, vec![remote], |session_id| {
+        session_id == local_id
+    });
 
-    assert_eq!(catalog[0].auto_title.as_deref(), Some("Repair title generation"));
+    assert_eq!(
+        catalog[0].auto_title.as_deref(),
+        Some("Repair title generation")
+    );
 }
 
 #[test]
@@ -400,7 +401,10 @@ fn task_notification_tags_route_to_the_corresponding_task() {
     let tag = task_notification_tag(session_id);
 
     assert_eq!(task_id_from_notification_tag(&tag), Some(session_id));
-    assert_eq!(task_id_from_notification_tag("insulator-task:not-a-uuid"), None);
+    assert_eq!(
+        task_id_from_notification_tag("insulator-task:not-a-uuid"),
+        None
+    );
     assert_eq!(task_id_from_notification_tag(&session_id.to_string()), None);
 }
 
@@ -2101,14 +2105,14 @@ fn model_picker_recents_tab_preserves_mru_order_and_filters_disabled() {
         provider,
         installed: true,
         path: Some(std::path::PathBuf::from(format!("/bin/{}", provider.id()))),
-        models: models
-            .iter()
-            .map(|m| ProviderModel::new(*m, *m))
-            .collect(),
+        models: models.iter().map(|m| ProviderModel::new(*m, *m)).collect(),
         agent_presets: Vec::new(),
     };
     let probes = [
-        probe(ProviderKind::Claude, &["claude-sonnet-4", "claude-sonnet-5"]),
+        probe(
+            ProviderKind::Claude,
+            &["claude-sonnet-4", "claude-sonnet-5"],
+        ),
         probe(ProviderKind::Codex, &["gpt-5.6-sol", "gpt-4o"]),
     ];
     let recents = [
@@ -2331,14 +2335,19 @@ fn review_tab_can_be_tracked_and_closed() {
 fn sessionless_composer_draft_key_falls_back_to_new_session_for_project() {
     let project_id = Uuid::new_v4();
     let key = crate::persistence::ComposerDraftKey::NewSession(project_id);
-    assert_eq!(key, crate::persistence::ComposerDraftKey::NewSession(project_id));
+    assert_eq!(
+        key,
+        crate::persistence::ComposerDraftKey::NewSession(project_id)
+    );
 }
 
 #[test]
 fn model_picker_is_enabled_when_session_is_none() {
     let session: Option<&AgentSession> = None;
     let provider = ProviderKind::Claude;
-    let picker_enabled = session.map(|s| s.can_choose_model(provider)).unwrap_or(true);
+    let picker_enabled = session
+        .map(|s| s.can_choose_model(provider))
+        .unwrap_or(true);
     assert!(picker_enabled);
 }
 
@@ -2460,9 +2469,15 @@ fn test_multi_selection_prompt_formatting() {
         let line_label = if snippet.start_line == snippet.end_line {
             format!("[Selected line {}]", snippet.start_line)
         } else {
-            format!("[Selected lines {}-{}]", snippet.start_line, snippet.end_line)
+            format!(
+                "[Selected lines {}-{}]",
+                snippet.start_line, snippet.end_line
+            )
         };
-        out.push_str(&format!("\n{line_label}\n```\n{}\n```", snippet.text.trim_end()));
+        out.push_str(&format!(
+            "\n{line_label}\n```\n{}\n```",
+            snippet.text.trim_end()
+        ));
     }
 
     let expected = "\

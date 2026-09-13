@@ -1107,7 +1107,10 @@ impl InsulatorBackend {
             bail!("the checkpoint before this message is unavailable");
         }
 
-        let safety_ref = format!("refs/insulator/revert-backup-{session_id}-{}", Uuid::new_v4());
+        let safety_ref = format!(
+            "refs/insulator/revert-backup-{session_id}-{}",
+            Uuid::new_v4()
+        );
         crate::checkpoint::capture_ref(&cwd, &safety_ref)
             .context("could not create a rewind safety snapshot")?;
         if let Err(error) = crate::checkpoint::restore_ref(&cwd, &restore_ref) {

@@ -1124,7 +1124,11 @@ impl Render for TerminalView {
         let selection_color = theme.selection;
         let viewport = window.viewport_size();
         let panel_width = self.panel_width;
-        let toolbar_height = if self.show_toolbar { TERMINAL_TOOLBAR_HEIGHT } else { 0.0 };
+        let toolbar_height = if self.show_toolbar {
+            TERMINAL_TOOLBAR_HEIGHT
+        } else {
+            0.0
+        };
         let body_height = (self
             .panel_height
             .unwrap_or_else(|| f32::from(viewport.height) - 48.0)

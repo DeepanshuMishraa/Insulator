@@ -306,7 +306,8 @@ mod tests {
 
     #[test]
     fn lists_kimi_owned_state_without_opening_the_recorded_workspace() {
-        let root = std::env::temp_dir().join(format!("insulator-kimi-catalog-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("insulator-kimi-catalog-{}", uuid::Uuid::new_v4()));
         let session = root.join("sessions/wd-protected/session-native");
         let recorded_cwd = std::env::temp_dir().join(format!(
             "insulator-kimi-protected-workspace-{}",

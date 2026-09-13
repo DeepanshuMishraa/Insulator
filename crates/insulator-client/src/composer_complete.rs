@@ -2,10 +2,10 @@
 
 use std::ops::Range;
 
-use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
-use nucleo_matcher::{Matcher, Utf32Str};
 pub use insulator_protocol::composer::{CommandScope, FileEntry, ReferenceEntry, SlashCommand};
 use insulator_protocol::model::{ProviderKind, ProviderModelOption, ReportedCommand};
+use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
+use nucleo_matcher::{Matcher, Utf32Str};
 
 pub const FILTER_CAP: usize = 64;
 pub const FILE_INDEX_CAP: usize = 50_000;

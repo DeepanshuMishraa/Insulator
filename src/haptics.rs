@@ -40,10 +40,8 @@ pub fn trigger(pattern: HapticPattern) {
         HapticPattern::Alignment => NSHapticFeedbackPattern::Alignment,
         HapticPattern::LevelChange => NSHapticFeedbackPattern::LevelChange,
     };
-    NSHapticFeedbackManager::defaultPerformer().performFeedbackPattern_performanceTime(
-        pattern,
-        NSHapticFeedbackPerformanceTime::Now,
-    );
+    NSHapticFeedbackManager::defaultPerformer()
+        .performFeedbackPattern_performanceTime(pattern, NSHapticFeedbackPerformanceTime::Now);
 }
 
 #[cfg(not(target_os = "macos"))]

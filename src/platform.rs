@@ -770,9 +770,7 @@ pub fn configure_sidebar_material(
             f64::from(color.r),
             f64::from(color.g),
             f64::from(color.b),
-            f64::from(
-                1.0 - sidebar_transparency.clamp(0.0, 100.0) / 100.0,
-            ),
+            f64::from(1.0 - sidebar_transparency.clamp(0.0, 100.0) / 100.0),
         );
 
         SIDEBAR_TINT_VIEW.with_borrow_mut(|slot| {
@@ -858,7 +856,10 @@ thread_local! {
 pub fn supports_liquid_glass() -> bool {
     use objc2::runtime::AnyClass;
     use objc2_foundation::NSProcessInfo;
-    NSProcessInfo::processInfo().operatingSystemVersion().majorVersion >= 26
+    NSProcessInfo::processInfo()
+        .operatingSystemVersion()
+        .majorVersion
+        >= 26
         || AnyClass::get(c"NSGlassView").is_some()
 }
 
@@ -871,7 +872,9 @@ pub fn supports_liquid_glass() -> bool {
 /// persisted settings before the current process exits.
 #[allow(dead_code)]
 pub fn restart_application() -> bool {
-    let Ok(executable) = std::env::current_exe() else { return false };
+    let Ok(executable) = std::env::current_exe() else {
+        return false;
+    };
     std::process::Command::new(executable)
         .args(std::env::args_os().skip(1))
         .spawn()
@@ -886,16 +889,18 @@ unsafe fn apply_native_window_style(
     color_theme: insulator_protocol::theme::ColorTheme,
     main_thread: objc2::MainThreadMarker,
 ) {
+    use objc2::MainThreadOnly;
     use objc2::msg_send;
     use objc2::rc::Retained;
     use objc2::runtime::{AnyClass, AnyObject};
-    use objc2::MainThreadOnly;
     use objc2_app_kit::{
         NSAutoresizingMaskOptions, NSColor, NSView, NSVisualEffectBlendingMode,
         NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowOrderingMode,
     };
 
-    let Some(content_view) = native_window.contentView() else { return };
+    let Some(content_view) = native_window.contentView() else {
+        return;
+    };
     let active_theme = crate::theme::Theme::from_color_theme(color_theme);
     let rgb = active_theme.surface.to_rgb();
 
@@ -939,8 +944,7 @@ unsafe fn apply_native_window_style(
                     if needs_new_view {
                         let view_alloc: *mut AnyObject = msg_send![glass_class, alloc];
                         let frame = content_view.bounds();
-                        let initialized: *mut NSView =
-                            msg_send![view_alloc, initWithFrame: frame];
+                        let initialized: *mut NSView = msg_send![view_alloc, initWithFrame: frame];
                         if let Some(glass_view) = unsafe { Retained::from_raw(initialized) } {
                             glass_view.setAutoresizingMask(
                                 NSAutoresizingMaskOptions::ViewWidthSizable
@@ -1087,17 +1091,27 @@ pub fn configure_window_style(
     use objc2_app_kit::NSView;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-    let Ok(handle) = HasWindowHandle::window_handle(window) else { return };
-    let RawWindowHandle::AppKit(handle) = handle.as_raw() else { return };
-    let Some(main_thread) = objc2::MainThreadMarker::new() else { return };
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return;
+    };
+    let Some(main_thread) = objc2::MainThreadMarker::new() else {
+        return;
+    };
 
     CURRENT_WINDOW_STYLE.set(style);
 
     unsafe {
         let view = handle.ns_view.cast::<NSView>().as_ref();
-        let Some(native_window) = view.window() else { return };
+        let Some(native_window) = view.window() else {
+            return;
+        };
         MAIN_WINDOW.with_borrow_mut(|slot| *slot = Some(native_window.clone()));
-        if let Some(view_retained) = objc2::rc::Retained::retain(handle.ns_view.as_ptr().cast::<NSView>()) {
+        if let Some(view_retained) =
+            objc2::rc::Retained::retain(handle.ns_view.as_ptr().cast::<NSView>())
+        {
             MAIN_VIEW.with_borrow_mut(|slot| *slot = Some(view_retained));
         }
         apply_native_window_style(&native_window, view, style, color_theme, main_thread);
@@ -1110,7 +1124,9 @@ pub fn reapply_window_style(
     color_theme: insulator_protocol::theme::ColorTheme,
     _image_path: Option<&str>,
 ) {
-    let Some(main_thread) = objc2::MainThreadMarker::new() else { return };
+    let Some(main_thread) = objc2::MainThreadMarker::new() else {
+        return;
+    };
     CURRENT_WINDOW_STYLE.set(style);
     MAIN_WINDOW.with_borrow(|win_slot| {
         MAIN_VIEW.with_borrow(|view_slot| {
@@ -1166,7 +1182,9 @@ pub fn register_tab_cycle_handler<F: Fn(bool) + 'static>(handler: F) {
         use objc2::runtime::{AnyClass, AnyObject, Sel};
 
         for class_name in [c"GPUIWindow", c"GPUIPanel"] {
-            let Some(cls) = AnyClass::get(class_name) else { continue };
+            let Some(cls) = AnyClass::get(class_name) else {
+                continue;
+            };
 
             unsafe {
                 let sel_next = objc2::sel!(selectNextTab:);
@@ -1205,14 +1223,16 @@ pub fn configure_window_style(
     _: insulator_protocol::theme::WindowStyle,
     _: insulator_protocol::theme::ColorTheme,
     _: Option<&str>,
-) {}
+) {
+}
 
 #[cfg(not(target_os = "macos"))]
 pub fn reapply_window_style(
     _: insulator_protocol::theme::WindowStyle,
     _: insulator_protocol::theme::ColorTheme,
     _: Option<&str>,
-) {}
+) {
+}
 
 #[cfg(target_os = "macos")]
 pub fn set_sidebar_material_width(window: &Window, width: f32) {

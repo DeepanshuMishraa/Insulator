@@ -25,7 +25,12 @@ pub enum WindowStyle {
 }
 
 impl WindowStyle {
-    pub const ALL: [Self; 4] = [Self::Solid, Self::LiquidGlass, Self::Image, Self::Transparent];
+    pub const ALL: [Self; 4] = [
+        Self::Solid,
+        Self::LiquidGlass,
+        Self::Image,
+        Self::Transparent,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -71,33 +76,74 @@ pub enum ColorTheme {
 
 impl ColorTheme {
     pub const ALL: [Self; 25] = [
-        Self::InsulatorLight, Self::InsulatorDark,
-        Self::CatppuccinLatte, Self::CatppuccinFrappe, Self::CatppuccinMacchiato,
-        Self::CatppuccinMocha, Self::TokyoNight, Self::TokyoStorm, Self::TokyoMoon,
-        Self::TokyoDay, Self::RosePine, Self::RosePineMoon, Self::RosePineDawn,
-        Self::GruvboxDark, Self::GruvboxLight, Self::Vesper, Self::KanagawaWave,
-        Self::KanagawaLotus, Self::Nord, Self::Dracula, Self::OneDark,
-        Self::SolarizedDark, Self::SolarizedLight, Self::EverforestDark,
+        Self::InsulatorLight,
+        Self::InsulatorDark,
+        Self::CatppuccinLatte,
+        Self::CatppuccinFrappe,
+        Self::CatppuccinMacchiato,
+        Self::CatppuccinMocha,
+        Self::TokyoNight,
+        Self::TokyoStorm,
+        Self::TokyoMoon,
+        Self::TokyoDay,
+        Self::RosePine,
+        Self::RosePineMoon,
+        Self::RosePineDawn,
+        Self::GruvboxDark,
+        Self::GruvboxLight,
+        Self::Vesper,
+        Self::KanagawaWave,
+        Self::KanagawaLotus,
+        Self::Nord,
+        Self::Dracula,
+        Self::OneDark,
+        Self::SolarizedDark,
+        Self::SolarizedLight,
+        Self::EverforestDark,
         Self::EverforestLight,
     ];
 
     pub fn is_dark(self) -> bool {
-        !matches!(self, Self::InsulatorLight | Self::CatppuccinLatte | Self::TokyoDay | Self::RosePineDawn
-            | Self::GruvboxLight | Self::KanagawaLotus | Self::SolarizedLight
-            | Self::EverforestLight)
+        !matches!(
+            self,
+            Self::InsulatorLight
+                | Self::CatppuccinLatte
+                | Self::TokyoDay
+                | Self::RosePineDawn
+                | Self::GruvboxLight
+                | Self::KanagawaLotus
+                | Self::SolarizedLight
+                | Self::EverforestLight
+        )
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::InsulatorLight => "Insulator Light", Self::InsulatorDark => "Insulator Dark",
-            Self::CatppuccinLatte => "Catppuccin Latte", Self::CatppuccinFrappe => "Catppuccin Frappé",
-            Self::CatppuccinMacchiato => "Catppuccin Macchiato", Self::CatppuccinMocha => "Catppuccin Mocha",
-            Self::TokyoNight => "Tokyo Night", Self::TokyoStorm => "Tokyo Storm", Self::TokyoMoon => "Tokyo Moon", Self::TokyoDay => "Tokyo Day",
-            Self::RosePine => "Rosé Pine", Self::RosePineMoon => "Rosé Pine Moon", Self::RosePineDawn => "Rosé Pine Dawn",
-            Self::GruvboxDark => "Gruvbox Dark", Self::GruvboxLight => "Gruvbox Light", Self::Vesper => "Vesper",
-            Self::KanagawaWave => "Kanagawa Wave", Self::KanagawaLotus => "Kanagawa Lotus", Self::Nord => "Nord",
-            Self::Dracula => "Dracula", Self::OneDark => "One Dark", Self::SolarizedDark => "Solarized Dark",
-            Self::SolarizedLight => "Solarized Light", Self::EverforestDark => "Everforest Dark", Self::EverforestLight => "Everforest Light",
+            Self::InsulatorLight => "Insulator Light",
+            Self::InsulatorDark => "Insulator Dark",
+            Self::CatppuccinLatte => "Catppuccin Latte",
+            Self::CatppuccinFrappe => "Catppuccin Frappé",
+            Self::CatppuccinMacchiato => "Catppuccin Macchiato",
+            Self::CatppuccinMocha => "Catppuccin Mocha",
+            Self::TokyoNight => "Tokyo Night",
+            Self::TokyoStorm => "Tokyo Storm",
+            Self::TokyoMoon => "Tokyo Moon",
+            Self::TokyoDay => "Tokyo Day",
+            Self::RosePine => "Rosé Pine",
+            Self::RosePineMoon => "Rosé Pine Moon",
+            Self::RosePineDawn => "Rosé Pine Dawn",
+            Self::GruvboxDark => "Gruvbox Dark",
+            Self::GruvboxLight => "Gruvbox Light",
+            Self::Vesper => "Vesper",
+            Self::KanagawaWave => "Kanagawa Wave",
+            Self::KanagawaLotus => "Kanagawa Lotus",
+            Self::Nord => "Nord",
+            Self::Dracula => "Dracula",
+            Self::OneDark => "One Dark",
+            Self::SolarizedDark => "Solarized Dark",
+            Self::SolarizedLight => "Solarized Light",
+            Self::EverforestDark => "Everforest Dark",
+            Self::EverforestLight => "Everforest Light",
         }
     }
 
@@ -106,7 +152,11 @@ impl ColorTheme {
     }
 
     pub fn default_for_dark(dark: bool) -> Self {
-        if dark { Self::InsulatorDark } else { Self::InsulatorLight }
+        if dark {
+            Self::InsulatorDark
+        } else {
+            Self::InsulatorLight
+        }
     }
 }
 

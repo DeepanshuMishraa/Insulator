@@ -11,9 +11,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use gpui::{
-    AnyElement, App, EntityId, Global, IntoElement, RenderOnce, Window, ease_out_quint,
-};
+use gpui::{AnyElement, App, EntityId, Global, IntoElement, RenderOnce, Window, ease_out_quint};
 
 /// Repeat-tick interval, rounded up so spinner ticks never exceed 60 fps.
 const PULSE_TICK: Duration = Duration::from_nanos(16_666_667);

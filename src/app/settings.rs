@@ -335,8 +335,14 @@ impl Insulator {
                 .border_l_1()
                 .border_color(theme.sidebar_border)
                 .bg(match self.state.window_style {
-                    WindowStyle::LiquidGlass => Hsla { a: 0.10, ..theme.surface },
-                    WindowStyle::Image => Hsla { a: 0.82, ..theme.surface },
+                    WindowStyle::LiquidGlass => Hsla {
+                        a: 0.10,
+                        ..theme.surface
+                    },
+                    WindowStyle::Image => Hsla {
+                        a: 0.82,
+                        ..theme.surface
+                    },
                     WindowStyle::Solid => theme.surface,
                     WindowStyle::Transparent => theme.surface,
                 })
@@ -413,8 +419,14 @@ impl Insulator {
             .border_l_1()
             .border_color(theme.sidebar_border)
             .bg(match self.state.window_style {
-                WindowStyle::LiquidGlass => Hsla { a: 0.10, ..theme.surface },
-                WindowStyle::Image => Hsla { a: 0.82, ..theme.surface },
+                WindowStyle::LiquidGlass => Hsla {
+                    a: 0.10,
+                    ..theme.surface
+                },
+                WindowStyle::Image => Hsla {
+                    a: 0.82,
+                    ..theme.surface
+                },
                 WindowStyle::Solid => theme.surface,
                 WindowStyle::Transparent => theme.surface,
             })
@@ -1509,7 +1521,10 @@ impl Insulator {
             move |_| {
                 WindowStyle::ALL
                     .into_iter()
-                    .filter(|style| *style != WindowStyle::LiquidGlass || crate::platform::supports_liquid_glass())
+                    .filter(|style| {
+                        *style != WindowStyle::LiquidGlass
+                            || crate::platform::supports_liquid_glass()
+                    })
                     .map(|style| {
                         let weak = style_weak.clone();
                         MenuItem::new(style.label(), move |window, cx| {
@@ -1859,14 +1874,18 @@ impl Insulator {
                                     .text_size(sp(12.5))
                                     .line_height(sp(18.0))
                                     .text_color(theme.text_secondary)
-                                    .child("Choose a solid, glass, image, or transparent background."),
+                                    .child(
+                                        "Choose a solid, glass, image, or transparent background.",
+                                    ),
                             ),
                     )
                     .child(window_style_selector),
             )
             .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
-            .when(selected_window_style != WindowStyle::LiquidGlass, |element| {
-                element.child(
+            .when(
+                selected_window_style != WindowStyle::LiquidGlass,
+                |element| {
+                    element.child(
                     div()
                         .w_full()
                         .min_h(px(72.0))
@@ -1925,7 +1944,8 @@ impl Insulator {
                             ),
                     ),
                 )
-            })
+                },
+            )
             .when(selected_window_style == WindowStyle::Image, |element| {
                 let weak = cx.entity().downgrade();
                 let image_path = self.state.background_image_path.clone();
@@ -1951,35 +1971,37 @@ impl Insulator {
                                             .text_color(theme.text)
                                             .child("Background image"),
                                     )
-                                    .child(
-                                        if let Some(path) = &image_path {
-                                            let filename = std::path::Path::new(path)
-                                                .file_name()
-                                                .and_then(|n| n.to_str())
-                                                .unwrap_or(path.as_str())
-                                                .to_string();
-                                            div()
-                                                .mt(px(5.0))
-                                                .flex()
-                                                .items_center()
-                                                .gap(px(6.0))
-                                                .child(icon("icons/file.svg", 13.0, theme.text_secondary))
-                                                .child(
-                                                    div()
-                                                        .text_size(sp(12.5))
-                                                        .text_color(theme.text_secondary)
-                                                        .overflow_hidden()
-                                                        .child(filename),
-                                                )
-                                        } else {
-                                            div()
-                                                .mt(px(5.0))
-                                                .text_size(sp(12.5))
-                                                .line_height(sp(18.0))
-                                                .text_color(theme.text_secondary)
-                                                .child("No image selected")
-                                        },
-                                    ),
+                                    .child(if let Some(path) = &image_path {
+                                        let filename = std::path::Path::new(path)
+                                            .file_name()
+                                            .and_then(|n| n.to_str())
+                                            .unwrap_or(path.as_str())
+                                            .to_string();
+                                        div()
+                                            .mt(px(5.0))
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(6.0))
+                                            .child(icon(
+                                                "icons/file.svg",
+                                                13.0,
+                                                theme.text_secondary,
+                                            ))
+                                            .child(
+                                                div()
+                                                    .text_size(sp(12.5))
+                                                    .text_color(theme.text_secondary)
+                                                    .overflow_hidden()
+                                                    .child(filename),
+                                            )
+                                    } else {
+                                        div()
+                                            .mt(px(5.0))
+                                            .text_size(sp(12.5))
+                                            .line_height(sp(18.0))
+                                            .text_color(theme.text_secondary)
+                                            .child("No image selected")
+                                    }),
                             )
                             .child(
                                 div()
@@ -1992,7 +2014,11 @@ impl Insulator {
                                     .cursor_pointer()
                                     .text_size(sp(12.5))
                                     .text_color(theme.text)
-                                    .child(if image_path.is_some() { "Change image" } else { "Choose image" })
+                                    .child(if image_path.is_some() {
+                                        "Change image"
+                                    } else {
+                                        "Choose image"
+                                    })
                                     .on_click(move |_, _, cx| {
                                         let receiver = cx.prompt_for_paths(PathPromptOptions {
                                             files: true,
@@ -2009,7 +2035,8 @@ impl Insulator {
                                                     this.set_background_image(path, cx);
                                                 });
                                             }
-                                        }).detach();
+                                        })
+                                        .detach();
                                     }),
                             ),
                     )
@@ -2274,12 +2301,9 @@ impl Insulator {
         self.save();
     }
 
-    pub(super) fn set_sidebar_transparency(
-        &mut self,
-        transparency: f32,
-        cx: &mut Context<Self>,
-    ) {
-        let transparency = insulator_client::persistence::sanitized_sidebar_transparency(transparency);
+    pub(super) fn set_sidebar_transparency(&mut self, transparency: f32, cx: &mut Context<Self>) {
+        let transparency =
+            insulator_client::persistence::sanitized_sidebar_transparency(transparency);
         if (self.state.sidebar_transparency - transparency).abs() < f32::EPSILON {
             return;
         }
@@ -2316,10 +2340,8 @@ impl Insulator {
         cx: &mut Context<Self>,
     ) {
         if !self.state.sidebar_transparency_customized {
-            let transparency = insulator_client::persistence::default_sidebar_transparency_for(
-                dark,
-                window_style,
-            );
+            let transparency =
+                insulator_client::persistence::default_sidebar_transparency_for(dark, window_style);
             self.set_sidebar_transparency(transparency, cx);
         }
     }
@@ -3319,7 +3341,12 @@ impl Insulator {
             window,
             cx,
         );
-        crate::platform::configure_window_style(window, self.state.window_style, self.state.color_theme, self.state.background_image_path.as_deref());
+        crate::platform::configure_window_style(
+            window,
+            self.state.window_style,
+            self.state.color_theme,
+            self.state.background_image_path.as_deref(),
+        );
         self.save();
         cx.notify();
     }
@@ -3342,7 +3369,12 @@ impl Insulator {
             window,
             cx,
         );
-        crate::platform::configure_window_style(window, self.state.window_style, color_theme, self.state.background_image_path.as_deref());
+        crate::platform::configure_window_style(
+            window,
+            self.state.window_style,
+            color_theme,
+            self.state.background_image_path.as_deref(),
+        );
         self.save();
         cx.notify();
     }
@@ -3360,7 +3392,12 @@ impl Insulator {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.35 })
+                .bg(Hsla {
+                    h: 0.0,
+                    s: 0.0,
+                    l: 0.0,
+                    a: 0.35,
+                })
                 .child(
                     div()
                         .w(px(380.0))
@@ -3370,21 +3407,69 @@ impl Insulator {
                         .border_color(theme.border_strong)
                         .bg(theme.raised)
                         .text_color(theme.text)
-                        .child(div().text_size(sp(16.0)).font_weight(FontWeight::SEMIBOLD).child("Restart required"))
-                        .child(div().mt(px(8.0)).text_size(sp(13.0)).line_height(sp(19.0)).text_color(theme.text_secondary).child(format!("Restart Insulator to apply the {} window style.", style.label())))
                         .child(
-                            div().mt(px(20.0)).flex().justify_end().gap(px(8.0))
-                                .child(div().id("window-style-restart-later").px(px(12.0)).py(px(7.0)).rounded(px(6.0)).text_color(theme.text_secondary).child("Do it later").on_click({ let weak = weak.clone(); move |_, _, cx| { let _ = weak.update(cx, |this, cx| { this.window_style_restart_dialog = None; cx.notify(); }); }}))
-                                .child(div().id("window-style-restart-now").px(px(12.0)).py(px(7.0)).rounded(px(6.0)).bg(rgb(0xc0392b)).text_color(rgb(0xffffff)).child("Restart").on_click(move |_, _, cx| { if crate::platform::restart_application() { cx.quit(); } }))
+                            div()
+                                .text_size(sp(16.0))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("Restart required"),
+                        )
+                        .child(
+                            div()
+                                .mt(px(8.0))
+                                .text_size(sp(13.0))
+                                .line_height(sp(19.0))
+                                .text_color(theme.text_secondary)
+                                .child(format!(
+                                    "Restart Insulator to apply the {} window style.",
+                                    style.label()
+                                )),
+                        )
+                        .child(
+                            div()
+                                .mt(px(20.0))
+                                .flex()
+                                .justify_end()
+                                .gap(px(8.0))
+                                .child(
+                                    div()
+                                        .id("window-style-restart-later")
+                                        .px(px(12.0))
+                                        .py(px(7.0))
+                                        .rounded(px(6.0))
+                                        .text_color(theme.text_secondary)
+                                        .child("Do it later")
+                                        .on_click({
+                                            let weak = weak.clone();
+                                            move |_, _, cx| {
+                                                let _ = weak.update(cx, |this, cx| {
+                                                    this.window_style_restart_dialog = None;
+                                                    cx.notify();
+                                                });
+                                            }
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .id("window-style-restart-now")
+                                        .px(px(12.0))
+                                        .py(px(7.0))
+                                        .rounded(px(6.0))
+                                        .bg(rgb(0xc0392b))
+                                        .text_color(rgb(0xffffff))
+                                        .child("Restart")
+                                        .on_click(move |_, _, cx| {
+                                            if crate::platform::restart_application() {
+                                                cx.quit();
+                                            }
+                                        }),
+                                ),
                         ),
                 )
                 .into_any_element(),
         )
     }
 
-    pub(crate) fn window_style_config(
-        &self,
-    ) -> (WindowStyle, ColorTheme, Option<&str>, f32) {
+    pub(crate) fn window_style_config(&self) -> (WindowStyle, ColorTheme, Option<&str>, f32) {
         (
             self.state.window_style,
             self.state.color_theme,
@@ -3393,7 +3478,12 @@ impl Insulator {
         )
     }
 
-    fn set_window_style(&mut self, style: WindowStyle, window: &mut Window, cx: &mut Context<Self>) {
+    fn set_window_style(
+        &mut self,
+        style: WindowStyle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.state.window_style == style {
             return;
         }
@@ -3419,7 +3509,12 @@ impl Insulator {
             window,
             cx,
         );
-        crate::platform::configure_window_style(window, style, self.state.color_theme, self.state.background_image_path.as_deref());
+        crate::platform::configure_window_style(
+            window,
+            style,
+            self.state.color_theme,
+            self.state.background_image_path.as_deref(),
+        );
         let theme = Theme::current(cx);
         crate::platform::set_sidebar_material_transparency(
             theme.sidebar_drag_background,
@@ -3441,7 +3536,8 @@ impl Insulator {
                         this.set_background_image(path, cx);
                     });
                 }
-            }).detach();
+            })
+            .detach();
         }
         cx.notify();
     }
@@ -3453,7 +3549,11 @@ impl Insulator {
         self.state.background_image_path = Some(path.to_string_lossy().into_owned());
         self.state.window_style = WindowStyle::Image;
         self.window_style_restart_dialog = None;
-        self.reset_default_sidebar_transparency(self.state.color_theme.is_dark(), WindowStyle::Image, cx);
+        self.reset_default_sidebar_transparency(
+            self.state.color_theme.is_dark(),
+            WindowStyle::Image,
+            cx,
+        );
         crate::theme::update_active_theme(
             self.state.theme,
             self.state.color_theme,
@@ -3461,7 +3561,11 @@ impl Insulator {
             self.state.sidebar_transparency,
             cx,
         );
-        crate::platform::reapply_window_style(WindowStyle::Image, self.state.color_theme, self.state.background_image_path.as_deref());
+        crate::platform::reapply_window_style(
+            WindowStyle::Image,
+            self.state.color_theme,
+            self.state.background_image_path.as_deref(),
+        );
         self.save();
         cx.notify();
     }
