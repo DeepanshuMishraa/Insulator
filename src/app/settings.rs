@@ -1886,64 +1886,64 @@ impl Insulator {
                 selected_window_style != WindowStyle::LiquidGlass,
                 |element| {
                     element.child(
-                    div()
-                        .w_full()
-                        .min_h(px(72.0))
-                    .px(px(20.0))
-                    .py(px(12.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(24.0))
-                    .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_size(sp(13.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
-                                    .child(if selected_window_style == WindowStyle::Transparent {
-                                        "Window transparency"
-                                    } else {
-                                        "Sidebar transparency"
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(5.0))
-                                    .text_size(sp(12.5))
-                                    .line_height(sp(18.0))
-                                    .text_color(theme.text_secondary)
-                                    .child(if selected_window_style == WindowStyle::Transparent {
-                                        "Adjust how much of the window background shows through."
-                                    } else {
-                                        "Adjust how much of the sidebar background shows through."
-                                    }),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .w(px(220.0))
-                            .flex_none()
+                            .w_full()
+                            .min_h(px(72.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
                             .flex()
                             .items_center()
-                            .gap(px(10.0))
+                            .gap(px(24.0))
                             .child(
-                                Slider::new(&self.sidebar_transparency_slider)
-                                    .width(px(170.0)),
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_size(sp(13.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.text)
+                                            .child(if selected_window_style == WindowStyle::Transparent {
+                                                "Window transparency"
+                                            } else {
+                                                "Sidebar transparency"
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt(px(5.0))
+                                            .text_size(sp(12.5))
+                                            .line_height(sp(18.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(if selected_window_style == WindowStyle::Transparent {
+                                                "Adjust how much of the window background shows through."
+                                            } else {
+                                                "Adjust how much of the sidebar background shows through."
+                                            }),
+                                    ),
                             )
                             .child(
                                 div()
-                                    .w(px(40.0))
-                                    .text_size(sp(12.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text_secondary)
-                                    .text_right()
-                                    .child(format!("{selected_sidebar_transparency:.0}%")),
+                                    .w(px(220.0))
+                                    .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(10.0))
+                                    .child(
+                                        Slider::new(&self.sidebar_transparency_slider)
+                                            .width(px(170.0)),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(40.0))
+                                            .text_size(sp(12.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.text_secondary)
+                                            .text_right()
+                                            .child(format!("{selected_sidebar_transparency:.0}%")),
+                                    ),
                             ),
-                    ),
-                )
+                    )
                 },
             )
             .when(selected_window_style == WindowStyle::Image, |element| {

@@ -328,7 +328,7 @@ fn has_open_pull_request(cwd: &Path, branch: &str) -> Option<bool> {
 
     let mut command = crate::command_env::command("gh");
     command
-        .args(["pr", "view", branch, "--json", "state", "--jq", ".state"])
+        .args(["pr", "view", "--json", "state", "--jq", ".state"])
         .current_dir(cwd)
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_PAGER", "cat")
@@ -377,6 +377,8 @@ fn read_timed_pull_request_output(mut child: Child) -> Option<Output> {
             }
             _ => {
                 terminate_process_group(&mut child);
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
                 return None;
             }
         }
@@ -403,6 +405,15 @@ fn terminate_process_group(child: &mut Child) {
                 libc::killpg(pid, libc::SIGKILL);
             }
         }
+    }
+    #[cfg(windows)]
+    {
+        // `gh` can leave a helper holding one of the inherited pipes. Ask
+        // Windows to terminate the complete process tree before joining the
+        // reader threads.
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .output();
     }
     let _ = child.kill();
     let _ = child.wait();

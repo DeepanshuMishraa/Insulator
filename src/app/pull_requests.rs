@@ -190,10 +190,16 @@ fn pull_request_cache_path() -> std::path::PathBuf {
 }
 
 pub(super) fn load_cached_pull_requests() -> Vec<PullRequest> {
-    std::fs::read(pull_request_cache_path())
+    let mut entries: Vec<PullRequest> = std::fs::read(pull_request_cache_path())
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // Older cache files predate `body_loaded`; a non-empty body is already a
+    // successful load and must not trigger another GitHub request on startup.
+    for entry in &mut entries {
+        entry.body_loaded |= !entry.body.is_empty();
+    }
+    entries
 }
 
 pub(super) fn cached_commits(

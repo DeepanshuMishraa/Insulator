@@ -20,6 +20,7 @@ impl Insulator {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let theme = Theme::current(cx);
+        let focus = self.transcript_control_focus(format!("panel-resize-{id}"), cx);
         let active = self
             .panel_resize_drag
             .is_some_and(|drag| drag.target == target);
@@ -40,6 +41,9 @@ impl Insulator {
             .left(px(strip_left))
             .w(px(strip_width))
             .h_full()
+            .track_focus(&focus)
+            .tab_index(0)
+            .focus_visible(|style| style.bg(theme.resize_handle.opacity(0.35)))
             .group("panel-resize-handle")
             .cursor_col_resize()
             .child(
@@ -64,6 +68,40 @@ impl Insulator {
                     this.begin_panel_resize(target, event, window, cx);
                 }),
             )
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                let delta = match event.keystroke.key.as_str() {
+                    "left" => Some(24.0),
+                    "right" => Some(-24.0),
+                    _ => None,
+                };
+                if let Some(delta) = delta {
+                    this.resize_panel_by_keyboard(target, delta, window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+    }
+
+    fn resize_panel_by_keyboard(
+        &mut self,
+        target: PanelResizeTarget,
+        delta: f32,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        if target != PanelResizeTarget::RightPanel {
+            return;
+        }
+        let (sidebar_width, right_panel_width) = self.effective_panel_widths(window);
+        let maximum = RIGHT_PANEL_MAX_WIDTH
+            .min(f32::from(window.viewport_size().width) - MAIN_PANEL_MIN_WIDTH - sidebar_width)
+            .max(RIGHT_PANEL_MIN_WIDTH);
+        let width = (right_panel_width + delta).clamp(RIGHT_PANEL_MIN_WIDTH, maximum);
+        if (self.right_panel_width - width).abs() < 0.5 {
+            return;
+        }
+        self.right_panel_width = width;
+        self.persist_panel_layout();
+        cx.notify();
     }
 
     pub(super) fn render_horizontal_panel_resize_handle(
