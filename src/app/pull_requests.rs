@@ -1,4 +1,5 @@
 use super::*;
+use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
@@ -415,6 +416,17 @@ fn load_pull_request_diff(request: &PullRequest) -> anyhow::Result<(ReviewDiffSn
     ))
 }
 
+fn format_github_timestamp(value: &str) -> String {
+    DateTime::parse_from_rfc3339(value)
+        .map(|timestamp| {
+            timestamp
+                .with_timezone(&Local)
+                .format("%d/%m/%y • %-I:%M %p")
+                .to_string()
+        })
+        .unwrap_or_else(|_| value.to_owned())
+}
+
 fn without_html_comments(body: &str) -> String {
     let mut result = String::with_capacity(body.len());
     let mut rest = body;
@@ -765,6 +777,12 @@ impl Insulator {
                 this.pull_request_comments_loading.remove(&request_key);
                 match result {
                     Ok(comments) => {
+                        for (index, _) in comments.iter().enumerate() {
+                            this.pull_request_collapsed_comments.insert(format!(
+                                "{}:{}:{index}",
+                                request_key.0, request_key.1
+                            ));
+                        }
                         this.pull_request_comments.insert(request_key.clone(), comments);
                         this.pull_request_comments_error.remove(&request_key);
                     }
@@ -1024,7 +1042,11 @@ impl Insulator {
                             13.0,
                             theme.text_tertiary,
                         ))
-                        .child(div().min_w_0().flex_1().text_color(theme.text).font_weight(FontWeight::MEDIUM).child(SharedString::from(format!("{}  ·  {}", comment.author, comment.created_at))))
+                        .child(div().min_w_0().flex_1().text_color(theme.text).font_weight(FontWeight::MEDIUM).child(SharedString::from(format!(
+                            "{}  ·  {}",
+                            comment.author,
+                            format_github_timestamp(&comment.created_at)
+                        ))))
                         .when_some(comment.location.as_ref(), |element, location| {
                             element.child(div().text_color(theme.text_tertiary).child(SharedString::from(location.clone())))
                         });
@@ -1394,6 +1416,14 @@ fn render_pull_request_row(
                 this.ensure_pull_request_commits(request.clone(), cx);
                 this.ensure_pull_request_checks(request.clone(), cx);
                 this.ensure_pull_request_comments(request.clone(), cx);
+                let comment_key = (request.repository.clone(), request.number);
+                if let Some(comments) = this.pull_request_comments.get(&comment_key) {
+                    for (index, _) in comments.iter().enumerate() {
+                        this.pull_request_collapsed_comments.insert(format!(
+                            "{}:{}:{index}", comment_key.0, comment_key.1
+                        ));
+                    }
+                }
                 this.set_right_panel_visible(true, cx);
             });
         })
@@ -1651,7 +1681,7 @@ impl Insulator {
                                             .child(SharedString::from(format!(
                                                 "{}  ·  {}",
                                                 &commit.oid[..commit.oid.len().min(7)],
-                                                commit.authored_at
+                                                format_github_timestamp(&commit.authored_at)
                                             ))),
                                     )
                             }))
