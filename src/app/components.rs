@@ -118,6 +118,15 @@ pub(super) fn format_message_time(created_at: u64) -> String {
     format_message_time_at(created_at, Local::now())
 }
 
+fn response_tokens_per_second(message: &Message, completed_at: u64) -> Option<u64> {
+    if message.role != MessageRole::Assistant || message.content.is_empty() {
+        return None;
+    }
+    let estimated_tokens = message.content.chars().count().div_ceil(4) as u64;
+    let elapsed_seconds = completed_at.saturating_sub(message.created_at).max(1);
+    Some(estimated_tokens / elapsed_seconds)
+}
+
 fn format_message_time_at(created_at: u64, now: DateTime<Local>) -> String {
     let Ok(seconds) = i64::try_from(created_at) else {
         return String::new();
@@ -287,7 +296,12 @@ pub(super) fn render_message_footer(
         .text_size(sp(12.5))
         .line_height(sp(14.0))
         .text_color(footer_color)
-        .child(format_message_time(footer_time));
+        .child(format_message_time(footer_time))
+        .when_some(response_tokens_per_second(message, footer_time), |element, tps| {
+            element
+                .child(" • ")
+                .child(format!("{tps} tok/s"))
+        });
     let copy_button = div()
         .id(SharedString::from(format!("copy-message-{message_id}")))
         .w(px(27.0))
@@ -1516,6 +1530,14 @@ mod message_time_tests {
             .timestamp()
             .try_into()
             .expect("test date should have a positive Unix timestamp")
+    }
+
+    #[test]
+    fn response_footer_shows_estimated_tokens_per_second() {
+        let mut message = Message::new(MessageRole::Assistant, "a".repeat(40));
+        message.created_at = 10;
+        assert_eq!(response_tokens_per_second(&message, 12), Some(5));
+        assert_eq!(response_tokens_per_second(&message, 10), Some(10));
     }
 
     #[test]

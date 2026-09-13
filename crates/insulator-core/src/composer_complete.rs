@@ -46,26 +46,29 @@ pub struct Trigger {
 
 /// The trigger at `cursor`, if the text under it is one.
 ///
-/// A slash command must be the first token of its line — `/` mid-sentence is
-/// prose. An `@` mention starts after whitespace or opening punctuation, so
+/// A slash command starts a token, so `fix this /com` completes in the
+/// middle of a prompt without treating the slash in `https://` as a command.
+/// An `@` mention starts after whitespace or opening punctuation, so
 /// `see @src/` in the middle of a prompt still completes, while `user@host`
-/// does not: its `@` is inside a token.
+/// does not.
 pub fn detect_trigger(text: &str, cursor: usize) -> Option<Trigger> {
     let cursor = cursor.min(text.len());
     if !text.is_char_boundary(cursor) {
         return None;
     }
-    let line_start = text[..cursor].rfind('\n').map_or(0, |index| index + 1);
-    let line_prefix = &text[line_start..cursor];
-    if let Some(query) = line_prefix.strip_prefix('/') {
-        if !query.chars().any(char::is_whitespace) {
+    if let Some(slash_start) = text[..cursor].rfind('/') {
+        let boundary = text[..slash_start].chars().next_back();
+        let starts_token = boundary.is_none_or(|character| {
+            character.is_whitespace() || matches!(character, '(' | '[' | '{' | '"' | '\'')
+        });
+        let query = &text[slash_start + 1..cursor];
+        if starts_token && !query.chars().any(char::is_whitespace) {
             return Some(Trigger {
                 kind: TriggerKind::Command,
                 query: query.to_owned(),
-                range: line_start..cursor,
+                range: slash_start..cursor,
             });
         }
-        return None;
     }
 
     let mention_start = text[..cursor].rfind('@')?;
@@ -1029,14 +1032,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn slash_triggers_only_as_the_first_token_of_a_line() {
+    fn slash_triggers_at_token_boundaries() {
         let trigger = detect_trigger("/com", 4).expect("slash at start triggers");
         assert_eq!(trigger.kind, TriggerKind::Command);
         assert_eq!(trigger.query, "com");
         assert_eq!(trigger.range, 0..4);
 
-        assert!(detect_trigger("fix this /now", 13).is_none());
-        assert!(detect_trigger("/compact the log", 16).is_none());
+        let trigger = detect_trigger("fix this /com", 13).expect("mid-prompt slash triggers");
+        assert_eq!(trigger.query, "com");
+        assert_eq!(trigger.range, 9..13);
+        assert_eq!(detect_trigger("fix this /", 10).unwrap().query, "");
+        assert!(detect_trigger("fix/now", 7).is_none());
+        assert!(detect_trigger("fix this /now please", 20).is_none());
+        assert!(detect_trigger("visit https://example.com", 25).is_none());
         // Mid-token cursor completes the typed half only.
         assert_eq!(detect_trigger("/compact", 4).unwrap().query, "com");
         // A slash on a later line is still a command position.

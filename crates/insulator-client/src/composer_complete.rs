@@ -28,17 +28,19 @@ pub fn detect_trigger(text: &str, cursor: usize) -> Option<Trigger> {
     if !text.is_char_boundary(cursor) {
         return None;
     }
-    let line_start = text[..cursor].rfind('\n').map_or(0, |index| index + 1);
-    let line_prefix = &text[line_start..cursor];
-    if let Some(query) = line_prefix.strip_prefix('/') {
-        if !query.chars().any(char::is_whitespace) {
+    if let Some(slash_start) = text[..cursor].rfind('/') {
+        let boundary = text[..slash_start].chars().next_back();
+        let starts_token = boundary.is_none_or(|character| {
+            character.is_whitespace() || matches!(character, '(' | '[' | '{' | '"' | '\'')
+        });
+        let query = &text[slash_start + 1..cursor];
+        if starts_token && !query.chars().any(char::is_whitespace) {
             return Some(Trigger {
                 kind: TriggerKind::Command,
                 query: query.to_owned(),
-                range: line_start..cursor,
+                range: slash_start..cursor,
             });
         }
-        return None;
     }
     let mention_start = text[..cursor].rfind('@')?;
     let boundary = text[..mention_start].chars().next_back();
@@ -397,6 +399,18 @@ pub fn highlight_byte_ranges(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slash_commands_work_mid_prompt_at_token_boundaries() {
+        let trigger = detect_trigger("fix this /com", 13).expect("mid-prompt slash triggers");
+        assert_eq!(trigger.kind, TriggerKind::Command);
+        assert_eq!(trigger.query, "com");
+        assert_eq!(trigger.range, 9..13);
+        assert_eq!(detect_trigger("fix this /", 10).unwrap().query, "");
+        assert!(detect_trigger("fix/now", 7).is_none());
+        assert!(detect_trigger("fix this /now please", 20).is_none());
+        assert!(detect_trigger("visit https://example.com", 25).is_none());
+    }
 
     #[test]
     fn mentions_work_mid_sentence_and_after_opening_punctuation() {
