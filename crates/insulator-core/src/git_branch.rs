@@ -364,12 +364,16 @@ fn read_timed_pull_request_output(mut child: Child) -> Option<Output> {
     let stderr = child.stderr.take()?;
     let stdout_reader = thread::spawn(move || {
         let mut bytes = Vec::new();
-        let _ = std::io::BufReader::new(stdout).read_to_end(&mut bytes);
+        let _ = std::io::BufReader::new(stdout)
+            .take(16 * 1024 * 1024)
+            .read_to_end(&mut bytes);
         bytes
     });
     let stderr_reader = thread::spawn(move || {
         let mut bytes = Vec::new();
-        let _ = std::io::BufReader::new(stderr).read_to_end(&mut bytes);
+        let _ = std::io::BufReader::new(stderr)
+            .take(16 * 1024 * 1024)
+            .read_to_end(&mut bytes);
         bytes
     });
     let deadline = Instant::now() + PULL_REQUEST_LOOKUP_TIMEOUT;
@@ -387,8 +391,9 @@ fn read_timed_pull_request_output(mut child: Child) -> Option<Output> {
             }
         }
     };
-    // The direct child has already been reaped. Do not signal its PID/group:
-    // that identifier may already belong to an unrelated process.
+    // Helpers may inherit the pipes after the direct child exits. Close the
+    // process group before joining readers so branch inspection cannot hang.
+    terminate_process_group(&mut child);
     let stdout = stdout_reader.join().ok()?;
     let stderr = stderr_reader.join().ok()?;
     Some(Output {

@@ -1815,7 +1815,13 @@ diff.no_changes:
 diff.no_changes_description:
   en: This source has no file changes to review
 diff.filter_files:
-  en: Filter files…
+  en: Filter files
+pull_requests.search_placeholder:
+  en: Search pull requests
+pull_requests.comment_placeholder:
+  en: Leave a comment
+pull_requests.comment_label:
+  en: Pull request comment…
 diff.source_last_turn:
   en: Last Turn
 diff.source_turn:

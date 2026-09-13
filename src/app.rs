@@ -1520,7 +1520,8 @@ pub struct Insulator {
     pull_request_comments_loading: HashSet<(String, u64)>,
     pull_request_comments_error: HashMap<(String, u64), String>,
     pull_request_comment_input: Entity<TextInput>,
-    pull_request_comment_posting: bool,
+    pull_request_comment_posting: HashSet<(String, u64)>,
+    pull_request_comment_post_errors: HashMap<(String, u64), String>,
     pull_request_collapsed_comments: HashSet<String>,
     pull_request_diffs: HashMap<(String, u64), Arc<ReviewDiffSnapshot>>,
     pull_request_diffs_loading: HashSet<(String, u64)>,
@@ -2280,14 +2281,14 @@ impl Insulator {
         let pull_requests_search = cx.new(|cx| {
             TextInput::new(window, cx)
                 .clear_on_escape()
-                .placeholder("Search pull requests")
+                .placeholder(tr!("pull_requests.search_placeholder"))
         });
         let pull_request_comment_input = cx.new(|cx| {
             TextInput::new(window, cx)
                 .multi_line()
                 .auto_height()
-                .placeholder("Leave a comment")
-                .accessibility_label("Pull request comment")
+                .placeholder(tr!("pull_requests.comment_placeholder"))
+                .accessibility_label(tr!("pull_requests.comment_label"))
         });
         let right_panel_diff_filter =
             cx.new(|cx| TextInput::new(window, cx).placeholder(tr!("diff.filter_files")));
@@ -3295,7 +3296,8 @@ impl Insulator {
                 pull_request_comments_loading: HashSet::new(),
                 pull_request_comments_error: HashMap::new(),
                 pull_request_comment_input,
-                pull_request_comment_posting: false,
+                pull_request_comment_posting: HashSet::new(),
+                pull_request_comment_post_errors: HashMap::new(),
                 pull_request_collapsed_comments: HashSet::new(),
                 pull_request_diffs: HashMap::new(),
                 pull_request_diffs_loading: HashSet::new(),

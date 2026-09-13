@@ -301,20 +301,15 @@ fn load_pull_request_body(request: &PullRequest) -> anyhow::Result<(String, Stri
         #[serde(default)]
         url: String,
     }
-    let output = std::process::Command::new("gh")
-        .args([
-            "pr",
-            "view",
-            &request.number.to_string(),
-            "--repo",
-            &request.repository,
-            "--json",
-            "body,url",
-        ])
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("GH_PAGER", "cat")
-        .stdin(Stdio::null())
-        .output()?;
+    let output = gh_output(&[
+        "pr",
+        "view",
+        &request.number.to_string(),
+        "--repo",
+        &request.repository,
+        "--json",
+        "body,url",
+    ])?;
     if !output.status.success() {
         anyhow::bail!(
             "gh pr view failed: {}",
@@ -350,12 +345,7 @@ fn load_pull_request_diff(request: &PullRequest) -> anyhow::Result<(ReviewDiffSn
         "repos/{}/pulls/{}/files",
         request.repository, request.number
     );
-    let output = std::process::Command::new("gh")
-        .args(["api", "--paginate", "--slurp", &endpoint])
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("GH_PAGER", "cat")
-        .stdin(Stdio::null())
-        .output()?;
+    let output = gh_output(&["api", "--paginate", "--slurp", &endpoint])?;
     if !output.status.success() {
         anyhow::bail!(
             "gh api pull-request files failed: {}",
@@ -383,18 +373,13 @@ fn load_pull_request_diff(request: &PullRequest) -> anyhow::Result<(ReviewDiffSn
         return Ok((snapshot, patch));
     }
 
-    let fallback = std::process::Command::new("gh")
-        .args([
-            "pr",
-            "diff",
-            &request.number.to_string(),
-            "--repo",
-            &request.repository,
-        ])
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("GH_PAGER", "cat")
-        .stdin(Stdio::null())
-        .output()?;
+    let fallback = gh_output(&[
+        "pr",
+        "diff",
+        &request.number.to_string(),
+        "--repo",
+        &request.repository,
+    ])?;
     if !fallback.status.success() {
         anyhow::bail!("GitHub returned no readable pull-request patch");
     }
@@ -433,6 +418,7 @@ fn without_html_comments(body: &str) -> String {
         plain.push_str(&rest[..start]);
         let Some(end) = rest[start..].find('>') else {
             plain.push_str(&rest[start..]);
+            rest = "";
             break;
         };
         rest = &rest[start + end + 1..];
@@ -526,20 +512,15 @@ fn post_pull_request_comment(request: &PullRequest, body: &str) -> anyhow::Resul
 }
 
 fn load_pull_request_commits(request: &PullRequest) -> anyhow::Result<Vec<PullRequestCommit>> {
-    let output = std::process::Command::new("gh")
-        .args([
-            "pr",
-            "view",
-            &request.number.to_string(),
-            "--repo",
-            &request.repository,
-            "--json",
-            "commits",
-        ])
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("GH_PAGER", "cat")
-        .stdin(Stdio::null())
-        .output()?;
+    let output = gh_output(&[
+        "pr",
+        "view",
+        &request.number.to_string(),
+        "--repo",
+        &request.repository,
+        "--json",
+        "commits",
+    ])?;
     if !output.status.success() {
         anyhow::bail!(
             "gh pr view failed: {}",
@@ -793,12 +774,13 @@ impl Insulator {
         let body = self.pull_request_comment_input.read(cx).content().trim().to_owned();
         let request_key = (request.repository.clone(), request.number);
         if body.is_empty()
-            || self.pull_request_comment_posting
+            || self.pull_request_comment_posting.contains(&request_key)
             || self.pull_request_comments_loading.contains(&request_key)
         {
             return;
         }
-        self.pull_request_comment_posting = true;
+        self.pull_request_comment_post_errors.remove(&request_key);
+        self.pull_request_comment_posting.insert(request_key.clone());
         let submitted_body = body.clone();
         let submitted_key = request_key.clone();
         let entity = cx.entity().downgrade();
@@ -809,7 +791,7 @@ impl Insulator {
                 .spawn(async move { post_pull_request_comment(&request_for_load, &body) })
                 .await;
             let _ = entity.update(cx, |this, cx| {
-                this.pull_request_comment_posting = false;
+                this.pull_request_comment_posting.remove(&submitted_key);
                 if result.is_ok() {
                     let still_current_pr = this
                         .pull_request_detail
@@ -822,10 +804,8 @@ impl Insulator {
                     this.pull_request_comments.remove(&(request.repository.clone(), request.number));
                     this.ensure_pull_request_comments(request.clone(), cx);
                 } else if let Err(error) = result {
-                    this.pull_request_comments_error.insert(
-                        (request.repository.clone(), request.number),
-                        error.to_string(),
-                    );
+                    this.pull_request_comment_post_errors
+                        .insert(submitted_key.clone(), error.to_string());
                 }
                 cx.notify();
             });
@@ -933,11 +913,14 @@ impl Insulator {
         } else if let Some(error) = self.pull_request_checks_error.get(key) {
             div().text_color(theme.danger).child(SharedString::from(error.clone()))
         } else if let Some(checks) = self.pull_request_checks.get(key) {
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(6.0))
-                .children(checks.iter().map(|check| {
+            if checks.is_empty() {
+                div().text_color(theme.text_secondary).child("No checks reported.")
+            } else {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .children(checks.iter().map(|check| {
                     let color = match check.bucket.as_str() {
                         "pass" => theme.success,
                         "fail" | "cancel" => theme.danger,
@@ -959,7 +942,8 @@ impl Insulator {
                         ))
                         .child(div().min_w_0().flex_1().text_color(theme.text).child(SharedString::from(check.name.clone())))
                         .child(div().text_color(theme.text_secondary).child(SharedString::from(check.state.clone())))
-                }))
+                    }))
+            }
         } else {
             div().text_color(theme.text_secondary).child("No checks reported.")
         };
@@ -987,6 +971,9 @@ impl Insulator {
         } else if let Some(error) = self.pull_request_comments_error.get(key) {
             div().text_color(theme.danger).child(SharedString::from(error.clone())).into_any_element()
         } else if let Some(comments) = comments {
+            if comments.is_empty() {
+                div().text_color(theme.text_secondary).child("No comments yet.").into_any_element()
+            } else {
             let palette = MarkdownPalette::from_theme(theme);
             div()
                 .flex()
@@ -1060,6 +1047,7 @@ impl Insulator {
                     card
                 }))
                 .into_any_element()
+            }
         } else {
             div().text_color(theme.text_secondary).child("No comments yet.").into_any_element()
         };
@@ -1073,6 +1061,9 @@ impl Insulator {
             .gap(px(10.0))
             .child(div().text_size(sp(15.0)).font_weight(FontWeight::MEDIUM).text_color(theme.text).child(SharedString::from(format!("Comments  ·  {}", comments.map_or(0, Vec::len)))))
             .child(comments_body)
+            .when_some(self.pull_request_comment_post_errors.get(key), |element, error| {
+                element.child(div().text_color(theme.danger).child(SharedString::from(error.clone())))
+            })
             .child(
                 div()
                     .w_full()
@@ -1095,11 +1086,18 @@ impl Insulator {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .when(self.pull_request_comment_posting, |element| element.opacity(0.5))
+                            .when(
+                                self.pull_request_comment_posting.contains(key),
+                                |element| element.opacity(0.5),
+                            )
                             .hover(|element| element.bg(theme.overlay))
                             .focus_visible(|element| element.border_1().border_color(theme.accent))
                             .tab_index(0)
-                            .child(icon("icons/arrow-up.svg", 15.0, theme.text))
+                            .child(if self.pull_request_comment_posting.contains(key) {
+                                crate::app::components::dot_matrix_loader(theme.text, 15.0)
+                            } else {
+                                icon("icons/arrow-up.svg", 15.0, theme.text).into_any_element()
+                            })
                             .on_click(move |_, _, cx| {
                                 let _ = entity.update(cx, |this, cx| {
                                     this.submit_pull_request_comment(request.clone(), cx);
