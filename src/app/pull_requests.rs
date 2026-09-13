@@ -2,7 +2,8 @@ use super::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use gpui::Point;
 
@@ -180,6 +181,30 @@ fn load_owned_repository_pull_requests() -> anyhow::Result<Vec<GhPullRequest>> {
         )?);
     }
     Ok(requests)
+}
+
+fn gh_output(args: &[&str]) -> anyhow::Result<std::process::Output> {
+    let mut command = std::process::Command::new("gh");
+    command
+        .args(args)
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("GH_PAGER", "cat")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let deadline = Instant::now() + Duration::from_secs(45);
+    loop {
+        match child.try_wait()? {
+            Some(_) => return Ok(child.wait_with_output()?),
+            None if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                anyhow::bail!("GitHub request timed out after 45 seconds");
+            }
+        }
+    }
 }
 
 fn pull_request_cache_path() -> std::path::PathBuf {
@@ -400,20 +425,15 @@ fn without_html_comments(body: &str) -> String {
 }
 
 fn load_pull_request_checks(request: &PullRequest) -> anyhow::Result<Vec<PullRequestCheck>> {
-    let output = std::process::Command::new("gh")
-        .args([
-            "pr",
-            "checks",
-            &request.number.to_string(),
-            "--repo",
-            &request.repository,
-            "--json",
-            "name,state,bucket,link",
-        ])
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("GH_PAGER", "cat")
-        .stdin(Stdio::null())
-        .output()?;
+    let output = gh_output(&[
+        "pr",
+        "checks",
+        &request.number.to_string(),
+        "--repo",
+        &request.repository,
+        "--json",
+        "name,state,bucket,link",
+    ])?;
     if !output.status.success() {
         anyhow::bail!(
             "gh pr checks failed: {}",
@@ -437,12 +457,7 @@ fn load_pull_request_comments(request: &PullRequest) -> anyhow::Result<Vec<PullR
         login: String,
     }
     fn load_endpoint(endpoint: &str) -> anyhow::Result<Vec<Response>> {
-        let output = std::process::Command::new("gh")
-            .args(["api", "--paginate", "--slurp", endpoint])
-            .env("GH_PROMPT_DISABLED", "1")
-            .env("GH_PAGER", "cat")
-            .stdin(Stdio::null())
-            .output()?;
+        let output = gh_output(&["api", "--paginate", "--slurp", endpoint])?;
         if !output.status.success() {
             anyhow::bail!(
                 "GitHub comments lookup failed: {}",
@@ -472,20 +487,15 @@ fn load_pull_request_comments(request: &PullRequest) -> anyhow::Result<Vec<PullR
 }
 
 fn post_pull_request_comment(request: &PullRequest, body: &str) -> anyhow::Result<()> {
-    let output = std::process::Command::new("gh")
-        .args([
-            "pr",
-            "comment",
-            &request.number.to_string(),
-            "--repo",
-            &request.repository,
-            "--body",
-            body,
-        ])
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("GH_PAGER", "cat")
-        .stdin(Stdio::null())
-        .output()?;
+    let output = gh_output(&[
+        "pr",
+        "comment",
+        &request.number.to_string(),
+        "--repo",
+        &request.repository,
+        "--body",
+        body,
+    ])?;
     if !output.status.success() {
         anyhow::bail!(
             "posting pull-request comment failed: {}",
@@ -694,10 +704,12 @@ impl Insulator {
                 this.pull_request_checks_loading.remove(&request_key);
                 match result {
                     Ok(checks) => {
-                        this.pull_request_checks.insert(request_key, checks);
-                        this.pull_request_checks_error = None;
+                        this.pull_request_checks.insert(request_key.clone(), checks);
+                        this.pull_request_checks_error.remove(&request_key);
                     }
-                    Err(error) => this.pull_request_checks_error = Some(error.to_string()),
+                    Err(error) => {
+                        this.pull_request_checks_error.insert(request_key, error.to_string());
+                    }
                 }
                 cx.notify();
             });
@@ -728,10 +740,12 @@ impl Insulator {
                 this.pull_request_comments_loading.remove(&request_key);
                 match result {
                     Ok(comments) => {
-                        this.pull_request_comments.insert(request_key, comments);
-                        this.pull_request_comments_error = None;
+                        this.pull_request_comments.insert(request_key.clone(), comments);
+                        this.pull_request_comments_error.remove(&request_key);
                     }
-                    Err(error) => this.pull_request_comments_error = Some(error.to_string()),
+                    Err(error) => {
+                        this.pull_request_comments_error.insert(request_key, error.to_string());
+                    }
                 }
                 cx.notify();
             });
@@ -763,7 +777,10 @@ impl Insulator {
                     this.pull_request_comments.remove(&(request.repository.clone(), request.number));
                     this.ensure_pull_request_comments(request.clone(), cx);
                 } else if let Err(error) = result {
-                    this.pull_request_comments_error = Some(error.to_string());
+                    this.pull_request_comments_error.insert(
+                        (request.repository.clone(), request.number),
+                        error.to_string(),
+                    );
                 }
                 cx.notify();
             });
@@ -802,10 +819,12 @@ impl Insulator {
                             entry.cached_diff = Some(diff.1.clone());
                             save_cached_pull_requests(&this.pull_requests);
                         }
-                        this.pull_request_diffs.insert(request_key, Arc::new(diff.0));
-                        this.pull_request_diffs_error = None;
+                        this.pull_request_diffs.insert(request_key.clone(), Arc::new(diff.0));
+                        this.pull_request_diffs_error.remove(&request_key);
                     }
-                    Err(error) => this.pull_request_diffs_error = Some(error.to_string()),
+                    Err(error) => {
+                        this.pull_request_diffs_error.insert(request_key, error.to_string());
+                    }
                 }
                 cx.notify();
             });
@@ -844,10 +863,12 @@ impl Insulator {
                             entry.cached_commits = commits.clone();
                             save_cached_pull_requests(&this.pull_requests);
                         }
-                        this.pull_request_commits.insert(request_key, commits);
-                        this.pull_request_commits_error = None;
+                        this.pull_request_commits.insert(request_key.clone(), commits);
+                        this.pull_request_commits_error.remove(&request_key);
                     }
-                    Err(error) => this.pull_request_commits_error = Some(error.to_string()),
+                    Err(error) => {
+                        this.pull_request_commits_error.insert(request_key, error.to_string());
+                    }
                 }
                 cx.notify();
             });
@@ -861,10 +882,10 @@ impl Insulator {
         theme: &Theme,
     ) -> AnyElement {
         let is_loading = self.pull_request_checks_loading.contains(key)
-            || (!self.pull_request_checks.contains_key(key) && self.pull_request_checks_error.is_none());
+            || (!self.pull_request_checks.contains_key(key) && !self.pull_request_checks_error.contains_key(key));
         let content = if is_loading {
             div().text_color(theme.text_secondary).child("Loading checks…")
-        } else if let Some(error) = &self.pull_request_checks_error {
+        } else if let Some(error) = self.pull_request_checks_error.get(key) {
             div().text_color(theme.danger).child(SharedString::from(error.clone()))
         } else if let Some(checks) = self.pull_request_checks.get(key) {
             div()
@@ -914,11 +935,11 @@ impl Insulator {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let is_loading = self.pull_request_comments_loading.contains(key)
-            || (!self.pull_request_comments.contains_key(key) && self.pull_request_comments_error.is_none());
+            || (!self.pull_request_comments.contains_key(key) && !self.pull_request_comments_error.contains_key(key));
         let comments = self.pull_request_comments.get(key);
         let comments_body = if is_loading {
             div().text_color(theme.text_secondary).child("Loading comments…").into_any_element()
-        } else if let Some(error) = &self.pull_request_comments_error {
+        } else if let Some(error) = self.pull_request_comments_error.get(key) {
             div().text_color(theme.danger).child(SharedString::from(error.clone())).into_any_element()
         } else if let Some(comments) = comments {
             let palette = MarkdownPalette::from_theme(theme);
@@ -941,6 +962,8 @@ impl Insulator {
                         .items_center()
                         .gap(px(8.0))
                         .hover(|element| element.bg(theme.overlay_strong))
+                        .focus_visible(|element| element.border_1().border_color(theme.accent))
+                        .tab_index(0)
                         .on_click(move |_, _, cx| {
                             let _ = entity.update(cx, |this, cx| {
                                 if !this.pull_request_collapsed_comments.remove(&toggle_key) {
@@ -949,6 +972,15 @@ impl Insulator {
                                 cx.notify();
                             });
                         })
+                        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                if !this.pull_request_collapsed_comments.remove(&comment_key) {
+                                    this.pull_request_collapsed_comments.insert(comment_key.clone());
+                                }
+                                cx.stop_propagation();
+                                cx.notify();
+                            }
+                        }))
                         .child(icon(
                             if collapsed { "icons/chevron-right.svg" } else { "icons/chevron-down.svg" },
                             13.0,
@@ -983,7 +1015,9 @@ impl Insulator {
             div().text_color(theme.text_secondary).child("No comments yet.").into_any_element()
         };
         let entity = cx.entity().downgrade();
+        let key_entity = entity.clone();
         let request = request.clone();
+        let key_request = request.clone();
         div()
             .flex()
             .flex_col()
@@ -1014,11 +1048,21 @@ impl Insulator {
                             .justify_center()
                             .when(self.pull_request_comment_posting, |element| element.opacity(0.5))
                             .hover(|element| element.bg(theme.overlay))
+                            .focus_visible(|element| element.border_1().border_color(theme.accent))
+                            .tab_index(0)
                             .child(icon("icons/arrow-up.svg", 15.0, theme.text))
                             .on_click(move |_, _, cx| {
                                 let _ = entity.update(cx, |this, cx| {
                                     this.submit_pull_request_comment(request.clone(), cx);
                                 });
+                            })
+                            .on_key_down(move |event: &KeyDownEvent, _, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    let _ = key_entity.update(cx, |this, cx| {
+                                        this.submit_pull_request_comment(key_request.clone(), cx);
+                                    });
+                                    cx.stop_propagation();
+                                }
                             }),
                     ),
             )
@@ -1509,7 +1553,7 @@ impl Insulator {
             PullRequestDetailTab::Commits => {
                 let is_commits_loading = self.pull_request_commits_loading.contains(&commit_key)
                     || (!self.pull_request_commits.contains_key(&commit_key)
-                        && self.pull_request_commits_error.is_none());
+                        && !self.pull_request_commits_error.contains_key(&commit_key));
                 let content = if is_commits_loading {
                     div()
                         .w_full()
@@ -1529,7 +1573,7 @@ impl Insulator {
                                 .text_size(sp(13.5))
                                 .text_color(theme.text_secondary),
                         )
-                } else if let Some(error) = &self.pull_request_commits_error {
+                } else if let Some(error) = self.pull_request_commits_error.get(&commit_key) {
                     div()
                         .text_color(theme.danger)
                         .child(SharedString::from(error.clone()))
@@ -1578,7 +1622,7 @@ impl Insulator {
             PullRequestDetailTab::Code => {
                 let is_diffs_loading = self.pull_request_diffs_loading.contains(&commit_key)
                     || (!self.pull_request_diffs.contains_key(&commit_key)
-                        && self.pull_request_diffs_error.is_none());
+                        && !self.pull_request_diffs_error.contains_key(&commit_key));
                 if is_diffs_loading {
                     div()
                         .size_full()
@@ -1599,7 +1643,7 @@ impl Insulator {
                                 .text_color(theme.text_secondary),
                         )
                         .into_any_element()
-                } else if let Some(error) = &self.pull_request_diffs_error {
+                } else if let Some(error) = self.pull_request_diffs_error.get(&commit_key) {
                     div()
                         .text_color(theme.danger)
                         .child(SharedString::from(error.clone()))

@@ -8,6 +8,7 @@ use gpui::{
 };
 
 use crate::theme::Theme;
+use crate::ui::motion;
 
 const SHIMMER_LAYER_COUNT: usize = 12;
 const DEFAULT_SHIMMER_SPREAD: f32 = 0.3;
@@ -219,23 +220,49 @@ impl RenderOnce for ShimmerText {
 
         let theme = Theme::current(cx);
         let reverse = self.shimmer_style.reverse;
-        let shimmer = ShimmerGlyphs {
-            text: StyledText::new(self.text),
-            highlight_color: self.shimmer_style.highlight_color,
-            background: theme.surface,
-            foreground: theme.text,
-            dark: theme.is_dark,
-            spread: self.shimmer_style.spread,
-            phase: 0.,
-        }
-        .with_animation(
-            id,
-            self.shimmer_style.animation(),
-            move |mut this, phase| {
-                this.phase = if reverse { 1. - phase } else { phase };
-                this
-            },
-        );
+        let duration = self.shimmer_style.duration;
+        let once = self.shimmer_style.once;
+        let highlight_color = self.shimmer_style.highlight_color;
+        let spread = self.shimmer_style.spread;
+        let background = theme.surface;
+        let foreground = theme.text;
+        let dark = theme.is_dark;
+        let text = self.text;
+        let shimmer = if once {
+            // One-shot fades are intentionally left on GPUI's animation clock.
+            ShimmerGlyphs {
+                text: StyledText::new(text),
+                highlight_color,
+                background,
+                foreground,
+                dark,
+                spread,
+                phase: 0.,
+            }
+            .with_animation(
+                id,
+                Animation::new(duration),
+                move |mut this, phase| {
+                    this.phase = if reverse { 1. - phase } else { phase };
+                    this
+                },
+            )
+            .into_any_element()
+        } else {
+            motion::pulse(duration, move |phase| {
+                ShimmerGlyphs {
+                    text: StyledText::new(text),
+                    highlight_color,
+                    background,
+                    foreground,
+                    dark,
+                    spread,
+                    phase: if reverse { 1. - phase } else { phase },
+                }
+                .into_any_element()
+            })
+            .into_any_element()
+        };
 
         container.child(shimmer).into_any_element()
     }

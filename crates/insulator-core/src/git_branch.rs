@@ -340,10 +340,14 @@ fn has_open_pull_request(cwd: &Path, branch: &str) -> Option<bool> {
         .ok()
         .and_then(read_timed_pull_request_output)
         .and_then(|output| {
-            output
-                .status
-                .success()
-                .then(|| String::from_utf8_lossy(&output.stdout).trim() == "OPEN")
+            if output.status.success() {
+                return Some(String::from_utf8_lossy(&output.stdout).trim() == "OPEN");
+            }
+            let error = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
+            ["no pull requests found", "no pull request found"]
+                .iter()
+                .any(|message| error.contains(message))
+                .then_some(false)
         });
 
     if let Some(open) = result {
@@ -383,10 +387,8 @@ fn read_timed_pull_request_output(mut child: Child) -> Option<Output> {
             }
         }
     };
-    // A helper may inherit either pipe after gh itself exits. Kill the
-    // dedicated process group before joining readers so EOF cannot extend the
-    // lookup beyond its deadline.
-    terminate_process_group(&mut child);
+    // The direct child has already been reaped. Do not signal its PID/group:
+    // that identifier may already belong to an unrelated process.
     let stdout = stdout_reader.join().ok()?;
     let stderr = stderr_reader.join().ok()?;
     Some(Output {

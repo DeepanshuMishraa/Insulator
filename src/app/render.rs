@@ -70,8 +70,8 @@ impl Insulator {
             )
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                 let delta = match event.keystroke.key.as_str() {
-                    "left" => Some(24.0),
-                    "right" => Some(-24.0),
+                    "left" => Some(if target == PanelResizeTarget::Sidebar { -24.0 } else { 24.0 }),
+                    "right" => Some(if target == PanelResizeTarget::Sidebar { 24.0 } else { -24.0 }),
                     _ => None,
                 };
                 if let Some(delta) = delta {
@@ -88,18 +88,31 @@ impl Insulator {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        if target != PanelResizeTarget::RightPanel {
-            return;
-        }
         let (sidebar_width, right_panel_width) = self.effective_panel_widths(window);
-        let maximum = RIGHT_PANEL_MAX_WIDTH
-            .min(f32::from(window.viewport_size().width) - MAIN_PANEL_MIN_WIDTH - sidebar_width)
-            .max(RIGHT_PANEL_MIN_WIDTH);
-        let width = (right_panel_width + delta).clamp(RIGHT_PANEL_MIN_WIDTH, maximum);
-        if (self.right_panel_width - width).abs() < 0.5 {
+        let (current, minimum, maximum, width) = match target {
+            PanelResizeTarget::Sidebar => {
+                let maximum = SIDEBAR_MAX_WIDTH
+                    .min(f32::from(window.viewport_size().width) - MAIN_PANEL_MIN_WIDTH - right_panel_width)
+                    .max(SIDEBAR_MIN_WIDTH);
+                (self.sidebar_width, SIDEBAR_MIN_WIDTH, maximum, self.sidebar_width + delta)
+            }
+            PanelResizeTarget::RightPanel => {
+                let maximum = RIGHT_PANEL_MAX_WIDTH
+                    .min(f32::from(window.viewport_size().width) - MAIN_PANEL_MIN_WIDTH - sidebar_width)
+                    .max(RIGHT_PANEL_MIN_WIDTH);
+                (self.right_panel_width, RIGHT_PANEL_MIN_WIDTH, maximum, right_panel_width + delta)
+            }
+            _ => return,
+        };
+        let width = width.clamp(minimum, maximum);
+        if (current - width).abs() < 0.5 {
             return;
         }
-        self.right_panel_width = width;
+        match target {
+            PanelResizeTarget::Sidebar => self.sidebar_width = width,
+            PanelResizeTarget::RightPanel => self.right_panel_width = width,
+            _ => unreachable!(),
+        }
         self.persist_panel_layout();
         cx.notify();
     }
