@@ -42,6 +42,9 @@ enum CommandMessage {
     Prompt(String),
     Steer(String),
     Cancel,
+    /// Live plan-mode switch: `mode:plan` / `mode:agent`. Resolved against
+    /// the session's advertised ACP modes and applied with `set_session_mode`.
+    ProviderControl(Vec<String>),
     Respond {
         request_id: String,
         option_id: String,
@@ -521,6 +524,7 @@ async fn run_sdk_connection(
 
             let mut current_model = model;
             let mut current_effort = reasoning_effort;
+            let mut session_modes = modes;
             apply_model(
                 &connection,
                 provider,
@@ -601,6 +605,53 @@ async fn run_sdk_connection(
                             .send_notification(CancelNotification::new(session_id.clone()));
                         cancel_pending_permissions(&pending_permissions);
                         cancel_pending_user_inputs(&pending_user_inputs);
+                    }
+                    CommandMessage::ProviderControl(commands) => {
+                        for command in commands {
+                            let Some(requested) = command.strip_prefix("mode:").map(str::trim)
+                            else {
+                                continue;
+                            };
+                            if requested.is_empty() {
+                                continue;
+                            }
+                            let Some(mode_id) = session_modes.as_ref().and_then(|modes| {
+                                modes
+                                    .available_modes
+                                    .iter()
+                                    .find(|mode| {
+                                        mode.id.to_string().eq_ignore_ascii_case(requested)
+                                    })
+                                    .map(|mode| mode.id.clone())
+                            }) else {
+                                let _ = events.send(DriverEvent::PlanModeSwitchFailed(format!(
+                                    "{} has no {requested} session mode.",
+                                    provider.display_name()
+                                )));
+                                continue;
+                            };
+                            match connection
+                                .send_request(SetSessionModeRequest::new(
+                                    session_id.clone(),
+                                    mode_id.clone(),
+                                ))
+                                .block_task()
+                                .await
+                            {
+                                Ok(_) => {
+                                    if let Some(modes) = session_modes.as_mut() {
+                                        modes.current_mode_id = mode_id;
+                                    }
+                                }
+                                Err(error) => {
+                                    let _ =
+                                        events.send(DriverEvent::PlanModeSwitchFailed(format!(
+                                            "{} could not switch session mode: {error}",
+                                            provider.display_name()
+                                        )));
+                                }
+                            }
+                        }
                     }
                     CommandMessage::Respond {
                         request_id,
@@ -1896,6 +1947,14 @@ impl DriverControl for AcpDriver {
 
     fn steer(&self, prompt: String) {
         let _ = self.commands.try_send(CommandMessage::Steer(prompt));
+    }
+
+    fn provider_control(&self, commands: Vec<String>) {
+        if !commands.is_empty() {
+            let _ = self
+                .commands
+                .try_send(CommandMessage::ProviderControl(commands));
+        }
     }
 
     fn cancel(&self) {

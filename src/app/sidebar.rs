@@ -2982,7 +2982,11 @@ impl Insulator {
                                                 .group_hover(tab_group.clone(), |style| {
                                                     style.visible()
                                                 })
-                                                .child(icon("icons/x.svg", 9.0, theme.text_secondary)),
+                                                .child(icon(
+                                                    "icons/x.svg",
+                                                    9.0,
+                                                    theme.text_secondary,
+                                                )),
                                         )
                                     })
                                     .when(!is_dirty, |el| {
@@ -3542,6 +3546,21 @@ pub fn github_url_for_project(path: &Path) -> Option<String> {
     git_remote_github_url_via_cli(path)
 }
 
+/// Resolves the GitHub repository web URL from the project's `origin` remote
+/// only. Unlike [`github_url_for_project`], this never falls back to
+/// `upstream` or other remotes: flows that fetch from `origin` (e.g. the PR
+/// Fix flow's `git fetch origin pull/N/head`) must not reuse a checkout whose
+/// `origin` points elsewhere just because `upstream` happens to match.
+pub fn github_origin_url_for_project(path: &Path) -> Option<String> {
+    if let Some(git_dir) = resolve_git_dir(path) {
+        if let Some(url) = extract_github_origin_url_from_git_dir(&git_dir) {
+            return Some(url);
+        }
+    }
+
+    git_origin_github_url_via_cli(path)
+}
+
 fn resolve_git_dir(project_path: &Path) -> Option<PathBuf> {
     let dot_git = project_path.join(".git");
     if dot_git.is_dir() {
@@ -3564,7 +3583,81 @@ fn resolve_git_dir(project_path: &Path) -> Option<PathBuf> {
     None
 }
 
+fn extract_github_origin_url_from_git_dir(git_dir: &Path) -> Option<String> {
+    // A linked worktree's per-worktree overrides live in
+    // `<worktree-gitdir>/config.worktree` and take precedence over both the
+    // worktree gitdir's `config` and the common repo `config`. Check it first
+    // so an overridden `remote.origin.url` wins, matching Git's effective
+    // configuration (`git remote get-url origin`).
+    let worktree_config_path = git_dir.join("config.worktree");
+    if let Ok(config_text) = std::fs::read_to_string(worktree_config_path)
+        && let Some(url) = find_github_origin_url_in_git_config(&config_text)
+    {
+        return Some(url);
+    }
+
+    let config_path = git_dir.join("config");
+    if let Ok(config_text) = std::fs::read_to_string(config_path) {
+        if let Some(url) = find_github_origin_url_in_git_config(&config_text) {
+            return Some(url);
+        }
+    }
+
+    // If this is a worktree, its commondir points to the common repo git dir
+    let commondir_file = git_dir.join("commondir");
+    if let Ok(commondir_content) = std::fs::read_to_string(commondir_file) {
+        let common_path = git_dir.join(commondir_content.trim());
+        let config_path = common_path.join("config");
+        if let Ok(config_text) = std::fs::read_to_string(config_path) {
+            if let Some(url) = find_github_origin_url_in_git_config(&config_text) {
+                return Some(url);
+            }
+        }
+    }
+
+    None
+}
+
+fn find_github_origin_url_in_git_config(config_text: &str) -> Option<String> {
+    let mut current_remote: Option<String> = None;
+
+    for line in config_text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            let section = line[1..line.len() - 1].trim();
+            if let Some(rest) = section.strip_prefix("remote ") {
+                let name = rest.trim_matches('"').trim();
+                current_remote = Some(name.to_owned());
+            } else {
+                current_remote = None;
+            }
+        } else if let Some(ref remote_name) = current_remote {
+            if remote_name == "origin"
+                && let Some((key, val)) = line.split_once('=')
+                && key.trim() == "url"
+            {
+                // The first `origin` URL is the effective fetch URL (`git
+                // remote get-url origin`). Do not scan past a non-GitHub
+                // first URL looking for a later GitHub one: the Fix flow's
+                // `git fetch origin ...` uses the first URL.
+                return parse_github_remote_url(val.trim());
+            }
+        }
+    }
+
+    None
+}
+
 fn extract_github_url_from_git_dir(git_dir: &Path) -> Option<String> {
+    // Same worktree precedence as the origin-only variant: per-worktree
+    // `config.worktree` overrides win over the shared config.
+    let worktree_config_path = git_dir.join("config.worktree");
+    if let Ok(config_text) = std::fs::read_to_string(worktree_config_path)
+        && let Some(url) = find_github_url_in_git_config(&config_text)
+    {
+        return Some(url);
+    }
+
     let config_path = git_dir.join("config");
     if let Ok(config_text) = std::fs::read_to_string(config_path) {
         if let Some(url) = find_github_url_in_git_config(&config_text) {
@@ -3624,9 +3717,21 @@ fn find_github_url_in_git_config(config_text: &str) -> Option<String> {
     origin_url.or(upstream_url).or(other_url)
 }
 
+/// Release builds launched from Finder/LaunchServices inherit a minimal
+/// `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), so a bare `git` lookup fails
+/// when Git is installed outside those dirs (e.g. Homebrew
+/// `/opt/homebrew/bin`). Extend the search path like the PR Fix fetch does.
+fn git_command() -> std::process::Command {
+    let mut command = std::process::Command::new("git");
+    if let Some(path) = crate::command_env::executable_search_path() {
+        command.env("PATH", path);
+    }
+    command
+}
+
 fn git_remote_github_url_via_cli(path: &Path) -> Option<String> {
     // Check origin first
-    if let Ok(output) = std::process::Command::new("git")
+    if let Ok(output) = git_command()
         .args(["remote", "get-url", "origin"])
         .current_dir(path)
         .output()
@@ -3640,7 +3745,7 @@ fn git_remote_github_url_via_cli(path: &Path) -> Option<String> {
     }
 
     // Check upstream or other remotes
-    if let Ok(output) = std::process::Command::new("git")
+    if let Ok(output) = git_command()
         .args(["config", "--get-regexp", r"^remote\..*\.url$"])
         .current_dir(path)
         .output()
@@ -3663,6 +3768,25 @@ fn git_remote_github_url_via_cli(path: &Path) -> Option<String> {
                 }
             }
             return upstream_url.or(other_url);
+        }
+    }
+
+    None
+}
+
+fn git_origin_github_url_via_cli(path: &Path) -> Option<String> {
+    // Origin only: callers that fetch from `origin` must not match on
+    // `upstream` or other remotes. A non-GitHub `origin` parses to `None`
+    // and correctly rejects the project.
+    if let Ok(output) = git_command()
+        .args(["remote", "get-url", "origin"])
+        .current_dir(path)
+        .output()
+        && output.status.success()
+    {
+        let raw = String::from_utf8_lossy(&output.stdout);
+        if let Some(url) = parse_github_remote_url(&raw) {
+            return Some(url);
         }
     }
 
@@ -4135,5 +4259,50 @@ mod tests {
 
         let non_git = std::env::temp_dir();
         assert_eq!(github_url_for_project(&non_git), None);
+    }
+
+    #[test]
+    fn linked_worktree_origin_override_wins_over_common_config() {
+        let base = std::env::temp_dir().join(format!(
+            "waku-worktree-origin-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        let common_dir = base.join("common");
+        let worktree_gitdir = base.join("worktree-gitdir");
+        std::fs::create_dir_all(&common_dir).unwrap();
+        std::fs::create_dir_all(&worktree_gitdir).unwrap();
+
+        std::fs::write(
+            common_dir.join("config"),
+            "[remote \"origin\"]\n\turl = https://github.com/owner/common.git\n",
+        )
+        .unwrap();
+        std::fs::write(
+            worktree_gitdir.join("commondir"),
+            common_dir.to_str().unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            worktree_gitdir.join("config.worktree"),
+            "[remote \"origin\"]\n\turl = https://github.com/owner/override.git\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            extract_github_origin_url_from_git_dir(&worktree_gitdir),
+            Some("https://github.com/owner/override".to_string())
+        );
+
+        // Without the per-worktree override the common config applies.
+        std::fs::remove_file(worktree_gitdir.join("config.worktree")).unwrap();
+        assert_eq!(
+            extract_github_origin_url_from_git_dir(&worktree_gitdir),
+            Some("https://github.com/owner/common".to_string())
+        );
+
+        std::fs::remove_dir_all(&base).ok();
     }
 }

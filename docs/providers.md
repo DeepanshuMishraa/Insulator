@@ -806,6 +806,28 @@ because it has no permission system to ask with, and for Oh My Pi because
 `--yolo` bypasses the one it has. Only the last of those is Insulator's own
 limitation rather than the CLI's.
 
+### Plan toggle
+
+The composer plan chip (`No plan` / `Plan mode` / `Plannotator plan mode`)
+remembers one mode per session and applies it live through
+`provider_control`, plus once more when a fresh driver starts. Each provider
+maps it onto its own native planning state:
+
+| Provider | `Plan mode` | `No plan` |
+| --- | --- | --- |
+| Pi, Oh My Pi | `/plan` (or `/plannotator-plan-mode`) | the same command again (both are toggles) |
+| OpenCode, OpenCode 2 | native `plan` agent | native `build` agent |
+| Cursor (ACP) | `plan` session mode | `agent` session mode |
+| Fx (ACP) | `ask` session mode | `code` session mode |
+| Claude Code | `plan` permission mode (`set_permission_mode`) | the launch permission mode again |
+| Codex | per-turn `read-only` sandbox | the launch sandbox again |
+| DeepSeek Harness | `/plan` command | `/plan off` command |
+
+`Plannotator plan mode` is a Pi extension, so only Pi and Oh My Pi offer it
+(and only when the extension is installed); every other provider above maps it
+to its `Plan mode` state. Amp exposes no permission surface, and Grok and
+Kimi advertise no plan session mode, so they stay out of the toggle.
+
 ## Resume cursors
 
 `ProviderResumeCursor` ([model.rs](../crates/insulator-protocol/src/model.rs)) is

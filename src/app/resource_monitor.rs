@@ -53,52 +53,194 @@ struct RawProcess {
     comm: String,
 }
 
-pub fn collect_resource_usage(app_pid: u32, daemon_pid: Option<u32>) -> ResourceUsageSnapshot {
+#[derive(Clone, Debug)]
+struct Sample {
+    pid: u32,
+    ppid: u32,
+    /// Cumulative CPU seconds from `ps TIME` (centisecond resolution on macOS).
+    cpu_secs: Option<f64>,
+    /// Seconds since process start from `ps ELAPSED`. This is the PID-reuse
+    /// token: a PID observed with a wildly different elapsed time across the
+    /// ~1s sampling interval is a different process, even when the cumulative
+    /// CPU delta looks plausible.
+    elapsed_secs: Option<f64>,
+    /// `ps %CPU` decaying average, used only when no delta baseline exists.
+    cpu_fallback: f32,
+    rss_kb: u64,
+    comm: String,
+}
+
+/// One `ps` snapshot. `TIME` is cumulative per-process CPU time, which is what
+/// lets the caller derive an instantaneous rate from two samples instead of
+/// trusting `ps %CPU` (a decaying ~1-minute average that lags and smooths
+/// spikes).
+fn sample_processes() -> HashMap<u32, Sample> {
+    let mut out = HashMap::new();
     let output = Command::new("ps")
-        .args(["-eo", "pid,ppid,%cpu,rss,comm"])
+        .args(["-eo", "pid,ppid,time,%cpu,rss,etime,comm"])
         .output();
-
     let Ok(output) = output else {
-        return ResourceUsageSnapshot::default();
+        return out;
     };
-
     if !output.status.success() {
-        return ResourceUsageSnapshot::default();
+        return out;
     }
-
     let text = String::from_utf8_lossy(&output.stdout);
-    let mut raw_procs = HashMap::new();
-    let mut children_by_ppid: HashMap<u32, Vec<u32>> = HashMap::new();
-
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with("PID") {
             continue;
         }
+        // pid, ppid, time, %cpu, rss and etime contain no whitespace;
+        // everything after them is the command path.
         let mut parts = trimmed.split_whitespace();
-        let Some(pid) = parts.next().and_then(|p| p.parse::<u32>().ok()) else {
-            continue;
-        };
-        let Some(ppid) = parts.next().and_then(|p| p.parse::<u32>().ok()) else {
-            continue;
-        };
-        let Some(cpu) = parts.next().and_then(|p| p.parse::<f32>().ok()) else {
-            continue;
-        };
-        let Some(rss_kb) = parts.next().and_then(|p| p.parse::<u64>().ok()) else {
+        let (Some(pid), Some(ppid), Some(time), Some(cpu), Some(rss_kb), Some(etime)) = (
+            parts.next().and_then(|p| p.parse::<u32>().ok()),
+            parts.next().and_then(|p| p.parse::<u32>().ok()),
+            parts.next(),
+            parts.next().and_then(|p| p.parse::<f32>().ok()),
+            parts.next().and_then(|p| p.parse::<u64>().ok()),
+            parts.next(),
+        ) else {
             continue;
         };
         let comm = parts.collect::<Vec<_>>().join(" ");
-
-        children_by_ppid.entry(ppid).or_default().push(pid);
-        raw_procs.insert(
+        if comm.is_empty() {
+            continue;
+        }
+        out.insert(
             pid,
-            RawProcess {
+            Sample {
                 pid,
                 ppid,
-                cpu,
+                cpu_secs: parse_ps_time(time),
+                elapsed_secs: parse_ps_etime(etime),
+                cpu_fallback: cpu,
                 rss_kb,
                 comm,
+            },
+        );
+    }
+    out
+}
+
+/// Parse BSD `ps TIME` (`MM:SS.cc` or `HH:MM:SS.cc`) into cumulative seconds.
+fn parse_ps_time(field: &str) -> Option<f64> {
+    let mut parts = field.split(':').collect::<Vec<_>>();
+    let secs = parts.pop()?.parse::<f64>().ok()?;
+    let mut total = secs;
+    let mut factor = 60.0;
+    // Remaining parts, right to left, are minutes then hours (days never
+    // appear; minutes grow past 59 instead).
+    while let Some(part) = parts.pop() {
+        total += part.parse::<f64>().ok()? * factor;
+        factor *= 60.0;
+    }
+    Some(total)
+}
+
+/// Parse BSD `ps ELAPSED` (`MM:SS`, `HH:MM:SS`, or `D-HH:MM:SS`) into seconds.
+/// Second resolution is coarse, so callers must allow a few seconds of slack
+/// for truncation and timer jitter; a reused PID shows up as tens of seconds
+/// (usually the whole previous lifetime) off, well outside that slack.
+fn parse_ps_etime(field: &str) -> Option<f64> {
+    let (days, rest) = match field.split_once('-') {
+        Some((days, rest)) => (days.parse::<f64>().ok()? * 86400.0, rest),
+        None => (0.0, field),
+    };
+    let mut parts = rest.split(':').collect::<Vec<_>>();
+    let secs = parts.pop()?.parse::<f64>().ok()?;
+    let mut total = secs;
+    let mut factor = 60.0;
+    while let Some(part) = parts.pop() {
+        total += part.parse::<f64>().ok()? * factor;
+        factor *= 60.0;
+    }
+    Some(days + total)
+}
+
+/// Returns true when the two samples cannot be the same process: the elapsed
+/// (since-start) clock must advance by roughly the wall interval. Identity
+/// comes from PID plus this start token — never from ppid or comm, which a
+/// replacement process can share with its predecessor.
+fn pid_reused(prev_elapsed: f64, elapsed: f64, wall_secs: f64) -> bool {
+    // ELAPSED truncates to whole seconds and the wall timer jitters, so allow
+    // a few seconds of slack either way.
+    const SLACK_SECS: f64 = 3.0;
+    let drift = elapsed - prev_elapsed - wall_secs;
+    drift.abs() > SLACK_SECS
+}
+
+/// Upper bound for a believable per-process CPU%: one process cannot burn more
+/// than every core at once. Catches PID reuse that the `delta < 0.0` check
+/// below misses — a reused PID whose new process already has more cumulative
+/// CPU time would otherwise show as a huge one-sample spike.
+fn max_plausible_cpu_percent() -> f32 {
+    std::thread::available_parallelism().map_or(6400.0, |cores| cores.get() as f32 * 100.0)
+}
+
+/// Build a snapshot from two `ps` samples. `wall_secs` must span the same
+/// interval the samples were taken over (timed from the end of the first to
+/// the end of the second); per-process CPU% is the delta of cumulative CPU
+/// time over that wall time, i.e. what Activity Monitor shows rather than the
+/// decaying average `ps %CPU` reports.
+fn snapshot_from_samples(
+    app_pid: u32,
+    daemon_pid: Option<u32>,
+    first: &HashMap<u32, Sample>,
+    second: HashMap<u32, Sample>,
+    wall_secs: f64,
+) -> ResourceUsageSnapshot {
+    let mut raw_procs = HashMap::new();
+    let mut children_by_ppid: HashMap<u32, Vec<u32>> = HashMap::new();
+    // Core count cannot meaningfully change mid-call; hoist the
+    // `available_parallelism()` syscall out of the per-process loop.
+    let max_plausible = max_plausible_cpu_percent();
+
+    for sample in second.values() {
+        let prev = first.get(&sample.pid);
+        // PID plus the elapsed-since-start token identifies a process. When
+        // the token disagrees, the PID was reused across the interval: the
+        // cumulative-CPU delta mixes two lifetimes, so discard it and use the
+        // `ps %CPU` average instead. The invalid delta must not reach the
+        // rendered per-process value or the summed total.
+        let reused = match (prev.and_then(|p| p.elapsed_secs), sample.elapsed_secs) {
+            (Some(before), Some(after)) => pid_reused(before, after, wall_secs),
+            _ => false,
+        };
+        let cpu = match (reused, prev.and_then(|prev| prev.cpu_secs), sample.cpu_secs) {
+            (true, _, _) => sample.cpu_fallback,
+            (false, Some(before), Some(after)) => {
+                let delta = after - before;
+                if delta < 0.0 {
+                    // PID reuse across the interval; fall back to the average.
+                    sample.cpu_fallback
+                } else if delta / wall_secs * 100.0 > max_plausible as f64 {
+                    // PID reuse where the new process already has more
+                    // cumulative CPU than the old one: the delta is the new
+                    // process's whole lifetime, not one interval, so it would
+                    // read as an implausible multi-thousand-% spike.
+                    sample.cpu_fallback
+                } else {
+                    (delta / wall_secs * 100.0) as f32
+                }
+            }
+            // Process appeared between samples: no baseline, so the
+            // since-birth average is the most honest instantaneous proxy.
+            _ => sample.cpu_fallback,
+        };
+        children_by_ppid
+            .entry(sample.ppid)
+            .or_default()
+            .push(sample.pid);
+        raw_procs.insert(
+            sample.pid,
+            RawProcess {
+                pid: sample.pid,
+                ppid: sample.ppid,
+                cpu,
+                rss_kb: sample.rss_kb,
+                comm: sample.comm.clone(),
             },
         );
     }
@@ -119,7 +261,7 @@ pub fn collect_resource_usage(app_pid: u32, daemon_pid: Option<u32>) -> Resource
     let mut tree_entries = Vec::new();
     let mut visited = HashSet::new();
 
-    // 1. App Process (Renderer)
+    // 1. App process and everything parented to it.
     if raw_procs.contains_key(&app_pid) {
         collect_subtree(
             app_pid,
@@ -134,7 +276,19 @@ pub fn collect_resource_usage(app_pid: u32, daemon_pid: Option<u32>) -> Resource
         );
     }
 
-    // 2. Daemon Process (Main) and its subprocesses
+    // NOTE: WebKit XPC services backing our WKWebViews are reparented to
+    // `launchd` (ppid 1), so the tree walk above never reaches them even
+    // though their CPU/RSS is ours. They were previously attributed by a
+    // global start-time cutoff (helpers launched at/after this app instance),
+    // but that also claims any other WebKit client's helpers whenever that
+    // client starts after us: `ps` exposes no ownership signal to tell ours
+    // apart (identical binary path and args, ppid 1, sess 0 for every
+    // client's helpers). So they are deliberately left out rather than
+    // inflating our totals with another app's WebContent; attributing them
+    // correctly needs the WK process identifiers plumbed from the webview
+    // layer, not guessed here.
+
+    // 2. Daemon process (Main) and its subprocesses
     if let Some(dpid) = effective_daemon_pid {
         if !visited.contains(&dpid) && raw_procs.contains_key(&dpid) {
             collect_subtree(
@@ -191,7 +345,7 @@ fn collect_subtree(
 
     if let Some(proc) = raw_procs.get(&pid) {
         let name = if is_renderer && pid == app_pid {
-            "Renderer".to_string()
+            "App".to_string()
         } else if Some(pid) == daemon_pid {
             "Main".to_string()
         } else {
@@ -322,9 +476,30 @@ impl Insulator {
 
         let weak = cx.entity().downgrade();
         cx.spawn(async move |_this, cx| {
+            // Two `ps` snapshots ~1s apart, each taken on a pool worker. The
+            // wait between them is an async timer so no worker is held while
+            // idle, and the wall interval runs end-of-first to end-of-second
+            // so it spans exactly the samples the CPU deltas come from.
+            let first = cx
+                .background_executor()
+                .spawn(async move { sample_processes() })
+                .await;
+            let wall_start = Instant::now();
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(1000))
+                .await;
+            let second = cx
+                .background_executor()
+                .spawn(async move { sample_processes() })
+                .await;
+            let wall_secs = wall_start.elapsed().as_secs_f64().max(0.001);
+            // Aggregate off the UI executor: walking/cloning/sorting the full
+            // process list can block frames while the monitor polls.
             let snapshot = cx
                 .background_executor()
-                .spawn(async move { collect_resource_usage(app_pid, daemon_pid) })
+                .spawn(async move {
+                    snapshot_from_samples(app_pid, daemon_pid, &first, second, wall_secs)
+                })
                 .await;
 
             let _ = weak.update(cx, |this, cx| {
@@ -795,4 +970,84 @@ fn render_copy_icon_button(
                 this.copy_resource_usage(cx);
             });
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ps_time_parses_minutes_and_hours_with_centiseconds() {
+        assert_eq!(parse_ps_time("0:00.02"), Some(0.02));
+        assert_eq!(parse_ps_time("22:12.43"), Some(22.0 * 60.0 + 12.43));
+        assert_eq!(parse_ps_time("1:02:03"), Some(3723.0));
+        assert_eq!(parse_ps_time("43:02.72"), Some(43.0 * 60.0 + 2.72));
+    }
+
+    #[test]
+    fn ps_time_rejects_garbage() {
+        assert_eq!(parse_ps_time(""), None);
+        assert_eq!(parse_ps_time("-"), None);
+        assert_eq!(parse_ps_time("abc"), None);
+        assert_eq!(parse_ps_time("12:ab"), None);
+    }
+
+    #[test]
+    fn ps_etime_parses_plain_and_day_qualified_durations() {
+        assert_eq!(parse_ps_etime("55:11"), Some(55.0 * 60.0 + 11.0));
+        assert_eq!(parse_ps_etime("01:02:03"), Some(3723.0));
+        assert_eq!(parse_ps_etime("1-02:03:04"), Some(86400.0 + 7384.0));
+        assert_eq!(parse_ps_etime(""), None);
+        assert_eq!(parse_ps_etime("abc"), None);
+    }
+
+    #[test]
+    fn pid_reuse_token_stable_for_long_lived_process() {
+        // `f32` has a ULP of 8 above 2^26 (~776.7 days in seconds), so a
+        // true one-second ELAPSED increment straddling a quantum boundary
+        // (e.g. ...04 -> ...05) quantizes to an eight-second jump and trips
+        // the 3s slack. `f64` keeps 1s resolution essentially forever.
+        assert!(!pid_reused(67132804.0, 67132805.0, 1.0));
+        assert_eq!(
+            parse_ps_etime("777-01:02:03"),
+            Some(777.0 * 86400.0 + 3723.0)
+        );
+    }
+
+    #[test]
+    fn pid_reuse_token_disagrees_despite_plausible_cpu_delta() {
+        // Same PID, but the elapsed-since-start token restarted: the new
+        // process happens to have a slightly larger cumulative CPU time, so
+        // the delta alone looks like an ordinary ~50% tick. Identity must
+        // come from PID + start token, and the invalid delta must fall back
+        // rather than render.
+        let first = HashMap::from([(
+            123u32,
+            Sample {
+                pid: 123,
+                ppid: 1,
+                cpu_secs: Some(100.0),
+                elapsed_secs: Some(500.0),
+                cpu_fallback: 1.0,
+                rss_kb: 100,
+                comm: "old".to_string(),
+            },
+        )]);
+        let second = HashMap::from([(
+            123u32,
+            Sample {
+                pid: 123,
+                ppid: 1,
+                cpu_secs: Some(100.5),
+                elapsed_secs: Some(0.5),
+                cpu_fallback: 2.5,
+                rss_kb: 100,
+                comm: "old".to_string(),
+            },
+        )]);
+        let snapshot = snapshot_from_samples(123, None, &first, second, 1.0);
+        assert_eq!(snapshot.total_cpu_percent, 2.5);
+        assert_eq!(snapshot.tree_entries.len(), 1);
+        assert_eq!(snapshot.tree_entries[0].cpu_percent, 2.5);
+    }
 }

@@ -119,6 +119,10 @@ impl<K: Clone + Eq + Hash, V> QueryCache<K, V> {
                 last_used: clock,
             },
         );
+        // `read` is the path that creates `Loading` slots, so enforce the
+        // bound here too — otherwise keys whose fetches never resolve (daemon
+        // down, 404s) accumulate without ever hitting `insert`/`fulfill`.
+        self.evict_over_capacity();
         Query::Missing(FetchToken {
             key: key.clone(),
             generation,
@@ -203,7 +207,15 @@ impl<K: Clone + Eq + Hash, V> QueryCache<K, V> {
     }
 
     fn evict_over_capacity(&mut self) {
-        while self.entries.len() > self.capacity {
+        // `capacity` bounds resolved values only; in-flight slots don't count
+        // toward it, so a miss adding a `Loading` slot never evicts `Ready`.
+        while self
+            .entries
+            .values()
+            .filter(|cached| matches!(cached.slot, Slot::Ready(_)))
+            .count()
+            > self.capacity
+        {
             let victim = self
                 .entries
                 .iter()
@@ -213,6 +225,25 @@ impl<K: Clone + Eq + Hash, V> QueryCache<K, V> {
             // Only in-flight entries are left; evicting one would strand its
             // token, so let the cache run over until they resolve.
             let Some(victim) = victim else { break };
+            self.entries.remove(&victim);
+        }
+        // In-flight entries never resolve if the daemon is down or a fetch is
+        // abandoned without `abandon()`. Cap them too, or distinct keys (image
+        // 404s, branch fetch storms) grow the map without bound. Evicting a
+        // `Loading` slot strands its token, but `fulfill` treats that as a
+        // refusal and the next read simply retries — safe, just one refetch.
+        const MAX_INFLIGHT_OVERFLOW: usize = 64;
+        while self.entries.len() > self.capacity.saturating_add(MAX_INFLIGHT_OVERFLOW) {
+            let victim = self
+                .entries
+                .iter()
+                .filter(|(_, cached)| matches!(cached.slot, Slot::Loading))
+                .min_by_key(|(_, cached)| cached.last_used)
+                .map(|(key, _)| key.clone());
+            let Some(victim) = victim else { break };
+            // Advance the generation so a stranded token cannot fulfill into
+            // a recreated `Loading` slot if the key is retried.
+            self.generation += 1;
             self.entries.remove(&victim);
         }
     }

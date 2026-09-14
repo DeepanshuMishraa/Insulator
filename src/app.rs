@@ -1394,8 +1394,17 @@ pub struct Insulator {
     /// started them. Keeping the operation on the app also lets every
     /// Environment surface reflect and gate the same in-flight action.
     commit_operation: Option<commit_dialog::CommitOperationState>,
-    /// Requested Pi planning mode per session. Pi extensions own enforcement.
-    pi_plan_modes: HashMap<Uuid, composer::PiPlanMode>,
+    /// Requested planning mode per session. Pi extensions own enforcement;
+    /// other providers map it onto their native plan state (OpenCode agent,
+    /// Cursor session mode, DeepSeek `/plan`).
+    plan_modes: HashMap<Uuid, composer::PlanMode>,
+    /// Pre-toggle mode per session, stashed alongside every optimistic chip
+    /// update. A `PlanModeSwitchFailed` event restores it so a rejected
+    /// switch cannot leave the chip ahead of the provider. Only the oldest
+    /// in-flight toggle has an entry: it is cleared when the switch is
+    /// confirmed (`ExtensionStatus`, `PlanApproved`), consumed by a failure,
+    /// or dropped with the session.
+    plan_mode_fallback: HashMap<Uuid, composer::PlanMode>,
     /// Slash commands discovered per (provider, project root, CLI override).
     /// Filesystem and CLI probes live off the UI thread; frames read this cache.
     slash_commands: QueryCache<(ProviderKind, PathBuf, Option<String>), Vec<SlashCommand>>,
@@ -1532,6 +1541,14 @@ pub struct Insulator {
     pull_request_diffs: HashMap<(String, u64), Arc<ReviewDiffSnapshot>>,
     pull_request_diffs_loading: HashSet<(String, u64)>,
     pull_request_diffs_error: HashMap<(String, u64), String>,
+    /// PRs with a Fix-findings thread being prepared (fetching the PR branch).
+    /// Drives the header Fix button's loading state, mirroring Synara's
+    /// "Preparing findings…" guard.
+    pull_request_fix_preparing: HashSet<(String, u64)>,
+    /// Fix requests waiting for review comments + checks to load so the
+    /// prompt is built from complete findings instead of an empty cache.
+    pull_request_fix_pending:
+        HashMap<(String, u64), (pull_requests::PullRequest, gpui::AnyWindowHandle)>,
     pull_request_markdown: RefCell<Option<((String, u64), MarkdownView)>>,
     pull_requests_search: Entity<TextInput>,
     /// Virtualized filtered PR rows. GitHub accounts can return hundreds of
@@ -3244,7 +3261,8 @@ impl Insulator {
                 goal_runtime_starts: HashSet::new(),
                 goal_observed_at: HashMap::new(),
                 commit_operation: None,
-                pi_plan_modes: HashMap::new(),
+                plan_modes: HashMap::new(),
+                plan_mode_fallback: HashMap::new(),
                 // Providers × workspaces; both scans are small, the cache
                 // only exists to keep them off the frame path.
                 slash_commands: QueryCache::new(2 * MAX_CACHED_WORKSPACES),
@@ -3326,6 +3344,8 @@ impl Insulator {
                 pull_request_diffs: HashMap::new(),
                 pull_request_diffs_loading: HashSet::new(),
                 pull_request_diffs_error: HashMap::new(),
+                pull_request_fix_preparing: HashSet::new(),
+                pull_request_fix_pending: HashMap::new(),
                 pull_request_markdown: RefCell::new(None),
                 pull_requests_search,
                 pull_requests_list_state: pull_requests_list_state.clone(),

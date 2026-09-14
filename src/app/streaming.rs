@@ -463,10 +463,25 @@ impl Insulator {
                 }
             }
             DriverEvent::PlanApproved => {
-                self.pi_plan_modes
-                    .insert(session_id, super::composer::PiPlanMode::Off);
+                self.plan_modes
+                    .insert(session_id, super::composer::PlanMode::Off);
+                // The provider confirmed the mode; no in-flight toggle remains
+                // to restore.
+                self.plan_mode_fallback.remove(&session_id);
                 if self.state.selected_session == Some(session_id) {
                     self.show_success_toast("Plan approved. Now working on it.");
+                }
+            }
+            DriverEvent::PlanModeSwitchFailed(message) => {
+                // The chip was updated optimistically when the switch was
+                // requested; the provider rejected it, so restore the
+                // pre-toggle mode instead of leaving the chip ahead.
+                if let Some(previous) = self.plan_mode_fallback.remove(&session_id) {
+                    self.plan_modes.insert(session_id, previous);
+                    cx.notify();
+                }
+                if self.state.selected_session == Some(session_id) {
+                    self.show_toast(compact_driver_error(&message));
                 }
             }
             DriverEvent::ExtensionNotification { message, level } => {
@@ -481,15 +496,15 @@ impl Insulator {
             }
             DriverEvent::ExtensionStatus { key, text } => {
                 let current = self
-                    .pi_plan_modes
+                    .plan_modes
                     .get(&session_id)
                     .copied()
                     .unwrap_or_default();
                 let mode = match (key.as_str(), text.is_some()) {
-                    ("pi-plan", true) => Some(super::composer::PiPlanMode::Plan),
-                    ("plannotator", true) => Some(super::composer::PiPlanMode::Plannotator),
-                    ("pi-plan", false) if current == super::composer::PiPlanMode::Plan => {
-                        Some(super::composer::PiPlanMode::Off)
+                    ("pi-plan", true) => Some(super::composer::PlanMode::Plan),
+                    ("plannotator", true) => Some(super::composer::PlanMode::Plannotator),
+                    ("pi-plan", false) if current == super::composer::PlanMode::Plan => {
+                        Some(super::composer::PlanMode::Off)
                     }
                     // Plannotator clears its status while executing when no
                     // checklist is present. That is still plan mode; only
@@ -497,7 +512,11 @@ impl Insulator {
                     _ => None,
                 };
                 if let Some(mode) = mode {
-                    self.pi_plan_modes.insert(session_id, mode);
+                    self.plan_modes.insert(session_id, mode);
+                    // The provider reported its authoritative mode, confirming
+                    // any in-flight toggle; drop the restorable pre-mode so a
+                    // late failure cannot revert this confirmation.
+                    self.plan_mode_fallback.remove(&session_id);
                 }
             }
             DriverEvent::SetEditorText(text) => {

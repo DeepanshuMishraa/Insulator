@@ -374,6 +374,7 @@ impl Insulator {
         self.goal_runtime_starts.remove(&session_id);
         self.pending_goal_operations.remove(&session_id);
         self.goal_observed_at.remove(&session_id);
+        self.plan_mode_fallback.remove(&session_id);
         self.reset_session_runtime(session_id);
         self.background_work.remove(&session_id);
         self.remove_right_panel_session_state(session_id);

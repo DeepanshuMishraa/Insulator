@@ -3667,10 +3667,9 @@ impl Insulator {
             self.reload_clean_right_panel_file_editors(cx);
             self.ensure_right_panel_terminals(cx);
         }
-        // A fresh Pi process starts with both planning extensions off. Apply
-        // the remembered mode only when installing that process; replaying the
-        // toggle before every prompt would turn Plannotator off on the second
-        // message because its command is intentionally a toggle.
+        // The remembered plan mode is applied when the match arm below
+        // installs a fresh driver; see that arm for why it must not replay
+        // before every prompt.
         let starts_driver = prepared_driver.is_some();
         let driver = match prepared_driver {
             None => self
@@ -3726,14 +3725,31 @@ impl Insulator {
         let mut failed_to_start = false;
         match driver {
             Ok(driver) => {
-                if provider == ProviderKind::Pi && starts_driver {
+                // A fresh process starts with planning off (both Pi extensions
+                // off, OpenCode on `build`, Cursor on `agent`, Fx on `code`,
+                // Claude on its launch permission mode, Codex on its launch
+                // sandbox). Apply the remembered mode only when installing
+                // that process; replaying the toggle before every prompt
+                // would turn Plannotator off on the second message because
+                // its command is intentionally a toggle.
+                if super::composer::plan_mode_supported(provider) && starts_driver {
                     let target = self
-                        .pi_plan_modes
+                        .plan_modes
                         .get(&session_id)
                         .copied()
                         .unwrap_or_default();
-                    driver.provider_control(super::composer::pi_plan_mode_commands(
-                        super::composer::PiPlanMode::Off,
+                    if target != super::composer::PlanMode::Off {
+                        // A fresh process always starts with planning off, so
+                        // that is the fallback if applying the remembered mode
+                        // fails below. Keep an older in-flight pre-toggle mode
+                        // for the same reason as `set_pi_plan_mode`.
+                        self.plan_mode_fallback
+                            .entry(session_id)
+                            .or_insert(super::composer::PlanMode::Off);
+                    }
+                    driver.provider_control(super::composer::plan_mode_commands(
+                        provider,
+                        super::composer::PlanMode::Off,
                         target,
                     ));
                 }

@@ -40,6 +40,10 @@ use crate::opencode_session::{
 enum CommandMessage {
     Prompt(String),
     Steer(String),
+    /// Live plan-mode switch: `agent:plan` / `agent:build`. The worker reads
+    /// the current agent for every turn, so the switch applies to the next
+    /// prompt without restarting the session.
+    ProviderControl(Vec<String>),
     NativeCommandFinished {
         generation: u64,
         steer: Option<String>,
@@ -177,6 +181,9 @@ pub struct OpenCodeDriver {
     permissions: Arc<Mutex<OpenCodePermissionState>>,
     event_stream: Arc<StreamControl>,
     mode: RuntimeMode,
+    /// Native agent for the next turn: `build` normally, `plan` while the
+    /// plan-mode toggle is on. Shared with the worker thread.
+    agent: Arc<Mutex<String>>,
     computer_use: Option<super::support::HeadlessComputerUseRuntime>,
 }
 
@@ -232,7 +239,7 @@ impl OpenCodeDriver {
             crate::opencode_pool::acquire(&binary, &cwd)?
         };
 
-        let agent = "build";
+        let agent = Arc::new(Mutex::new("build".to_owned()));
 
         // Reuse the native session when resuming so the conversation, and the
         // cursor already persisted for it, stay the same.
@@ -240,7 +247,11 @@ impl OpenCodeDriver {
             Some(session_id) => session_id,
             None => {
                 let created = server
-                    .request("POST", "/session", Some(&json!({"agent": agent})))
+                    .request(
+                        "POST",
+                        "/session",
+                        Some(&json!({"agent": agent.lock().clone()})),
+                    )
                     .context("could not open an OpenCode session")?;
                 created
                     .get("id")
@@ -463,6 +474,7 @@ impl OpenCodeDriver {
 
         let worker_server = server.clone();
         let worker_session = session_id.clone();
+        let worker_agent = agent.clone();
         let variant = reasoning_effort;
         let worker_events = events;
         let worker_turn = turn_active;
@@ -473,16 +485,25 @@ impl OpenCodeDriver {
                 let mut generation = 0_u64;
                 while let Ok(message) = command_rx.recv() {
                     match message {
+                        CommandMessage::ProviderControl(commands) => {
+                            for command in commands {
+                                let next = command.strip_prefix("agent:").map(str::trim);
+                                if let Some(next) = next.filter(|next| !next.is_empty()) {
+                                    *worker_agent.lock() = next.to_owned();
+                                }
+                            }
+                        }
                         CommandMessage::Prompt(text) => {
                             generation = generation.wrapping_add(1);
                             *worker_turn.lock() = true;
                             let _ = worker_events.send(DriverEvent::TurnStarted);
+                            let current_agent = worker_agent.lock().clone();
                             if let Some(body) = native_command_body(
                                 &text,
                                 &command_names,
                                 model.as_deref(),
                                 variant.as_deref(),
-                                agent,
+                                &current_agent,
                             ) {
                                 if let Err(error) = start_native_command(
                                     worker_server.port,
@@ -506,8 +527,12 @@ impl OpenCodeDriver {
                                 "/session/{}/prompt_async",
                                 encode_path_segment(&worker_session)
                             );
-                            let body =
-                                prompt_body(&text, model.as_deref(), variant.as_deref(), agent);
+                            let body = prompt_body(
+                                &text,
+                                model.as_deref(),
+                                variant.as_deref(),
+                                &current_agent,
+                            );
                             if let Err(error) = worker_server.request("POST", &path, Some(&body)) {
                                 reject_prompt(error, &worker_events, &worker_turn);
                             }
@@ -532,12 +557,13 @@ impl OpenCodeDriver {
                                 });
                                 continue;
                             }
+                            let current_agent = worker_agent.lock().clone();
                             if let Some(body) = native_command_body(
                                 &text,
                                 &command_names,
                                 model.as_deref(),
                                 variant.as_deref(),
-                                agent,
+                                &current_agent,
                             ) {
                                 if let Err(error) = start_native_command(
                                     worker_server.port,
@@ -558,8 +584,12 @@ impl OpenCodeDriver {
                                 "/session/{}/prompt_async",
                                 encode_path_segment(&worker_session)
                             );
-                            let body =
-                                prompt_body(&text, model.as_deref(), variant.as_deref(), agent);
+                            let body = prompt_body(
+                                &text,
+                                model.as_deref(),
+                                variant.as_deref(),
+                                &current_agent,
+                            );
                             match worker_server.request("POST", &path, Some(&body)) {
                                 Ok(_) => {
                                     let _ = worker_events
@@ -663,6 +693,7 @@ impl OpenCodeDriver {
             permissions,
             event_stream,
             mode,
+            agent,
             computer_use,
         })
     }
@@ -679,6 +710,14 @@ impl DriverControl for OpenCodeDriver {
 
     fn steer(&self, prompt: String) {
         let _ = self.commands.send(CommandMessage::Steer(prompt));
+    }
+
+    fn provider_control(&self, commands: Vec<String>) {
+        if !commands.is_empty() {
+            let _ = self
+                .commands
+                .send(CommandMessage::ProviderControl(commands));
+        }
     }
 
     fn cancel(&self) {

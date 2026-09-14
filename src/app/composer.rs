@@ -11,14 +11,14 @@ pub(super) enum ComposerSubmitAction {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) enum PiPlanMode {
+pub(super) enum PlanMode {
     #[default]
     Off,
     Plan,
     Plannotator,
 }
 
-impl PiPlanMode {
+impl PlanMode {
     fn label(self) -> &'static str {
         match self {
             Self::Off => "No plan",
@@ -28,22 +28,103 @@ impl PiPlanMode {
     }
 }
 
-pub(super) fn pi_plan_mode_commands(current: PiPlanMode, target: PiPlanMode) -> Vec<String> {
+/// Providers with a native read-only planning state and how the toggle
+/// reaches it. Pi and Oh My Pi share prompt-text toggles (`/plan`,
+/// `/plannotator-plan-mode`); OpenCode and OpenCode 2 switch their native
+/// `plan` agent; Cursor flips its ACP session mode and Fx flips its own
+/// (`ask` is its restrictive mode, `code` its ordinary one); Claude switches
+/// its `plan` permission mode live via `set_permission_mode`; Codex pins its
+/// per-turn sandbox to `read-only`; DeepSeek Harness runs its `/plan`
+/// command. Amp, Grok, and Kimi have no live-switchable plan state here: Amp
+/// exposes no permission surface at all, and Grok and Kimi advertise no plan
+/// session mode, so they stay out of the toggle until one exists.
+pub(super) fn plan_mode_supported(provider: ProviderKind) -> bool {
+    matches!(
+        provider,
+        ProviderKind::Pi
+            | ProviderKind::OhMyPi
+            | ProviderKind::OpenCode
+            | ProviderKind::OpenCode2
+            | ProviderKind::Cursor
+            | ProviderKind::Fx
+            | ProviderKind::Claude
+            | ProviderKind::Codex
+            | ProviderKind::DeepSeek
+    )
+}
+
+pub(super) fn plan_mode_commands(
+    provider: ProviderKind,
+    current: PlanMode,
+    target: PlanMode,
+) -> Vec<String> {
     if current == target {
         return Vec::new();
     }
+    match provider {
+        ProviderKind::OpenCode | ProviderKind::OpenCode2 => {
+            let agent = match target {
+                PlanMode::Off => "build",
+                PlanMode::Plan | PlanMode::Plannotator => "plan",
+            };
+            return vec![format!("agent:{agent}")];
+        }
+        ProviderKind::Cursor => {
+            let mode = match target {
+                PlanMode::Off => "agent",
+                PlanMode::Plan | PlanMode::Plannotator => "plan",
+            };
+            return vec![format!("mode:{mode}")];
+        }
+        ProviderKind::Fx => {
+            let mode = match target {
+                PlanMode::Off => "code",
+                PlanMode::Plan | PlanMode::Plannotator => "ask",
+            };
+            return vec![format!("mode:{mode}")];
+        }
+        ProviderKind::Claude => {
+            return vec![match target {
+                PlanMode::Off => "permission:restore".to_owned(),
+                PlanMode::Plan | PlanMode::Plannotator => "permission:plan".to_owned(),
+            }];
+        }
+        ProviderKind::Codex => {
+            return vec![match target {
+                PlanMode::Off => "sandbox:restore".to_owned(),
+                PlanMode::Plan | PlanMode::Plannotator => "sandbox:read-only".to_owned(),
+            }];
+        }
+        ProviderKind::DeepSeek => {
+            return vec![match target {
+                PlanMode::Off => "/plan off".to_owned(),
+                PlanMode::Plan | PlanMode::Plannotator => "/plan".to_owned(),
+            }];
+        }
+        ProviderKind::Pi | ProviderKind::OhMyPi => {}
+        _ => return Vec::new(),
+    }
     let mut commands = Vec::with_capacity(2);
     match current {
-        PiPlanMode::Off => {}
-        PiPlanMode::Plan => commands.push("/plan".to_owned()),
-        PiPlanMode::Plannotator => commands.push("/plannotator-plan-mode".to_owned()),
+        PlanMode::Off => {}
+        PlanMode::Plan => commands.push("/plan".to_owned()),
+        PlanMode::Plannotator => commands.push("/plannotator-plan-mode".to_owned()),
     }
     match target {
-        PiPlanMode::Off => {}
-        PiPlanMode::Plan => commands.push("/plan".to_owned()),
-        PiPlanMode::Plannotator => commands.push("/plannotator-plan-mode".to_owned()),
+        PlanMode::Off => {}
+        PlanMode::Plan => commands.push("/plan".to_owned()),
+        PlanMode::Plannotator => commands.push("/plannotator-plan-mode".to_owned()),
     }
     commands
+}
+
+/// Backwards-compatible alias: Pi was the first provider behind the toggle.
+#[allow(dead_code)]
+pub(super) type PiPlanMode = PlanMode;
+
+#[allow(dead_code)]
+pub(super) fn pi_plan_mode_commands(current: PiPlanMode, target: PiPlanMode) -> Vec<String> {
+    plan_mode_commands(ProviderKind::Pi, current, target)
 }
 
 pub(super) fn composer_submit_action(
@@ -2366,42 +2447,97 @@ impl Insulator {
         self.choose_model(kind, model_id, cx);
     }
 
-    fn set_pi_plan_mode(&mut self, target: PiPlanMode, cx: &mut Context<Self>) {
+    fn set_pi_plan_mode(&mut self, target: PlanMode, cx: &mut Context<Self>) {
         let Some(session) = self.selected_session() else {
             return;
         };
-        if session.provider != ProviderKind::Pi {
+        if !plan_mode_supported(session.provider) {
             return;
         }
+        let provider = session.provider;
         let session_id = session.id;
         let current = self
-            .pi_plan_modes
+            .plan_modes
             .get(&session_id)
             .copied()
             .unwrap_or_default();
-        let commands = pi_plan_mode_commands(current, target);
-        self.pi_plan_modes.insert(session_id, target);
+        let commands = plan_mode_commands(provider, current, target);
+        // Optimistic chip update: the driver applies the switch
+        // asynchronously. Stash the pre-toggle mode so a
+        // `PlanModeSwitchFailed` event can restore it. Keep the oldest
+        // in-flight pre-mode: a second toggle issued before the first
+        // settles must not clobber it, or a late failure for the first
+        // would restore the mode before the *latest* toggle. The entry
+        // is cleared when the switch is confirmed (`ExtensionStatus`,
+        // `PlanApproved`) or consumed by a failure.
+        self.plan_mode_fallback
+            .entry(session_id)
+            .or_insert(current);
+        self.plan_modes.insert(session_id, target);
         if let Some(runtime) = self.runtimes.get(&session_id) {
             runtime.driver.provider_control(commands);
         }
         cx.notify();
     }
 
+    fn available_plan_modes(&self, provider: ProviderKind) -> Vec<PlanMode> {
+        match provider {
+            ProviderKind::Pi | ProviderKind::OhMyPi => {
+                let has_plan = self
+                    .slash_command_index
+                    .iter()
+                    .any(|command| command.name == "plan");
+                let has_plannotator = self
+                    .slash_command_index
+                    .iter()
+                    .any(|command| command.name == "plannotator-plan-mode");
+                let mut modes = vec![PlanMode::Off];
+                if has_plan {
+                    modes.push(PlanMode::Plan);
+                }
+                if has_plannotator {
+                    modes.push(PlanMode::Plannotator);
+                }
+                modes
+            }
+            ProviderKind::DeepSeek => {
+                // Harness reports its command-backed `/plan` through the live
+                // registry; without it there is nothing to toggle.
+                if self
+                    .slash_command_index
+                    .iter()
+                    .any(|command| command.name == "plan")
+                {
+                    vec![PlanMode::Off, PlanMode::Plan]
+                } else {
+                    vec![PlanMode::Off]
+                }
+            }
+            ProviderKind::OpenCode
+            | ProviderKind::OpenCode2
+            | ProviderKind::Cursor
+            | ProviderKind::Fx
+            | ProviderKind::Claude
+            | ProviderKind::Codex => {
+                vec![PlanMode::Off, PlanMode::Plan]
+            }
+            _ => vec![PlanMode::Off],
+        }
+    }
+
     pub(super) fn render_pi_plan_mode_control(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let session = self.selected_session()?;
-        if session.provider != ProviderKind::Pi {
+        if !plan_mode_supported(session.provider) {
             return None;
         }
-        let has_plan = self
-            .slash_command_index
-            .iter()
-            .any(|command| command.name == "plan");
-        let has_plannotator = self
-            .slash_command_index
-            .iter()
-            .any(|command| command.name == "plannotator-plan-mode");
+        let available = self.available_plan_modes(session.provider);
+        // A lone "No plan" entry carries no choice; hide the chip instead of
+        // showing a one-item menu (e.g. DeepSeek before its registry lands).
+        if available.len() < 2 {
+            return None;
+        }
         let selected = self
-            .pi_plan_modes
+            .plan_modes
             .get(&session.id)
             .copied()
             .unwrap_or_default();
@@ -2419,10 +2555,8 @@ impl Insulator {
             MenuAlign::AboveLeft,
             move |_| {
                 let mut items = Vec::new();
-                for mode in [PiPlanMode::Off, PiPlanMode::Plan, PiPlanMode::Plannotator] {
-                    if (mode == PiPlanMode::Plan && !has_plan)
-                        || (mode == PiPlanMode::Plannotator && !has_plannotator)
-                    {
+                for mode in [PlanMode::Off, PlanMode::Plan, PlanMode::Plannotator] {
+                    if !available.contains(&mode) {
                         continue;
                     }
                     let weak = weak.clone();
@@ -3209,7 +3343,7 @@ impl Insulator {
                     .iter()
                     .any(|command| command.name == "plan") =>
             {
-                PiPlanMode::Plan
+                PlanMode::Plan
             }
             "/plannotator-plan-mode"
                 if self
@@ -3217,24 +3351,41 @@ impl Insulator {
                     .iter()
                     .any(|command| command.name == "plannotator-plan-mode") =>
             {
-                PiPlanMode::Plannotator
+                PlanMode::Plannotator
             }
             _ => return false,
         };
         let Some(session) = self.selected_session() else {
             return false;
         };
-        if session.provider != ProviderKind::Pi {
+        // Only command-backed toggle providers consume the typed command.
+        // Everywhere else the text stays a normal submission so a
+        // user-defined `/plan` (or the CLI's own interpretation of it)
+        // still reaches the provider: native-mode providers switch through
+        // the chip, never through intercepted text.
+        if !matches!(
+            session.provider,
+            ProviderKind::Pi | ProviderKind::OhMyPi | ProviderKind::DeepSeek
+        ) {
+            return false;
+        }
+        if !plan_mode_supported(session.provider) {
+            return false;
+        }
+        if !self
+            .available_plan_modes(session.provider)
+            .contains(&target)
+        {
             return false;
         }
         let current = self
-            .pi_plan_modes
+            .plan_modes
             .get(&session.id)
             .copied()
             .unwrap_or_default();
         self.set_pi_plan_mode(
             if current == target {
-                PiPlanMode::Off
+                PlanMode::Off
             } else {
                 target
             },
@@ -3956,18 +4107,38 @@ impl Insulator {
                                                 .bg(theme.inverse)
                                                 .hover(|element| element.opacity(0.9))
                                                 .active(|element| element.opacity(0.8))
-                                                .focus_visible(|element| element.border_1().border_color(theme.accent))
+                                                .focus_visible(|element| {
+                                                    element.border_1().border_color(theme.accent)
+                                                })
                                                 .tab_index(0)
-                                                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                                                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                                        let prompt = this.composer.read(cx).content(cx).to_owned();
-                                                        if let Some(submission) = this.submission_with_attachments(&prompt, cx) {
-                                                            this.composer.update(cx, |input, cx| input.clear(cx));
-                                                            this.submit_composer_submission(submission, cx);
+                                                .on_key_down(cx.listener(
+                                                    |this, event: &KeyDownEvent, _, cx| {
+                                                        if matches!(
+                                                            event.keystroke.key.as_str(),
+                                                            "enter" | "space"
+                                                        ) {
+                                                            let prompt = this
+                                                                .composer
+                                                                .read(cx)
+                                                                .content(cx)
+                                                                .to_owned();
+                                                            if let Some(submission) = this
+                                                                .submission_with_attachments(
+                                                                    &prompt, cx,
+                                                                )
+                                                            {
+                                                                this.composer
+                                                                    .update(cx, |input, cx| {
+                                                                        input.clear(cx)
+                                                                    });
+                                                                this.submit_composer_submission(
+                                                                    submission, cx,
+                                                                );
+                                                            }
+                                                            cx.stop_propagation();
                                                         }
-                                                        cx.stop_propagation();
-                                                    }
-                                                }))
+                                                    },
+                                                ))
                                                 .child(icon(
                                                     "icons/arrow-up.svg",
                                                     16.0,

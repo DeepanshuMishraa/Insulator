@@ -2618,13 +2618,11 @@ impl Insulator {
                     detail_card = detail_card.child(section_view);
                 }
                 for (image_index, image_url) in activity.image_urls.iter().enumerate() {
-                    let image = self.image_for_reference(image_url, None, None, cx);
+                    let image = self
+                        .image_for_reference(image_url, None, None, cx)
+                        .or_else(|| self.legacy_activity_image(image_url, cx));
                     detail_card = detail_card.child(render_activity_image(
-                        image_url,
-                        image,
-                        id,
-                        image_index,
-                        theme,
+                        image_url, image, id, image_index, theme,
                     ));
                 }
                 item = item.child(detail_card);
@@ -3005,6 +3003,91 @@ fn activity_scroll_fade(
     })
 }
 
+/// Whether a provider image URL is safe to hand to `img` for a network fetch.
+/// Allows only `http(s)` destinations and rejects loopback, unspecified, and
+/// private-network literal IPs plus `localhost` names. Non-literal hostnames
+/// cannot be resolved here (no blocking work on the render path), so DNS that
+/// points at private space is not covered — the check stops direct literal
+/// probes such as `http://127.0.0.1/…`, `http://10.…`, or metadata endpoints.
+fn is_public_unicast_v4(v4: std::net::Ipv4Addr) -> bool {
+    !(v4.is_loopback()
+        || v4.is_private()
+        || v4.is_link_local()
+        || v4.is_broadcast()
+        || v4.is_multicast()
+        || v4.is_unspecified()
+        || v4.is_documentation())
+}
+
+fn is_safe_remote_image_url(image_url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(image_url) else {
+        return false;
+    };
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return false;
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let normalized = host.trim_end_matches('.').to_ascii_lowercase();
+    if normalized == "localhost" || normalized.ends_with(".localhost") {
+        return false;
+    }
+    if let Ok(ip) = host.trim_matches(['[', ']']).parse::<std::net::IpAddr>() {
+        // Stable deny-list (no `is_global`, which this toolchain gates
+        // behind an unstable feature): anything not clearly public
+        // unicast is rejected.
+        return match ip {
+            std::net::IpAddr::V4(v4) => is_public_unicast_v4(v4),
+            std::net::IpAddr::V6(v6) => {
+                // An IPv4-mapped literal such as `http://[::ffff:127.0.0.1]/`
+                // parses as V6 but addresses IPv4 space, so it must face the
+                // IPv4 deny-list rather than the V6 one.
+                if let Some(mapped) = v6.to_ipv4_mapped() {
+                    return is_public_unicast_v4(mapped);
+                }
+                !(v6.is_loopback()
+                    || v6.is_multicast()
+                    || v6.is_unspecified()
+                    || v6.is_unique_local()
+                    || v6.is_unicast_link_local())
+            }
+        };
+    }
+    true
+}
+
+std::thread_local! {
+    /// Verdicts from `is_safe_remote_image_url` keyed by the raw URL. Render
+    /// calls this per visible image per frame, so a hit must cost only a hash
+    /// lookup: the parse plus lowercase allocation run on the first miss only.
+    /// Keys are short provider URLs — `data:` and attachment URLs never reach
+    /// the check — so a bounded map with clear-on-full eviction is enough.
+    static REMOTE_IMAGE_SAFETY_CACHE: RefCell<HashMap<String, bool>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Bounded verdict cache for `is_safe_remote_image_url`; render reads this.
+fn is_safe_remote_image_url_cached(image_url: &str) -> bool {
+    if let Some(verdict) =
+        REMOTE_IMAGE_SAFETY_CACHE.with(|cache| cache.borrow().get(image_url).copied())
+    {
+        return verdict;
+    }
+    let verdict = is_safe_remote_image_url(image_url);
+    REMOTE_IMAGE_SAFETY_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= 256 {
+            cache.clear();
+        }
+        cache.insert(image_url.to_owned(), verdict);
+    });
+    verdict
+}
+
 fn render_activity_image(
     image_url: &str,
     image: Option<Arc<gpui::Image>>,
@@ -3012,9 +3095,17 @@ fn render_activity_image(
     image_index: usize,
     theme: &Theme,
 ) -> AnyElement {
+    // Provider image URLs reach `img`, which fetches them over the network,
+    // so validate before handing them out: only approved schemes, and no
+    // loopback or private-network destinations. Blob, attachment, and `data:`
+    // URLs are excluded here and never reach the remote check (inline data
+    // goes through the bounded legacy cache instead).
     // Daemon blobs arrive only when a visible row requests them and GPUI keeps
-    // their decoded form in memory. Only legacy inline data URLs still pay a
-    // per-render base64 decode.
+    // their decoded form in memory. Legacy inline data URLs are decoded once
+    // into the same bounded `remote_images` cache (see
+    // `legacy_activity_image`); a miss here renders the same placeholder as a
+    // pending blob instead of paying a per-frame base64 decode. Plain provider
+    // URLs are not daemon references, so they keep the direct `img` fallback.
     let id = SharedString::from(format!("activity-image-{activity_id}-{image_index}"));
     if let Some(image) = image {
         return img(image)
@@ -3027,36 +3118,38 @@ fn render_activity_image(
             .object_fit(ObjectFit::Contain)
             .into_any_element();
     }
-    if insulator_protocol::blob::is_reference(image_url)
-        || image_url.starts_with(insulator_protocol::attachments::ATTACHMENT_SCHEME)
+    if !insulator_protocol::blob::is_reference(image_url)
+        && !image_url.starts_with(insulator_protocol::attachments::ATTACHMENT_SCHEME)
+        && !image_url.starts_with("data:")
+        && is_safe_remote_image_url_cached(image_url)
     {
-        return div()
+        return img(image_url.to_owned())
             .id(id)
             .w(px(ACTIVITY_IMAGE_WIDTH))
             .max_w(gpui::relative(1.0))
-            .h(px(80.0))
+            // Reserve the placeholder height while the network image loads so
+            // the row does not collapse to zero height and jump on arrival.
+            // `min_h` keeps the loaded ceiling (`max_h`) intact.
+            .min_h(px(80.0))
+            .max_h(px(ACTIVITY_IMAGE_HEIGHT))
             .mt(px(8.0))
             .rounded(px(4.0))
-            .bg(theme.inset)
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(icon("icons/file-types/image.svg", 18.0, theme.text_ghost))
+            .object_fit(ObjectFit::Contain)
             .into_any_element();
-    };
-
-    match decode_activity_image(image_url) {
-        Some(image) => img(image),
-        None => img(image_url.to_owned()),
     }
-    .id(id)
-    .w(px(ACTIVITY_IMAGE_WIDTH))
-    .max_w(gpui::relative(1.0))
-    .max_h(px(ACTIVITY_IMAGE_HEIGHT))
-    .mt(px(8.0))
-    .rounded(px(4.0))
-    .object_fit(ObjectFit::Contain)
-    .into_any_element()
+    div()
+        .id(id)
+        .w(px(ACTIVITY_IMAGE_WIDTH))
+        .max_w(gpui::relative(1.0))
+        .h(px(80.0))
+        .mt(px(8.0))
+        .rounded(px(4.0))
+        .bg(theme.inset)
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(icon("icons/file-types/image.svg", 18.0, theme.text_ghost))
+        .into_any_element()
 }
 
 fn decode_activity_image(image_url: &str) -> Option<std::sync::Arc<gpui::Image>> {
@@ -3067,6 +3160,64 @@ fn decode_activity_image(image_url: &str) -> Option<std::sync::Arc<gpui::Image>>
         .decode(encoded)
         .ok()?;
     (!bytes.is_empty()).then(|| std::sync::Arc::new(gpui::Image::from_bytes(format, bytes)))
+}
+
+std::thread_local! {
+    /// Scratch key buffer for `legacy_activity_image`. The shared
+    /// `remote_images` cache is keyed by `String`, so a cache read needs a
+    /// `&String`; reusing this buffer keeps a per-frame hit free of the
+    /// hundreds-of-KB clone a `to_owned()` of an inline `data:` URL would pay.
+    static LEGACY_ACTIVITY_IMAGE_KEY: RefCell<String> = RefCell::new(String::new());
+}
+
+impl Insulator {
+    /// Decode a legacy inline `data:` image URL once into the bounded
+    /// `remote_images` cache. Render calls this per visible row per frame, so
+    /// a cache hit must cost only a hash lookup: the lookup reuses a scratch
+    /// key, and the base64 decode plus image alloc run on the background
+    /// executor on the first miss only, with `cx.notify()` re-rendering once
+    /// fulfilled. Failures cache as `None` so an invalid URL never retries
+    /// every frame.
+    fn legacy_activity_image(
+        &self,
+        image_url: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<Arc<gpui::Image>> {
+        if !image_url.starts_with("data:") {
+            return None;
+        }
+        // Bind the `Query` to a local so the `RefMut` temporary from the
+        // `read` scrutinee drops before any arm borrows the cache again.
+        // Matching directly on the scrutinee would keep that borrow alive for
+        // the whole match and panic on the second borrow in `Missing`.
+        let query = LEGACY_ACTIVITY_IMAGE_KEY.with(|scratch| {
+            let mut key = scratch.borrow_mut();
+            key.clear();
+            key.push_str(image_url);
+            let key: &String = &key;
+            self.remote_images.borrow_mut().read(key)
+        });
+        match query {
+            Query::Ready(cached) => cached.as_ref().clone(),
+            Query::Pending => None,
+            Query::Missing(token) => {
+                let image_url = image_url.to_owned();
+                cx.spawn(async move |insulator, cx| {
+                    let decoded = cx
+                        .background_executor()
+                        .spawn(async move { decode_activity_image(&image_url) })
+                        .await;
+                    let _ = insulator.update(cx, |insulator, cx| {
+                        if insulator.remote_images.borrow_mut().fulfill(token, decoded) {
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+                None
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3273,5 +3424,81 @@ mod live_reasoning_window_tests {
     fn window_below_the_threshold_keeps_the_cached_start() {
         let content = "a".repeat(LIVE_REASONING_WINDOW_MAX);
         assert_eq!(live_reasoning_window_anchor(7, &content), 7);
+    }
+}
+
+#[cfg(test)]
+mod remote_image_url_tests {
+    use super::*;
+
+    #[test]
+    fn allows_public_http_and_https_urls() {
+        assert!(is_safe_remote_image_url("https://example.com/image.png"));
+        assert!(is_safe_remote_image_url(
+            "https://cdn.example.com/a/b.jpg?x=1"
+        ));
+        assert!(is_safe_remote_image_url("http://example.com/image.png"));
+    }
+
+    #[test]
+    fn rejects_non_http_schemes() {
+        assert!(!is_safe_remote_image_url("file:///etc/passwd"));
+        assert!(!is_safe_remote_image_url("ftp://example.com/image.png"));
+        assert!(!is_safe_remote_image_url("javascript:alert(1)"));
+        assert!(!is_safe_remote_image_url("data:image/png;base64,aGVsbG8="));
+        assert!(!is_safe_remote_image_url("not a url"));
+    }
+
+    #[test]
+    fn rejects_loopback_and_private_destinations() {
+        assert!(!is_safe_remote_image_url("http://localhost/image.png"));
+        assert!(!is_safe_remote_image_url("http://localhost:8080/image.png"));
+        assert!(!is_safe_remote_image_url("http://127.0.0.1/image.png"));
+        assert!(!is_safe_remote_image_url("http://10.0.0.5/image.png"));
+        assert!(!is_safe_remote_image_url("http://192.168.1.10/image.png"));
+        assert!(!is_safe_remote_image_url("http://172.16.0.1/image.png"));
+        assert!(!is_safe_remote_image_url(
+            "http://169.254.169.254/image.png"
+        ));
+        assert!(!is_safe_remote_image_url("http://[::1]/image.png"));
+        assert!(!is_safe_remote_image_url(
+            "https://user:pass@example.com/image.png"
+        ));
+    }
+
+    #[test]
+    fn rejects_ipv4_mapped_ipv6_literals() {
+        // `::ffff:127.0.0.1` parses as V6 but targets IPv4 loopback.
+        assert!(!is_safe_remote_image_url(
+            "http://[::ffff:127.0.0.1]/image.png"
+        ));
+        assert!(!is_safe_remote_image_url(
+            "http://[::ffff:10.0.0.5]/image.png"
+        ));
+        assert!(!is_safe_remote_image_url(
+            "http://[::ffff:192.168.1.10]/image.png"
+        ));
+        assert!(!is_safe_remote_image_url(
+            "http://[::ffff:169.254.169.254]/image.png"
+        ));
+    }
+
+    #[test]
+    fn cached_verdict_matches_direct_check() {
+        for url in [
+            "https://example.com/image.png",
+            "http://[::ffff:127.0.0.1]/image.png",
+            "http://10.0.0.5/image.png",
+        ] {
+            assert_eq!(
+                is_safe_remote_image_url_cached(url),
+                is_safe_remote_image_url(url)
+            );
+            // Second call exercises the cache hit.
+            assert_eq!(
+                is_safe_remote_image_url_cached(url),
+                is_safe_remote_image_url(url)
+            );
+        }
     }
 }
