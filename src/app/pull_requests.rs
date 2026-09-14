@@ -26,20 +26,20 @@ impl PullRequestDetailTab {
     fn label(self) -> &'static str {
         match self {
             Self::Summary => "Summary",
-            Self::Commits => "Commits",
-            Self::Code => "Changes",
+            Self::Commits => "Timeline",
+            Self::Code => "Code",
         }
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub(super) struct PullRequestCommit {
     oid: String,
     message: String,
     authored_at: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub(super) struct PullRequestCheck {
     name: String,
     state: String,
@@ -55,6 +55,10 @@ pub(super) struct PullRequestComment {
     created_at: String,
     #[serde(default)]
     location: Option<String>,
+    #[serde(default)]
+    line_label: Option<String>,
+    #[serde(default)]
+    tag: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -87,12 +91,16 @@ impl PullRequestTab {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub(super) struct PullRequest {
     number: u64,
     title: String,
     #[serde(default)]
     author: String,
+    #[serde(default)]
+    author_avatar_url: String,
+    #[serde(default)]
+    author_avatar_path: Option<String>,
     #[serde(default)]
     body: String,
     #[serde(default)]
@@ -102,6 +110,24 @@ pub(super) struct PullRequest {
     #[serde(default)]
     url: String,
     updated_at: String,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    merged_at: Option<String>,
+    #[serde(default)]
+    head_branch: String,
+    #[serde(default)]
+    base_branch: String,
+    #[serde(default)]
+    additions: u64,
+    #[serde(default)]
+    deletions: u64,
+    #[serde(default)]
+    reviewers: Vec<String>,
+    #[serde(default)]
+    comments_count: Option<usize>,
+    #[serde(default)]
+    checks_summary: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     cached_commits: Vec<PullRequestCommit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -123,6 +149,8 @@ struct GhPullRequest {
     merged_at: Option<String>,
     #[serde(rename = "updatedAt")]
     updated_at: Option<String>,
+    #[serde(rename = "createdAt", default)]
+    created_at: Option<String>,
     #[serde(default)]
     repository: GhRepository,
 }
@@ -131,6 +159,26 @@ struct GhPullRequest {
 struct GhAuthor {
     #[serde(default)]
     login: String,
+    #[serde(rename = "avatarUrl", default)]
+    avatar_url: String,
+}
+
+fn cache_github_avatar(login: &str, url: &str) -> Option<String> {
+    let cache_dir = dirs::cache_dir()?.join("Insulator").join("github-avatars");
+    let path = cache_dir.join(format!("{login}.png"));
+    if path.is_file() {
+        return Some(path.to_string_lossy().into_owned());
+    }
+    std::fs::create_dir_all(&cache_dir).ok()?;
+    let output = std::process::Command::new("curl")
+        .args(["--fail", "--silent", "--show-error", "--location", "--max-time", "10", url])
+        .output()
+        .ok()?;
+    if !output.status.success() || output.stdout.is_empty() {
+        return None;
+    }
+    std::fs::write(&path, output.stdout).ok()?;
+    Some(path.to_string_lossy().into_owned())
 }
 
 #[derive(Deserialize, Default)]
@@ -139,10 +187,10 @@ struct GhRepository {
     name_with_owner: String,
 }
 
-const GH_FIELDS: &str = "number,title,author,body,state,updatedAt,url,repository";
-const PULL_REQUEST_ROW_HEIGHT: f32 = 60.0;
+const GH_FIELDS: &str = "number,title,author,body,state,updatedAt,url,repository,createdAt";
+const PULL_REQUEST_ROW_HEIGHT: f32 = 56.0;
 
-fn load_owned_repository_pull_requests() -> anyhow::Result<Vec<GhPullRequest>> {
+fn load_owned_repository_pull_requests(limit: usize) -> anyhow::Result<Vec<GhPullRequest>> {
     let login = std::process::Command::new("gh")
         .args(["api", "user", "--jq", ".login"])
         .env("GH_PROMPT_DISABLED", "1")
@@ -155,7 +203,7 @@ fn load_owned_repository_pull_requests() -> anyhow::Result<Vec<GhPullRequest>> {
     let owner = String::from_utf8_lossy(&login.stdout).trim().to_owned();
     let output = std::process::Command::new("gh")
         .args([
-            "search", "prs", "--owner", &owner, "--state", "open", "--limit", "1000", "--json",
+            "search", "prs", "--owner", &owner, "--state", "open", "--limit", &limit.to_string(), "--json",
             GH_FIELDS,
         ])
         .env("GH_PROMPT_DISABLED", "1")
@@ -171,7 +219,7 @@ fn load_owned_repository_pull_requests() -> anyhow::Result<Vec<GhPullRequest>> {
     let mut requests: Vec<GhPullRequest> = serde_json::from_slice(&output.stdout)?;
     let closed = std::process::Command::new("gh")
         .args([
-            "search", "prs", "--owner", &owner, "--state", "closed", "--limit", "1000", "--json",
+            "search", "prs", "--owner", &owner, "--state", "closed", "--limit", &limit.to_string(), "--json",
             GH_FIELDS,
         ])
         .env("GH_PROMPT_DISABLED", "1")
@@ -280,6 +328,39 @@ fn preserve_cached_details(entries: &mut [PullRequest], cached: &[PullRequest]) 
         }
         entry.cached_commits.clone_from(&previous.cached_commits);
         entry.cached_diff.clone_from(&previous.cached_diff);
+        if entry.head_branch.is_empty() {
+            entry.head_branch.clone_from(&previous.head_branch);
+        }
+        if entry.base_branch.is_empty() {
+            entry.base_branch.clone_from(&previous.base_branch);
+        }
+        if entry.author_avatar_url.is_empty() {
+            entry.author_avatar_url.clone_from(&previous.author_avatar_url);
+        }
+        if entry.author_avatar_path.is_none() {
+            entry.author_avatar_path.clone_from(&previous.author_avatar_path);
+        }
+        if entry.additions == 0 {
+            entry.additions = previous.additions;
+        }
+        if entry.deletions == 0 {
+            entry.deletions = previous.deletions;
+        }
+        if entry.reviewers.is_empty() {
+            entry.reviewers.clone_from(&previous.reviewers);
+        }
+        if entry.comments_count.is_none() {
+            entry.comments_count = previous.comments_count;
+        }
+        if entry.checks_summary.is_none() {
+            entry.checks_summary.clone_from(&previous.checks_summary);
+        }
+        if entry.created_at.is_empty() {
+            entry.created_at.clone_from(&previous.created_at);
+        }
+        if entry.merged_at.is_none() {
+            entry.merged_at.clone_from(&previous.merged_at);
+        }
     }
 }
 
@@ -293,14 +374,101 @@ fn save_cached_pull_requests(entries: &[PullRequest]) {
     let _ = std::fs::write(path, bytes);
 }
 
-fn load_pull_request_body(request: &PullRequest) -> anyhow::Result<(String, String)> {
-    #[derive(Deserialize)]
-    struct Response {
-        #[serde(default)]
-        body: String,
-        #[serde(default)]
-        url: String,
-    }
+#[derive(Default, Deserialize)]
+struct GhPullRequestFullDetail {
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    url: String,
+    #[serde(rename = "headRefName", default)]
+    head_ref_name: String,
+    #[serde(rename = "baseRefName", default)]
+    base_ref_name: String,
+    #[serde(default)]
+    additions: u64,
+    #[serde(default)]
+    deletions: u64,
+    #[serde(rename = "createdAt", default)]
+    created_at: String,
+    #[serde(rename = "mergedAt", default)]
+    merged_at: Option<String>,
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    author: Option<GhAuthor>,
+    #[serde(rename = "latestReviews", default)]
+    latest_reviews: Vec<GhReviewItem>,
+    #[serde(rename = "reviewRequests", default)]
+    review_requests: Vec<GhReviewRequestItem>,
+    #[serde(rename = "statusCheckRollup", default)]
+    status_check_rollup: Vec<GhCheckRollupItem>,
+    #[serde(default)]
+    comments: Vec<GhCommentSummaryItem>,
+}
+
+#[derive(Default, Deserialize)]
+struct GhReviewItem {
+    #[serde(default)]
+    author: Option<GhAuthor>,
+}
+
+#[derive(Default, Deserialize)]
+struct GhReviewRequestItem {
+    #[serde(rename = "login", default)]
+    login: Option<String>,
+    #[serde(rename = "requestedReviewer", default)]
+    requested_reviewer: Option<GhAuthor>,
+}
+
+#[derive(Default, Deserialize)]
+struct GhCheckRollupItem {
+    #[serde(rename = "__typename", default)]
+    #[allow(dead_code)]
+    typename: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    context: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    conclusion: Option<String>,
+    #[serde(rename = "detailsUrl", default)]
+    details_url: Option<String>,
+    #[serde(rename = "targetUrl", default)]
+    target_url: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct GhCommentSummaryItem {
+    #[serde(default)]
+    #[allow(dead_code)]
+    id: Option<String>,
+}
+
+pub(super) struct LoadedPullRequestDetail {
+    body: String,
+    url: String,
+    head_branch: String,
+    base_branch: String,
+    additions: u64,
+    deletions: u64,
+    created_at: String,
+    merged_at: Option<String>,
+    state: String,
+    title: String,
+    author: String,
+    author_avatar_url: String,
+    author_avatar_path: Option<String>,
+    reviewers: Vec<String>,
+    comments_count: usize,
+    checks: Vec<PullRequestCheck>,
+    checks_summary: String,
+}
+
+fn load_pull_request_body(request: &PullRequest) -> anyhow::Result<LoadedPullRequestDetail> {
     let output = gh_output(&[
         "pr",
         "view",
@@ -308,7 +476,7 @@ fn load_pull_request_body(request: &PullRequest) -> anyhow::Result<(String, Stri
         "--repo",
         &request.repository,
         "--json",
-        "body,url",
+        "body,url,headRefName,baseRefName,additions,deletions,createdAt,mergedAt,state,title,author,latestReviews,reviewRequests,statusCheckRollup,comments",
     ])?;
     if !output.status.success() {
         anyhow::bail!(
@@ -316,8 +484,108 @@ fn load_pull_request_body(request: &PullRequest) -> anyhow::Result<(String, Stri
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let response: Response = serde_json::from_slice(&output.stdout)?;
-    Ok((response.body, response.url))
+    let detail: GhPullRequestFullDetail = serde_json::from_slice(&output.stdout)?;
+    let mut reviewers = Vec::new();
+    for r in &detail.latest_reviews {
+        if let Some(author) = &r.author {
+            let login = author.login.trim_end_matches("[bot]").to_owned();
+            if !login.is_empty() && !reviewers.contains(&login) {
+                reviewers.push(login);
+            }
+        }
+    }
+    for r in &detail.review_requests {
+        let login = r
+            .login
+            .as_deref()
+            .or_else(|| r.requested_reviewer.as_ref().map(|a| a.login.as_str()))
+            .unwrap_or_default()
+            .trim_end_matches("[bot]")
+            .to_owned();
+        if !login.is_empty() && !reviewers.contains(&login) {
+            reviewers.push(login);
+        }
+    }
+    let mut checks = Vec::new();
+    for item in &detail.status_check_rollup {
+        let name = item
+            .name
+            .as_deref()
+            .or(item.context.as_deref())
+            .unwrap_or("Check")
+            .to_owned();
+        let (state_str, bucket) = match item.conclusion.as_deref().or(item.state.as_deref()) {
+            Some("SUCCESS") => ("Succeeded".to_owned(), "pass".to_owned()),
+            Some("NEUTRAL") => ("Neutral".to_owned(), "neutral".to_owned()),
+            Some("SKIPPED") => ("Skipped".to_owned(), "neutral".to_owned()),
+            Some("FAILURE") | Some("TIMED_OUT") | Some("ERROR") => {
+                ("Failed".to_owned(), "fail".to_owned())
+            }
+            Some("PENDING") | Some("QUEUED") | Some("IN_PROGRESS") => {
+                ("Pending".to_owned(), "pending".to_owned())
+            }
+            Some(other) => (other.to_owned(), "neutral".to_owned()),
+            None => ("Unknown".to_owned(), "neutral".to_owned()),
+        };
+        let link = item
+            .details_url
+            .as_deref()
+            .or(item.target_url.as_deref())
+            .unwrap_or_default()
+            .to_owned();
+        checks.push(PullRequestCheck {
+            name,
+            state: state_str,
+            bucket,
+            link,
+        });
+    }
+    let checks_summary = if checks.is_empty() {
+        "All checks passed".to_owned()
+    } else {
+        let fail_count = checks.iter().filter(|c| c.bucket == "fail").count();
+        let pending_count = checks.iter().filter(|c| c.bucket == "pending").count();
+        if fail_count > 0 {
+            format!(
+                "{} check{} failing",
+                fail_count,
+                if fail_count == 1 { "" } else { "s" }
+            )
+        } else if pending_count > 0 {
+            format!(
+                "{} check{} in progress",
+                pending_count,
+                if pending_count == 1 { "" } else { "s" }
+            )
+        } else {
+            "All checks passed".to_owned()
+        }
+    };
+    Ok(LoadedPullRequestDetail {
+        body: detail.body,
+        url: detail.url,
+        head_branch: detail.head_ref_name,
+        base_branch: detail.base_ref_name,
+        additions: detail.additions,
+        deletions: detail.deletions,
+        created_at: detail.created_at,
+        merged_at: detail.merged_at,
+        state: detail.state,
+        title: detail.title,
+        author_avatar_url: detail
+            .author
+            .as_ref()
+            .map(|author| author.avatar_url.clone())
+            .unwrap_or_default(),
+        author_avatar_path: detail.author.as_ref().and_then(|author| {
+            cache_github_avatar(&author.login, &author.avatar_url)
+        }),
+        author: detail.author.map(|a| a.login).unwrap_or_default(),
+        reviewers,
+        comments_count: detail.comments.len(),
+        checks,
+        checks_summary,
+    })
 }
 
 fn load_pull_request_diff(request: &PullRequest) -> anyhow::Result<(ReviewDiffSnapshot, String)> {
@@ -401,6 +669,38 @@ fn format_github_timestamp(value: &str) -> String {
         .unwrap_or_else(|_| value.to_owned())
 }
 
+fn format_relative_time_compact(value: &str) -> String {
+    if value.is_empty() {
+        return String::new();
+    }
+    let timestamp = match DateTime::parse_from_rfc3339(value) {
+        Ok(dt) => dt.to_utc(),
+        Err(_) => return value.to_owned(),
+    };
+    let now = chrono::Utc::now();
+    let seconds = (now - timestamp).num_seconds().max(0) as u64;
+    match seconds {
+        0..=59 => "just now".to_owned(),
+        60..=3_599 => format!("{}m", seconds / 60),
+        3_600..=86_399 => format!("{}h", seconds / 3_600),
+        86_400..=2_591_999 => format!("{}d", seconds / 86_400),
+        2_592_000..=31_535_999 => format!("{}mo", seconds / 2_592_000),
+        _ => format!("{}y", seconds / 31_536_000),
+    }
+}
+
+fn format_pr_state(state: &str) -> &'static str {
+    if state.eq_ignore_ascii_case("merged") {
+        "Merged"
+    } else if state.eq_ignore_ascii_case("closed") {
+        "Closed"
+    } else if state.eq_ignore_ascii_case("open") {
+        "Open"
+    } else {
+        "Unknown"
+    }
+}
+
 fn without_html_comments(body: &str) -> String {
     let mut result = String::with_capacity(body.len());
     let mut rest = body;
@@ -412,8 +712,25 @@ fn without_html_comments(body: &str) -> String {
         rest = &rest[start + 4 + end + 3..];
     }
     result.push_str(rest);
-    let mut plain = String::with_capacity(result.len());
+
+    let mut summary_cleaned = String::with_capacity(result.len());
     let mut rest = result.as_str();
+    while let Some(start) = rest.find("<summary>") {
+        summary_cleaned.push_str(&rest[..start]);
+        if let Some(end) = rest[start + 9..].find("</summary>") {
+            let summary_text = &rest[start + 9..start + 9 + end];
+            summary_cleaned.push_str(&format!("\n> **{}**\n\n", summary_text.trim()));
+            rest = &rest[start + 9 + end + 10..];
+        } else {
+            summary_cleaned.push_str(&rest[start..]);
+            rest = "";
+            break;
+        }
+    }
+    summary_cleaned.push_str(rest);
+
+    let mut plain = String::with_capacity(summary_cleaned.len());
+    let mut rest = summary_cleaned.as_str();
     while let Some(start) = rest.find('<') {
         plain.push_str(&rest[..start]);
         let Some(end) = rest[start..].find('>') else {
@@ -426,7 +743,10 @@ fn without_html_comments(body: &str) -> String {
     if !rest.is_empty() {
         plain.push_str(rest);
     }
-    plain.replace("&nbsp;", " ").trim().to_owned()
+    plain = plain.replace("&nbsp;", " ");
+    plain = plain.replace("</blockquote></details>", "");
+    plain = plain.replace("</details>", "");
+    plain.trim().to_owned()
 }
 
 fn load_pull_request_checks(request: &PullRequest) -> anyhow::Result<Vec<PullRequestCheck>> {
@@ -456,6 +776,12 @@ fn load_pull_request_comments(request: &PullRequest) -> anyhow::Result<Vec<PullR
         user: Option<GhCommentUser>,
         path: Option<String>,
         line: Option<u64>,
+        #[serde(default)]
+        start_line: Option<u64>,
+        #[serde(default)]
+        original_line: Option<u64>,
+        #[serde(default)]
+        original_start_line: Option<u64>,
     }
     #[derive(Deserialize)]
     struct GhCommentUser {
@@ -480,14 +806,43 @@ fn load_pull_request_comments(request: &PullRequest) -> anyhow::Result<Vec<PullR
     comments.sort_by(|left, right| left.created_at.cmp(&right.created_at));
     Ok(comments
         .into_iter()
-        .map(|comment| PullRequestComment {
-            author: comment.user.map(|user| user.login).unwrap_or_else(|| "unknown".into()),
-            body: comment.body,
-            created_at: comment.created_at,
-            location: comment.path.map(|path| match comment.line {
-                Some(line) => format!("{path}:{line}"),
-                None => path,
-            }),
+        .map(|comment| {
+            let author = comment
+                .user
+                .map(|user| user.login.trim_end_matches("[bot]").to_owned())
+                .unwrap_or_else(|| "unknown".into());
+            let line_label = if let (Some(start), Some(end)) = (comment.start_line, comment.line) {
+                Some(format!("{start}-{end}"))
+            } else if let (Some(start), Some(end)) =
+                (comment.original_start_line, comment.original_line)
+            {
+                Some(format!("{start}-{end}"))
+            } else if let Some(line) = comment.line {
+                Some(line.to_string())
+            } else {
+                comment.original_line.map(|l| l.to_string())
+            };
+            let mut tag = None;
+            let first_line = comment.body.lines().next().unwrap_or_default();
+            if first_line.contains("⚡ Quick win") {
+                tag = Some("⚡ Quick win".to_owned());
+            } else if first_line.contains("⚠️ Potential issue") {
+                tag = Some("⚠️ Potential issue".to_owned());
+            } else if first_line.contains("🔴 Critical") {
+                tag = Some("🔴 Critical".to_owned());
+            } else if first_line.contains("🟠 Major") {
+                tag = Some("🟠 Major".to_owned());
+            } else if first_line.contains("🟡 Minor") {
+                tag = Some("🟡 Minor".to_owned());
+            }
+            PullRequestComment {
+                author,
+                body: comment.body,
+                created_at: comment.created_at,
+                location: comment.path,
+                line_label,
+                tag,
+            }
         })
         .collect())
 }
@@ -543,8 +898,8 @@ fn load_pull_request_commits(request: &PullRequest) -> anyhow::Result<Vec<PullRe
         .collect())
 }
 
-fn load_pull_requests() -> anyhow::Result<Vec<PullRequest>> {
-    fn search(args: &[&str], state: Option<&str>) -> anyhow::Result<Vec<GhPullRequest>> {
+fn load_pull_requests(limit: usize) -> anyhow::Result<Vec<PullRequest>> {
+    let search = |args: &[&str], state: Option<&str>| -> anyhow::Result<Vec<GhPullRequest>> {
         let mut command = std::process::Command::new("gh");
         command
             .args(["search", "prs"])
@@ -556,7 +911,7 @@ fn load_pull_requests() -> anyhow::Result<Vec<PullRequest>> {
             command.args(["--state", state]);
         }
         let output = command
-            .args(["--limit", "1000", "--json", GH_FIELDS])
+            .args(["--limit", &limit.to_string(), "--json", GH_FIELDS])
             .output()?;
         if !output.status.success() {
             anyhow::bail!(
@@ -565,11 +920,11 @@ fn load_pull_requests() -> anyhow::Result<Vec<PullRequest>> {
             );
         }
         Ok(serde_json::from_slice(&output.stdout)?)
-    }
+    };
 
     let authored_open = search(&["--author", "@me"], Some("open"))?;
     let authored_closed = search(&["--author", "@me"], Some("closed"))?;
-    let owned_repository_requests = load_owned_repository_pull_requests()?;
+    let owned_repository_requests = load_owned_repository_pull_requests(limit)?;
     let mut entries: HashMap<(String, u64), PullRequest> = HashMap::new();
     for requests in [authored_open, authored_closed, owned_repository_requests] {
         for request in requests {
@@ -584,14 +939,16 @@ fn load_pull_requests() -> anyhow::Result<Vec<PullRequest>> {
                 number: request.number,
                 title: request.title.clone(),
                 author: request.author.login.clone(),
+                author_avatar_url: request.author.avatar_url.clone(),
                 body: request.body.clone().unwrap_or_default(),
                 body_loaded: request.body.is_some(),
                 repository: request.repository.name_with_owner.clone(),
                 state,
                 url: request.url.clone(),
                 updated_at: request.updated_at.clone().unwrap_or_default(),
-                cached_commits: Vec::new(),
-                cached_diff: None,
+                created_at: request.created_at.clone().unwrap_or_default(),
+                merged_at: request.merged_at.clone(),
+                ..Default::default()
             });
         }
     }
@@ -600,21 +957,138 @@ fn load_pull_requests() -> anyhow::Result<Vec<PullRequest>> {
     Ok(entries)
 }
 
+#[derive(Deserialize)]
+struct GhPageInfo {
+    #[serde(rename = "hasNextPage")]
+    has_next_page: bool,
+    #[serde(rename = "endCursor")]
+    end_cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GhSearchPage {
+    nodes: Vec<GhPullRequest>,
+    #[serde(rename = "pageInfo")]
+    page_info: GhPageInfo,
+}
+
+#[derive(Deserialize)]
+struct GhGraphQlData {
+    search: GhSearchPage,
+}
+
+#[derive(Deserialize)]
+struct GhGraphQlResponse {
+    data: Option<GhGraphQlData>,
+}
+
+fn load_pull_requests_page(cursor: Option<&str>) -> anyhow::Result<(Vec<PullRequest>, Option<String>)> {
+    const QUERY: &str = "query($search:String!,$after:String){search(query:$search,type:ISSUE,first:50,after:$after){nodes{... on PullRequest{number,title,author{login,avatarUrl},body,state,url,repository{nameWithOwner},updatedAt,createdAt,mergedAt}}pageInfo{hasNextPage,endCursor}}}";
+    let login = gh_output(&["api", "user", "--jq", ".login"])?;
+    if !login.status.success() {
+        anyhow::bail!("gh api user failed");
+    }
+    let login = String::from_utf8_lossy(&login.stdout).trim().to_owned();
+    let (author_cursor, owner_cursor) = cursor
+        .and_then(|value| value.split_once('|'))
+        .map(|(author, owner)| (Some(author), Some(owner)))
+        .unwrap_or((None, None));
+
+    let fetch = |search: String, cursor: Option<&str>| -> anyhow::Result<Option<GhSearchPage>> {
+        if cursor == Some("-") {
+            return Ok(None);
+        }
+        let search_arg = format!("search={search}");
+        let query_arg = format!("query={QUERY}");
+        let mut args = vec!["api", "graphql", "-f", query_arg.as_str(), "-f", search_arg.as_str()];
+        let cursor_arg;
+        if let Some(cursor) = cursor {
+            cursor_arg = format!("after={cursor}");
+            args.extend(["-f", cursor_arg.as_str()]);
+        } else {
+            args.extend(["-F", "after=null"]);
+        }
+        let output = gh_output(&args)?;
+        if !output.status.success() {
+            anyhow::bail!("GitHub pull-request page lookup failed: {}", String::from_utf8_lossy(&output.stderr).trim());
+        }
+        let response: GhGraphQlResponse = serde_json::from_slice(&output.stdout)?;
+        Ok(Some(response.data.ok_or_else(|| anyhow::anyhow!("GitHub returned no pull-request page"))?.search))
+    };
+
+    let author_page = fetch(format!("author:{login} is:pr"), author_cursor)?;
+    let owner_page = fetch(format!("user:{login} is:pr"), owner_cursor)?;
+    let author_next = author_page
+        .as_ref()
+        .filter(|page| page.page_info.has_next_page)
+        .and_then(|page| page.page_info.end_cursor.clone())
+        .unwrap_or_else(|| "-".to_owned());
+    let owner_next = owner_page
+        .as_ref()
+        .filter(|page| page.page_info.has_next_page)
+        .and_then(|page| page.page_info.end_cursor.clone())
+        .unwrap_or_else(|| "-".to_owned());
+    let mut unique = HashMap::new();
+    for page in [author_page, owner_page].into_iter().flatten() {
+        for request in page.nodes {
+            let entry = PullRequest {
+                number: request.number,
+                title: request.title,
+                author: request.author.login.clone(),
+                author_avatar_url: request.author.avatar_url.clone(),
+                author_avatar_path: cache_github_avatar(
+                    &request.author.login,
+                    &request.author.avatar_url,
+                ),
+                body: request.body.unwrap_or_default(),
+                body_loaded: false,
+                repository: request.repository.name_with_owner,
+                state: if request.merged_at.is_some() { "merged".into() } else { request.state.to_ascii_lowercase() },
+                url: request.url,
+                updated_at: request.updated_at.unwrap_or_default(),
+                created_at: request.created_at.unwrap_or_default(),
+                merged_at: request.merged_at,
+                ..Default::default()
+            };
+            unique.insert((entry.repository.clone(), entry.number), entry);
+        }
+    }
+    let next_cursor = (author_next != "-" || owner_next != "-")
+        .then(|| format!("{author_next}|{owner_next}"));
+    let mut entries = unique.into_values().collect::<Vec<_>>();
+    sort_pull_requests(&mut entries);
+    Ok((entries, next_cursor))
+}
+
+fn sort_pull_requests(entries: &mut [PullRequest]) {
+    entries.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+    });
+}
+
 impl Insulator {
     pub(super) fn ensure_pull_requests(&mut self, force: bool, cx: &mut Context<Self>) {
         if self.pull_requests_refreshing {
             return;
         }
         self.pull_requests_refreshing = true;
-        self.pull_requests_loading = self.pull_requests.is_empty() || force;
+        self.pull_requests_loading = self.pull_requests.is_empty();
+        if force {
+            self.pull_requests_cursor = None;
+            self.pull_requests_has_more = true;
+        }
         let entity = cx.entity().downgrade();
         let cached = self.pull_requests.clone();
+        let cursor = self.pull_requests_cursor.clone();
         cx.spawn(async move |_, cx| {
             let lookup = cx.background_executor().spawn(async move {
-                let mut entries = load_pull_requests()?;
+                let (mut entries, next_cursor) = load_pull_requests_page(cursor.as_deref())?;
                 preserve_cached_details(&mut entries, &cached);
                 save_cached_pull_requests(&entries);
-                Ok::<_, anyhow::Error>(entries)
+                Ok::<_, anyhow::Error>((entries, next_cursor))
             });
             let result = futures_lite::future::race(lookup, async {
                 smol::Timer::after(Duration::from_secs(45)).await;
@@ -627,11 +1101,63 @@ impl Insulator {
                 this.pull_requests_loading = false;
                 this.pull_requests_refreshing = false;
                 match result {
-                    Ok(entries) => {
+                    Ok((entries, next_cursor)) => {
                         this.pull_requests = entries;
+                        this.pull_requests_cursor = next_cursor;
+                        this.pull_requests_has_more = this.pull_requests_cursor.is_some();
                         this.pull_requests_error = None;
                     }
                     Err(error) => this.pull_requests_error = Some(error.to_string()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn ensure_more_pull_requests(&mut self, cx: &mut Context<Self>) {
+        if self.pull_requests_refreshing
+            || self.pull_requests_loading_more
+            || !self.pull_requests_has_more
+        {
+            return;
+        }
+        self.pull_requests_loading_more = true;
+        self.pull_requests_refreshing = true;
+        cx.notify();
+        let cursor = self.pull_requests_cursor.clone();
+        let cached = self.pull_requests.clone();
+        let entity = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let (entries, next_cursor) = load_pull_requests_page(cursor.as_deref())?;
+                    Ok::<_, anyhow::Error>((entries, next_cursor, cached))
+                })
+                .await;
+            let _ = entity.update(cx, |this, cx| {
+                this.pull_requests_loading_more = false;
+                this.pull_requests_refreshing = false;
+                match result {
+                    Ok((mut entries, next_cursor, cached)) => {
+                        preserve_cached_details(&mut entries, &cached);
+                        let mut merged = std::mem::take(&mut this.pull_requests);
+                        merged.extend(entries);
+                        let mut unique = HashMap::new();
+                        for entry in merged {
+                            unique.insert((entry.repository.clone(), entry.number), entry);
+                        }
+                        this.pull_requests = unique.into_values().collect();
+                        sort_pull_requests(&mut this.pull_requests);
+                        this.pull_requests_cursor = next_cursor;
+                        this.pull_requests_has_more = this.pull_requests_cursor.is_some();
+                        save_cached_pull_requests(&this.pull_requests);
+                        this.pull_requests_error = None;
+                    }
+                    Err(error) => {
+                        this.pull_requests_error = Some(error.to_string());
+                    }
                 }
                 cx.notify();
             });
@@ -645,7 +1171,11 @@ impl Insulator {
         cx: &mut Context<Self>,
     ) {
         let request_key = (request.repository.clone(), request.number);
-        if request.body_loaded || self.pull_request_detail_loading.contains(&request_key) {
+        if (request.body_loaded
+            && !request.head_branch.is_empty()
+            && request.comments_count.is_some())
+            || self.pull_request_detail_loading.contains(&request_key)
+        {
             return;
         }
         self.pull_request_detail_loading.insert(request_key.clone());
@@ -659,24 +1189,71 @@ impl Insulator {
             let _ = entity.update(cx, |this, cx| {
                 this.pull_request_detail_loading.remove(&key);
                 match result {
-                    Ok((body, url)) => {
-                    this.pull_request_body_error.remove(&key);
-                    if let Some(entry) = this.pull_requests.iter_mut().find(|entry| {
-                        entry.repository == key.0 && entry.number == key.1
-                    }) {
-                        entry.body = body.clone();
-                        entry.body_loaded = true;
-                        entry.url = url.clone();
-                        save_cached_pull_requests(&this.pull_requests);
-                    }
-                    if let Some(detail) = this.pull_request_detail.as_mut()
-                        && detail.repository == key.0
-                        && detail.number == key.1
-                    {
-                        detail.body = body;
-                        detail.body_loaded = true;
-                        detail.url = url;
-                    }
+                    Ok(loaded) => {
+                        this.pull_request_body_error.remove(&key);
+                        if let Some(entry) = this.pull_requests.iter_mut().find(|entry| {
+                            entry.repository == key.0 && entry.number == key.1
+                        }) {
+                            entry.body = loaded.body.clone();
+                            entry.body_loaded = true;
+                            entry.url = loaded.url.clone();
+                            entry.head_branch = loaded.head_branch.clone();
+                            entry.base_branch = loaded.base_branch.clone();
+                            entry.additions = loaded.additions;
+                            entry.deletions = loaded.deletions;
+                            entry.created_at = loaded.created_at.clone();
+                            entry.merged_at = loaded.merged_at.clone();
+                            entry.reviewers = loaded.reviewers.clone();
+                            entry.comments_count = Some(loaded.comments_count);
+                            entry.checks_summary = Some(loaded.checks_summary.clone());
+                            if !loaded.state.is_empty() {
+                                entry.state = loaded.state.to_ascii_lowercase();
+                            }
+                            if !loaded.title.is_empty() {
+                                entry.title = loaded.title.clone();
+                            }
+                            if !loaded.author.is_empty() {
+                                entry.author = loaded.author.clone();
+                            }
+                            if !loaded.author_avatar_url.is_empty() {
+                                entry.author_avatar_url = loaded.author_avatar_url.clone();
+                            }
+                            entry.author_avatar_path = loaded.author_avatar_path.clone();
+                            save_cached_pull_requests(&this.pull_requests);
+                        }
+                        if !loaded.checks.is_empty() && !this.pull_request_checks.contains_key(&key) {
+                            this.pull_request_checks.insert(key.clone(), loaded.checks.clone());
+                        }
+                        if let Some(detail) = this.pull_request_detail.as_mut()
+                            && detail.repository == key.0
+                            && detail.number == key.1
+                        {
+                            detail.body = loaded.body;
+                            detail.body_loaded = true;
+                            detail.url = loaded.url;
+                            detail.head_branch = loaded.head_branch;
+                            detail.base_branch = loaded.base_branch;
+                            detail.additions = loaded.additions;
+                            detail.deletions = loaded.deletions;
+                            detail.created_at = loaded.created_at;
+                            detail.merged_at = loaded.merged_at;
+                            detail.reviewers = loaded.reviewers;
+                            detail.comments_count = Some(loaded.comments_count);
+                            detail.checks_summary = Some(loaded.checks_summary);
+                            if !loaded.state.is_empty() {
+                                detail.state = loaded.state.to_ascii_lowercase();
+                            }
+                            if !loaded.title.is_empty() {
+                                detail.title = loaded.title;
+                            }
+                            if !loaded.author.is_empty() {
+                                detail.author = loaded.author;
+                            }
+                            if !loaded.author_avatar_url.is_empty() {
+                                detail.author_avatar_url = loaded.author_avatar_url;
+                            }
+                            detail.author_avatar_path = loaded.author_avatar_path;
+                        }
                     }
                     Err(error) => {
                         this.pull_request_body_error.insert(key, error.to_string());
@@ -747,6 +1324,7 @@ impl Insulator {
                 this.pull_request_comments_loading.remove(&request_key);
                 match result {
                     Ok(comments) => {
+                        let comments_count = comments.len();
                         for (index, _) in comments.iter().enumerate() {
                             this.pull_request_collapsed_comments.insert(format!(
                                 "{}:{}:{index}",
@@ -754,6 +1332,17 @@ impl Insulator {
                             ));
                         }
                         this.pull_request_comments.insert(request_key.clone(), comments);
+                        if let Some(entry) = this.pull_requests.iter_mut().find(|entry| {
+                            entry.repository == request_key.0 && entry.number == request_key.1
+                        }) {
+                            entry.comments_count = Some(comments_count);
+                        }
+                        if let Some(detail) = this.pull_request_detail.as_mut()
+                            && detail.repository == request_key.0
+                            && detail.number == request_key.1
+                        {
+                            detail.comments_count = Some(comments_count);
+                        }
                         this.pull_request_comments_error.remove(&request_key);
                     }
                     Err(error) => {
@@ -901,202 +1490,424 @@ impl Insulator {
         .detach();
     }
 
+    fn is_pr_section_collapsed(&self, key: &(String, u64), section: &str) -> bool {
+        let section_key = format!("{}:{}:{}", key.0, key.1, section);
+        self.pull_request_collapsed_sections.contains(&section_key)
+    }
+
+    fn toggle_pr_section_collapsed(&mut self, key: &(String, u64), section: &str) {
+        let section_key = format!("{}:{}:{}", key.0, key.1, section);
+        if !self.pull_request_collapsed_sections.remove(&section_key) {
+            self.pull_request_collapsed_sections.insert(section_key);
+        }
+    }
+
     fn render_pull_request_checks_section(
         &self,
         key: &(String, u64),
         theme: &Theme,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         let is_loading = self.pull_request_checks_loading.contains(key)
             || (!self.pull_request_checks.contains_key(key) && !self.pull_request_checks_error.contains_key(key));
-        let content = if is_loading {
-            div().text_color(theme.text_secondary).child("Loading checks…")
-        } else if let Some(error) = self.pull_request_checks_error.get(key) {
-            div().text_color(theme.danger).child(SharedString::from(error.clone()))
-        } else if let Some(checks) = self.pull_request_checks.get(key) {
-            if checks.is_empty() {
-                div().text_color(theme.text_secondary).child("No checks reported.")
-            } else {
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.0))
-                    .children(checks.iter().map(|check| {
-                    let color = match check.bucket.as_str() {
-                        "pass" => theme.success,
-                        "fail" | "cancel" => theme.danger,
-                        _ => theme.text_secondary,
-                    };
-                    div()
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .child(icon(
-                            if check.bucket == "pass" {
-                                "icons/check.svg"
-                            } else {
-                                "icons/circle.svg"
-                            },
-                            14.0,
-                            color,
-                        ))
-                        .child(div().min_w_0().flex_1().text_color(theme.text).child(SharedString::from(check.name.clone())))
-                        .child(div().text_color(theme.text_secondary).child(SharedString::from(check.state.clone())))
-                    }))
-            }
-        } else {
-            div().text_color(theme.text_secondary).child("No checks reported.")
-        };
-        div()
+        let checks = self.pull_request_checks.get(key);
+        let checks_count = checks.map_or(0, Vec::len);
+        let collapsed = self.is_pr_section_collapsed(key, "checks");
+        let entity = cx.entity().downgrade();
+        let toggle_key = key.clone();
+
+        let header = div()
+            .id("pull-request-checks-header")
+            .cursor_pointer()
             .flex()
-            .flex_col()
-            .gap(px(10.0))
-            .child(div().text_size(sp(15.0)).font_weight(FontWeight::MEDIUM).text_color(theme.text).child("Checks"))
-            .child(content)
-            .into_any_element()
+            .items_center()
+            .gap(px(6.0))
+            .hover(|el| el.opacity(0.85))
+            .on_click(move |_, _, cx| {
+                let _ = entity.update(cx, |this, cx| {
+                    this.toggle_pr_section_collapsed(&toggle_key, "checks");
+                    cx.notify();
+                });
+            })
+            .child(
+                div()
+                    .text_size(sp(15.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text)
+                    .child("Checks"),
+            )
+            .child(icon(
+                if collapsed { "icons/chevron-right.svg" } else { "icons/chevron-down.svg" },
+                13.0,
+                theme.text_secondary,
+            ))
+            .when(checks_count > 0, |el| {
+                el.child(
+                    div()
+                        .text_size(sp(13.0))
+                        .text_color(theme.text_secondary)
+                        .child(format!("{checks_count}")),
+                )
+            });
+
+        let mut section = div().flex().flex_col().gap(px(8.0)).child(header);
+        if !collapsed {
+            let content = if is_loading {
+                div().text_color(theme.text_secondary).text_size(sp(13.0)).child("Loading checks…").into_any_element()
+            } else if let Some(error) = self.pull_request_checks_error.get(key) {
+                div().text_color(theme.danger).text_size(sp(13.0)).child(SharedString::from(error.clone())).into_any_element()
+            } else if let Some(checks) = checks {
+                if checks.is_empty() {
+                    div().text_color(theme.text_secondary).text_size(sp(13.0)).child("No checks reported.").into_any_element()
+                } else {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
+                        .children(checks.iter().enumerate().map(|(index, check)| {
+                            let link = check.link.clone();
+                            let (icon_name, color) = match check.bucket.as_str() {
+                                "pass" | "success" => ("icons/check.svg", theme.success),
+                                "fail" | "cancel" => ("icons/alert.svg", theme.danger),
+                                _ => ("icons/circle-dashed.svg", theme.text_secondary),
+                            };
+                            let row = div()
+                                .id(SharedString::from(format!("pull-request-check-{index}")))
+                                .cursor_pointer()
+                                .on_click(move |_, _, cx| {
+                                    if !link.is_empty() {
+                                        cx.open_url(&link);
+                                    }
+                                })
+                                .w_full()
+                                .px(px(6.0))
+                                .py(px(5.0))
+                                .rounded(px(6.0))
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap(px(8.0))
+                                .hover(|el| el.bg(theme.overlay))
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(8.0))
+                                        .child(icon(icon_name, 14.0, color))
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .flex_1()
+                                                .truncate()
+                                                .text_size(sp(13.0))
+                                                .text_color(theme.text)
+                                                .child(SharedString::from(check.name.clone())),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .text_size(sp(12.5))
+                                        .text_color(theme.text_secondary)
+                                        .child(SharedString::from(check.state.clone())),
+                                );
+                            row
+                        }))
+                        .into_any_element()
+                }
+            } else {
+                div().text_color(theme.text_secondary).text_size(sp(13.0)).child("No checks reported.").into_any_element()
+            };
+            section = section.child(content);
+        }
+        section.into_any_element()
     }
 
     fn render_pull_request_comments_section(
         &self,
         key: &(String, u64),
-        request: PullRequest,
+        _request: PullRequest,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let is_loading = self.pull_request_comments_loading.contains(key)
             || (!self.pull_request_comments.contains_key(key) && !self.pull_request_comments_error.contains_key(key));
         let comments = self.pull_request_comments.get(key);
-        let comments_body = if is_loading {
-            div().text_color(theme.text_secondary).child("Loading comments…").into_any_element()
-        } else if let Some(error) = self.pull_request_comments_error.get(key) {
-            div().text_color(theme.danger).child(SharedString::from(error.clone())).into_any_element()
-        } else if let Some(comments) = comments {
-            if comments.is_empty() {
-                div().text_color(theme.text_secondary).child("No comments yet.").into_any_element()
-            } else {
-            let palette = MarkdownPalette::from_theme(theme);
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(10.0))
-                .children(comments.iter().enumerate().map(|(index, comment)| {
-                    let comment_key = format!("{}:{}:{index}", key.0, key.1);
-                    let collapsed = self.pull_request_collapsed_comments.contains(&comment_key);
-                    let entity = cx.entity().downgrade();
-                    let toggle_key = comment_key.clone();
-                    let header = div()
-                        .id(SharedString::from(format!("pull-request-comment-header-{index}")))
-                        .w_full()
-                        .px(px(10.0))
-                        .py(px(9.0))
-                        .rounded(px(7.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .hover(|element| element.bg(theme.overlay_strong))
-                        .focus_visible(|element| element.border_1().border_color(theme.accent))
-                        .tab_index(0)
-                        .on_click(move |_, _, cx| {
-                            let _ = entity.update(cx, |this, cx| {
-                                if !this.pull_request_collapsed_comments.remove(&toggle_key) {
-                                    this.pull_request_collapsed_comments.insert(toggle_key.clone());
-                                }
-                                cx.notify();
-                            });
-                        })
-                        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                if !this.pull_request_collapsed_comments.remove(&comment_key) {
-                                    this.pull_request_collapsed_comments.insert(comment_key.clone());
-                                }
-                                cx.stop_propagation();
-                                cx.notify();
-                            }
-                        }))
-                        .child(icon(
-                            if collapsed { "icons/chevron-right.svg" } else { "icons/chevron-down.svg" },
-                            13.0,
-                            theme.text_tertiary,
-                        ))
-                        .child(div().min_w_0().flex_1().text_color(theme.text).font_weight(FontWeight::MEDIUM).child(SharedString::from(format!(
-                            "{}  ·  {}",
-                            comment.author,
-                            format_github_timestamp(&comment.created_at)
-                        ))))
-                        .when_some(comment.location.as_ref(), |element, location| {
-                            element.child(div().text_color(theme.text_tertiary).child(SharedString::from(location.clone())))
-                        });
-                    let mut card = div().w_full().rounded(px(8.0)).bg(theme.overlay).child(header);
-                    if !collapsed {
-                        let body = without_html_comments(&comment.body);
-                        let mut view = MarkdownView::new();
-                        view.set_text(&body, false);
-                        let context = MarkdownCtx::new(
-                            format!("pull-request-comment-{}-{index}", key.1),
-                            &palette,
-                            MarkdownMetrics::document(self.state.ui_font_size, self.state.code_font_size),
-                            self.transcript_selection.clone(),
-                        )
-                        .with_math_enabled(self.state.render_math)
-                        .with_link_handler(self.markdown_link_handler.clone());
-                        let rendered = md::render::markdown(&view, &context).unwrap_or_else(|| {
-                            md::render::plain_text(body, crate::theme::active_ui_font_family(), FontWeight::NORMAL, theme.text_secondary, &context)
-                        });
-                        card = card.child(div().px(px(32.0)).pb(px(12.0)).child(rendered));
-                    }
-                    card
-                }))
-                .into_any_element()
-            }
-        } else {
-            div().text_color(theme.text_secondary).child("No comments yet.").into_any_element()
-        };
+        let comments_count = comments.map_or(0, Vec::len);
+        let section_collapsed = self.is_pr_section_collapsed(key, "comments");
         let entity = cx.entity().downgrade();
-        let key_entity = entity.clone();
-        let request = request.clone();
-        let key_request = request.clone();
-        div()
+        let toggle_key = key.clone();
+
+        let header = div()
+            .id("pull-request-comments-header")
+            .cursor_pointer()
             .flex()
-            .flex_col()
-            .gap(px(10.0))
-            .child(div().text_size(sp(15.0)).font_weight(FontWeight::MEDIUM).text_color(theme.text).child(SharedString::from(format!("Comments  ·  {}", comments.map_or(0, Vec::len)))))
-            .child(comments_body)
-            .when_some(self.pull_request_comment_post_errors.get(key), |element, error| {
-                element.child(div().text_color(theme.danger).child(SharedString::from(error.clone())))
+            .items_center()
+            .gap(px(6.0))
+            .hover(|el| el.opacity(0.85))
+            .on_click(move |_, _, cx| {
+                let _ = entity.update(cx, |this, cx| {
+                    this.toggle_pr_section_collapsed(&toggle_key, "comments");
+                    cx.notify();
+                });
             })
             .child(
                 div()
+                    .text_size(sp(15.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text)
+                    .child("Comments"),
+            )
+            .child(icon(
+                if section_collapsed { "icons/chevron-right.svg" } else { "icons/chevron-down.svg" },
+                13.0,
+                theme.text_secondary,
+            ))
+            .when(comments_count > 0, |el| {
+                el.child(
+                    div()
+                        .text_size(sp(13.0))
+                        .text_color(theme.text_secondary)
+                        .child(format!("{comments_count}")),
+                )
+            });
+
+        let mut section = div().flex().flex_col().gap(px(8.0)).child(header);
+        if !section_collapsed {
+            let comments_body = if is_loading {
+                div().text_color(theme.text_secondary).text_size(sp(13.0)).child("Loading comments…").into_any_element()
+            } else if let Some(error) = self.pull_request_comments_error.get(key) {
+                div().text_color(theme.danger).text_size(sp(13.0)).child(SharedString::from(error.clone())).into_any_element()
+            } else if let Some(comments) = comments {
+                if comments.is_empty() {
+                    div().text_color(theme.text_secondary).text_size(sp(13.0)).child("No comments yet.").into_any_element()
+                } else {
+                    let palette = MarkdownPalette::from_theme(theme);
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .children(comments.iter().enumerate().map(|(index, comment)| {
+                            let comment_key = format!("{}:{}:{index}", key.0, key.1);
+                            let collapsed = self.pull_request_collapsed_comments.contains(&comment_key);
+                            let entity = cx.entity().downgrade();
+                            let toggle_comment_key = comment_key.clone();
+                            let author = comment.author.clone();
+                            let reply_entity = entity.clone();
+
+                            let item_header = div()
+                                .id(SharedString::from(format!("pull-request-comment-header-{index}")))
+                                .w_full()
+                                .px(px(8.0))
+                                .py(px(6.0))
+                                .rounded(px(6.0))
+                                .cursor_pointer()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap(px(8.0))
+                                .hover(|el| el.bg(theme.overlay_strong))
+                                .on_click(move |_, _, cx| {
+                                    let _ = entity.update(cx, |this, cx| {
+                                        if !this.pull_request_collapsed_comments.remove(&toggle_comment_key) {
+                                            this.pull_request_collapsed_comments.insert(toggle_comment_key.clone());
+                                        }
+                                        cx.notify();
+                                    });
+                                })
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(8.0))
+                                        .child(icon("icons/github.svg", 14.0, theme.text_secondary))
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .flex_1()
+                                                .truncate()
+                                                .text_size(sp(13.0))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(theme.text)
+                                                .child(SharedString::from(comment.author.clone())),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(6.0))
+                                        .child(
+                                            div()
+                                                .text_size(sp(12.0))
+                                                .text_color(theme.text_secondary)
+                                                .child(SharedString::from(format_relative_time_compact(&comment.created_at))),
+                                        )
+                                        .child(icon(
+                                            if collapsed { "icons/chevron-right.svg" } else { "icons/chevron-down.svg" },
+                                            12.0,
+                                            theme.text_tertiary,
+                                        )),
+                                );
+
+                            let mut card = div().w_full().rounded(px(8.0)).bg(theme.overlay).child(item_header);
+                            if !collapsed {
+                                if let Some(location) = comment.location.as_ref() {
+                                    card = card.child(
+                                        div()
+                                            .px(px(12.0))
+                                            .pt(px(4.0))
+                                            .text_size(sp(11.5))
+                                            .font_family(crate::md::render::active_mono_family())
+                                            .text_color(theme.text_secondary)
+                                            .child(SharedString::from(location.clone())),
+                                    );
+                                }
+                                if comment.line_label.is_some() || comment.tag.is_some() {
+                                    let tag_text = match (&comment.line_label, &comment.tag) {
+                                        (Some(line), Some(tag)) => format!("{line} : {tag}"),
+                                        (Some(line), None) => line.clone(),
+                                        (None, Some(tag)) => tag.clone(),
+                                        (None, None) => String::new(),
+                                    };
+                                    if !tag_text.is_empty() {
+                                        card = card.child(
+                                            div()
+                                                .px(px(12.0))
+                                                .pt(px(6.0))
+                                                .child(
+                                                    div()
+                                                        .px(px(6.0))
+                                                        .py(px(2.0))
+                                                        .rounded(px(4.0))
+                                                        .bg(theme.overlay_strong)
+                                                        .text_size(sp(11.5))
+                                                        .text_color(theme.text)
+                                                        .child(tag_text),
+                                                ),
+                                        );
+                                    }
+                                }
+                                let body = without_html_comments(&comment.body);
+                                let mut view = MarkdownView::new();
+                                view.set_text(&body, false);
+                                let context = MarkdownCtx::new(
+                                    format!("pull-request-comment-{}-{index}", key.1),
+                                    &palette,
+                                    MarkdownMetrics::document(self.state.ui_font_size, self.state.code_font_size),
+                                    self.transcript_selection.clone(),
+                                )
+                                .with_math_enabled(self.state.render_math)
+                                .with_link_handler(self.markdown_link_handler.clone());
+                                let rendered = md::render::markdown(&view, &context).unwrap_or_else(|| {
+                                    md::render::plain_text(
+                                        body,
+                                        crate::theme::active_ui_font_family(),
+                                        FontWeight::NORMAL,
+                                        theme.text_secondary,
+                                        &context,
+                                    )
+                                });
+                                card = card.child(div().px(px(12.0)).py(px(8.0)).child(rendered));
+                                card = card.child(
+                                    div()
+                                        .w_full()
+                                        .px(px(12.0))
+                                        .pb(px(8.0))
+                                        .flex()
+                                        .justify_end()
+                                        .child(
+                                            div()
+                                                .id(SharedString::from(format!("reply-comment-{index}")))
+                                                .cursor_pointer()
+                                                .text_size(sp(12.0))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(theme.text_secondary)
+                                                .hover(|el| el.text_color(theme.text))
+                                                .child("Reply")
+                                                .on_click(move |_, window, cx| {
+                                                    let author = author.clone();
+                                                    if let Ok(focus) = reply_entity.update(cx, |this, cx| {
+                                                        this.pull_request_comment_input.update(cx, |input, cx| {
+                                                            input.set_content(format!("@{author} "), cx);
+                                                            input.focus()
+                                                        })
+                                                    }) {
+                                                        window.focus(&focus, cx);
+                                                    }
+                                                }),
+                                        ),
+                                );
+                            }
+                            card
+                        }))
+                        .into_any_element()
+                }
+            } else {
+                div().text_color(theme.text_secondary).text_size(sp(13.0)).child("No comments yet.").into_any_element()
+            };
+            section = section.child(comments_body);
+        }
+        section.into_any_element()
+    }
+
+    fn render_pull_request_sticky_comment_bar(
+        &self,
+        key: &(String, u64),
+        request: PullRequest,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let entity = cx.entity().downgrade();
+        let key_entity = entity.clone();
+        let key_request = request.clone();
+        let is_posting = self.pull_request_comment_posting.contains(key);
+
+        div()
+            .w_full()
+            .flex_none()
+            .px(px(14.0))
+            .py(px(10.0))
+            .bg(theme.surface)
+            .border_t_1()
+            .border_color(theme.border)
+            .child(
+                div()
                     .w_full()
-                    .min_h(px(44.0))
-                    .px(px(10.0))
-                    .py(px(7.0))
-                    .rounded(px(8.0))
+                    .min_h(px(40.0))
+                    .max_h(px(120.0))
+                    .px(px(12.0))
+                    .rounded(px(20.0))
                     .border_1()
                     .border_color(theme.border_strong)
                     .bg(theme.inset)
                     .flex()
-                    .items_end()
+                    .items_center()
                     .gap(px(8.0))
+                    .child(icon("icons/github.svg", 16.0, theme.text_secondary))
                     .child(div().min_w_0().flex_1().child(self.pull_request_comment_input.clone()))
                     .child(
                         div()
                             .id("pull-request-submit-comment")
-                            .size(px(28.0))
-                            .rounded(px(7.0))
+                            .size(px(26.0))
+                            .rounded(px(13.0))
                             .flex()
                             .items_center()
                             .justify_center()
-                            .when(
-                                self.pull_request_comment_posting.contains(key),
-                                |element| element.opacity(0.5),
-                            )
-                            .hover(|element| element.bg(theme.overlay))
-                            .focus_visible(|element| element.border_1().border_color(theme.accent))
+                            .bg(theme.overlay_strong)
+                            .hover(|el| el.bg(theme.accent))
+                            .when(is_posting, |el| el.opacity(0.5))
+                            .cursor_pointer()
                             .tab_index(0)
-                            .child(if self.pull_request_comment_posting.contains(key) {
-                                crate::app::components::dot_matrix_loader(theme.text, 15.0)
+                            .child(if is_posting {
+                                crate::app::components::dot_matrix_loader(theme.text, 14.0)
                             } else {
-                                icon("icons/arrow-up.svg", 15.0, theme.text).into_any_element()
+                                icon("icons/arrow-up.svg", 14.0, theme.text).into_any_element()
                             })
                             .on_click(move |_, _, cx| {
                                 let _ = entity.update(cx, |this, cx| {
@@ -1148,9 +1959,9 @@ impl Insulator {
             .collect::<Vec<_>>();
         self.sync_pull_request_rows(&entries);
         let search = TextField::new("pull-requests-search", self.pull_requests_search.clone())
-            .icon("icons/search.svg", 15.0)
+            .icon("icons/search.svg", 14.0)
             .flex_1()
-            .max_w(px(760.0));
+            .w_full();
         let pull_requests = cx.entity().downgrade();
         let refresh = cx.entity().downgrade();
         let body = if self.pull_requests_loading {
@@ -1181,14 +1992,14 @@ impl Insulator {
                 .into_any_element()
         } else if let Some(error) = &self.pull_requests_error {
             div()
-                .px(px(32.0))
+                .px(px(20.0))
                 .py(px(40.0))
                 .text_color(theme.danger)
                 .child(SharedString::from(error.clone()))
                 .into_any_element()
         } else if entries.is_empty() {
             div()
-                .px(px(32.0))
+                .px(px(20.0))
                 .py(px(40.0))
                 .text_color(theme.text_secondary)
                 .child(format!(
@@ -1217,12 +2028,12 @@ impl Insulator {
             .child(
                 div()
                     .flex_none()
-                    .px(px(32.0))
-                    .pt(px(18.0))
-                    .pb(px(12.0))
+                    .px(px(20.0))
+                    .pt(px(14.0))
+                    .pb(px(10.0))
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
+                    .gap(px(4.0))
                     .children(PullRequestTab::ALL.into_iter().map(|tab| {
                         let selected = tab == selected_tab;
                         let click_pull_requests = pull_requests.clone();
@@ -1233,14 +2044,14 @@ impl Insulator {
                                 tab.label()
                             )))
                             .tab_index(0)
-                            .h(px(32.0))
-                            .px(px(14.0))
-                            .rounded(px(7.0))
+                            .h(px(28.0))
+                            .px(px(11.0))
+                            .rounded(px(6.0))
                             .flex()
                             .items_center()
                             .justify_center()
                             .cursor_default()
-                            .text_size(sp(13.0))
+                            .text_size(sp(12.5))
                             .font_weight(if selected {
                                 FontWeight::MEDIUM
                             } else {
@@ -1293,24 +2104,25 @@ impl Insulator {
             .child(
                 div()
                     .flex_none()
-                    .px(px(32.0))
-                    .pb(px(18.0))
+                    .px(px(20.0))
+                    .pb(px(12.0))
                     .flex()
                     .items_center()
-                    .gap(px(10.0))
+                    .gap(px(8.0))
                     .child(search)
                     .child(
                         div()
                             .id("pull-requests-refresh")
-                            .size(px(34.0))
-                            .rounded(px(8.0))
+                            .size(px(32.0))
+                            .rounded(px(6.0))
                             .flex()
                             .items_center()
                             .justify_center()
+                            .flex_none()
                             .hover(|element| element.bg(theme.overlay))
                             .active(|element| element.bg(theme.overlay_strong))
                             .tooltip(Tooltip::text("Refresh pull requests"))
-                            .child(icon("icons/rotate-cw.svg", 15.0, theme.text_tertiary))
+                            .child(icon("icons/rotate-cw.svg", 14.0, theme.text_secondary))
                             .on_click(move |_, _, cx| {
                                 let _ = refresh.update(cx, |this, cx| {
                                     this.ensure_pull_requests(true, cx);
@@ -1324,7 +2136,33 @@ impl Insulator {
                     .flex_1()
                     .min_h_0()
                     .relative()
+                    .w_full()
                     .child(body)
+                    .when(self.pull_requests_loading_more, |el| {
+                        el.child(
+                            div()
+                                .absolute()
+                                .left(px(12.0))
+                                .right(px(12.0))
+                                .bottom(px(12.0))
+                                .py(px(10.0))
+                                .rounded(px(8.0))
+                                .bg(theme.surface)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .gap(px(8.0))
+                                .child(crate::app::components::dot_matrix_loader(
+                                    theme.text_secondary,
+                                    15.0,
+                                ))
+                                .child(
+                                    ShimmerText::new("Loading more pull requests…")
+                                        .text_size(sp(12.0))
+                                        .text_color(theme.text_secondary),
+                                ),
+                        )
+                    })
                     .child(scrollbar::vertical(
                         &self.pull_requests_list_state,
                         &self.pull_requests_scrollbar,
@@ -1355,8 +2193,9 @@ impl Insulator {
             selected.repository == entry.repository && selected.number == entry.number
         });
         div()
+            .w_full()
             .h(px(PULL_REQUEST_ROW_HEIGHT + 4.0))
-            .px(px(32.0))
+            .px(px(16.0))
             .pb(px(4.0))
             .child(render_pull_request_row(
                 entry,
@@ -1380,6 +2219,11 @@ fn render_pull_request_row(
         "closed" => theme.danger,
         _ => theme.text_secondary,
     };
+    let time_str = if !entry.created_at.is_empty() {
+        format_relative_time_compact(&entry.created_at)
+    } else {
+        format_relative_time_compact(&entry.updated_at)
+    };
     let request = entry.clone();
     div()
         .id(SharedString::from(format!(
@@ -1387,21 +2231,19 @@ fn render_pull_request_row(
             entry.repository, entry.number
         )))
         .w_full()
-        .max_w(px(980.0))
         .h(px(PULL_REQUEST_ROW_HEIGHT))
         .flex_none()
-        .rounded(px(8.0))
+        .rounded(px(7.0))
         .cursor_pointer()
-        .px(px(14.0))
+        .px(px(10.0))
         .flex()
         .items_center()
-        .gap(px(12.0))
+        .gap(px(10.0))
         .when(is_selected, |element| {
             element
                 .bg(theme.overlay_strong)
                 .border_1()
                 .border_color(theme.border)
-                .hover(|element| element.bg(theme.overlay_strong))
         })
         .when(!is_selected, |element| {
             element
@@ -1438,8 +2280,8 @@ fn render_pull_request_row(
         .child(
             div()
                 .w(px(3.0))
-                .h(px(28.0))
-                .rounded(px(2.0))
+                .h(px(24.0))
+                .rounded(px(1.5))
                 .flex_none()
                 .bg(if is_selected {
                     theme.accent
@@ -1447,55 +2289,83 @@ fn render_pull_request_row(
                     gpui::transparent_black()
                 }),
         )
-        .child(icon("icons/git-branch.svg", 17.0, state_color))
+        .child(
+            div()
+                .flex_none()
+                .child(icon("icons/git-pull-request.svg", 16.0, state_color)),
+        )
         .child(
             div()
                 .min_w_0()
                 .flex_1()
                 .flex()
                 .flex_col()
-                .gap(px(4.0))
+                .justify_center()
+                .gap(px(2.5))
                 .child(
                     div()
-                        .text_size(sp(14.0))
-                        .font_weight(if is_selected {
-                            FontWeight::MEDIUM
-                        } else {
-                            FontWeight::NORMAL
-                        })
-                        .text_color(theme.text)
-                        .child(SharedString::from(format!(
-                            "{}  #{}",
-                            entry.title, entry.number
-                        ))),
+                        .w_full()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .text_size(sp(13.0))
+                                .font_weight(if is_selected {
+                                    FontWeight::SEMIBOLD
+                                } else {
+                                    FontWeight::MEDIUM
+                                })
+                                .text_color(theme.text)
+                                .child(SharedString::from(entry.title.clone())),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_size(sp(11.5))
+                                .font_family(crate::md::render::active_mono_family())
+                                .text_color(theme.text_tertiary)
+                                .child(format!("#{}", entry.number)),
+                        ),
                 )
                 .child(
                     div()
-                        .text_size(sp(12.5))
+                        .w_full()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(sp(11.5))
                         .text_color(theme.text_secondary)
                         .child(SharedString::from(format!(
-                            "{}  ·  {}  ·  {}",
+                            "{} · {}{}",
                             entry.repository,
+                            if time_str.is_empty() {
+                                String::new()
+                            } else {
+                                format!("{time_str} · ")
+                            },
                             if entry.author.is_empty() {
                                 "unknown"
                             } else {
                                 &entry.author
-                            },
-                            entry.state
+                            }
                         ))),
                 ),
         )
         .child(
             div()
                 .flex_none()
-                .px(px(9.0))
-                .py(px(3.5))
+                .px(px(8.0))
+                .py(px(2.0))
                 .rounded(px(999.0))
-                .bg(state_color.opacity(if theme.is_dark { 0.18 } else { 0.12 }))
-                .text_size(sp(11.5))
+                .bg(state_color.opacity(if theme.is_dark { 0.16 } else { 0.10 }))
+                .text_size(sp(10.5))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(state_color)
-                .child(SharedString::from(entry.state.to_ascii_uppercase())),
+                .child(format_pr_state(&entry.state)),
         )
         .into_any_element()
 }
@@ -1596,42 +2466,381 @@ impl Insulator {
             })
         };
         let detail_body = match selected_tab {
-            PullRequestDetailTab::Summary => div()
-                .flex()
-                .flex_col()
-                .gap(px(18.0))
-                .child(
-                    div()
-                        .text_size(sp(20.0))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text)
-                        .child(SharedString::from(request.title.clone())),
-                )
-                .child(
-                    div()
-                        .text_size(sp(13.0))
-                        .text_color(theme.text_secondary)
-                        .child(SharedString::from(format!(
-                            "{}  ·  {}",
-                            request.repository, request.state
-                        ))),
-                )
-                .child(div().h(px(1.0)).w_full().bg(theme.border))
-                .child(
-                    div()
-                        .text_size(sp(14.0))
-                        .line_height(sp(22.0))
-                        .text_color(theme.text_secondary)
-                        .child(description),
-                )
-                .child(self.render_pull_request_checks_section(&commit_key, &theme))
-                .child(self.render_pull_request_comments_section(
-                    &commit_key,
-                    request.clone(),
-                    &theme,
-                    cx,
-                ))
-                .into_any_element(),
+            PullRequestDetailTab::Summary => {
+                let state_color = match request.state.as_str() {
+                    "open" => theme.success,
+                    "merged" => theme.accent,
+                    "closed" => theme.danger,
+                    _ => theme.text_secondary,
+                };
+                let time_str = if !request.created_at.is_empty() {
+                    format_relative_time_compact(&request.created_at)
+                } else {
+                    format_relative_time_compact(&request.updated_at)
+                };
+
+                let is_desc_collapsed = self.is_pr_section_collapsed(&commit_key, "description");
+                let desc_toggle_key = commit_key.clone();
+                let desc_entity = cx.entity().downgrade();
+
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.0))
+                    .child(
+                        div()
+                            .text_size(sp(22.0))
+                            .line_height(sp(28.0))
+                            .font_weight(FontWeight::BOLD)
+                            .font_family(crate::md::render::active_mono_family())
+                            .text_color(theme.text)
+                            .whitespace_normal()
+                            .child(SharedString::from(request.title.clone())),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .text_size(sp(12.5))
+                            .child(if let Some(path) = request.author_avatar_path.as_deref() {
+                                img(std::path::PathBuf::from(path))
+                                    .size(px(18.0))
+                                    .rounded_full()
+                                    .into_any_element()
+                            } else if request.author_avatar_url.is_empty() {
+                                div()
+                                    .size(px(18.0))
+                                    .rounded(px(9.0))
+                                    .bg(rgb(0x388bfd))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(icon("icons/bot.svg", 11.0, rgb(0xffffff).into()))
+                                    .into_any_element()
+                            } else {
+                                img(request.author_avatar_url.clone())
+                                    .size(px(18.0))
+                                    .rounded_full()
+                                    .into_any_element()
+                            })
+                            .child(
+                                div()
+                                    .font_family(crate::md::render::active_mono_family())
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text)
+                                    .child(SharedString::from(if request.author.is_empty() {
+                                        "unknown".to_owned()
+                                    } else {
+                                        request.author.clone()
+                                    })),
+                            )
+                            .when(!time_str.is_empty(), |el| {
+                                el.child(
+                                    div()
+                                        .font_family(crate::md::render::active_mono_family())
+                                        .text_color(theme.text_tertiary)
+                                        .child("·"),
+                                )
+                                .child(
+                                    div()
+                                        .font_family(crate::md::render::active_mono_family())
+                                        .text_color(theme.text_secondary)
+                                        .child(time_str),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .font_family(crate::md::render::active_mono_family())
+                                    .text_color(theme.text_tertiary)
+                                    .child("·"),
+                            )
+                            .child(
+                                div()
+                                    .font_family(crate::md::render::active_mono_family())
+                                    .text_color(state_color)
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(format_pr_state(&request.state)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(10.0))
+                            .pt(px(10.0))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.0))
+                                    .text_size(sp(12.5))
+                                    .child(
+                                        div()
+                                            .w(px(104.0))
+                                            .flex_none()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(6.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(icon("icons/git-branch.svg", 13.5, theme.text_secondary))
+                                            .child(
+                                                div()
+                                                    .font_family(crate::md::render::active_mono_family())
+                                                    .child("Branch"),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .flex_1()
+                                            .flex()
+                                            .items_center()
+                                            .flex_wrap()
+                                            .gap(px(6.0))
+                                            .child(
+                                                div()
+                                                    .font_family(crate::md::render::active_mono_family())
+                                                    .text_color(theme.text)
+                                                    .child(if request.head_branch.is_empty() {
+                                                        "head".to_owned()
+                                                    } else {
+                                                        request.head_branch.clone()
+                                                    }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .font_family(crate::md::render::active_mono_family())
+                                                    .text_color(theme.text_tertiary)
+                                                    .child(">"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .font_family(crate::md::render::active_mono_family())
+                                                    .text_color(theme.text_secondary)
+                                                    .child(if request.base_branch.is_empty() {
+                                                        "main".to_owned()
+                                                    } else {
+                                                        request.base_branch.clone()
+                                                    }),
+                                            )
+                                            .when(request.additions > 0 || request.deletions > 0, |el| {
+                                                el.child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap(px(4.0))
+                                                        .ml(px(4.0))
+                                                        .font_family(crate::md::render::active_mono_family())
+                                                        .text_size(sp(11.5))
+                                                        .when(request.additions > 0, |el| {
+                                                            el.child(
+                                                                div()
+                                                                    .text_color(theme.success)
+                                                                    .child(format!("+{}", request.additions)),
+                                                            )
+                                                        })
+                                                        .when(request.deletions > 0, |el| {
+                                                            el.child(
+                                                                div()
+                                                                    .text_color(theme.danger)
+                                                                    .child(format!("-{}", request.deletions)),
+                                                            )
+                                                        }),
+                                                )
+                                            }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.0))
+                                    .text_size(sp(12.5))
+                                    .child(
+                                        div()
+                                            .w(px(104.0))
+                                            .flex_none()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(6.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(icon("icons/users.svg", 13.5, theme.text_secondary))
+                                            .child(
+                                                div()
+                                                    .font_family(crate::md::render::active_mono_family())
+                                                    .child("Reviewers"),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .flex_1()
+                                            .flex()
+                                            .items_center()
+                                            .flex_wrap()
+                                            .gap(px(6.0))
+                                            .children(if request.reviewers.is_empty() {
+                                                vec![div()
+                                                    .font_family(crate::md::render::active_mono_family())
+                                                    .text_color(theme.text_tertiary)
+                                                    .child("No reviewers")
+                                                    .into_any_element()]
+                                            } else {
+                                                request
+                                                    .reviewers
+                                                    .iter()
+                                                    .map(|reviewer| {
+                                                        div()
+                                                            .px(px(6.0))
+                                                            .py(px(2.0))
+                                                            .rounded(px(5.0))
+                                                            .bg(theme.overlay)
+                                                            .flex()
+                                                            .items_center()
+                                                            .gap(px(4.0))
+                                                            .child(icon(
+                                                                "icons/github.svg",
+                                                                11.5,
+                                                                theme.text_secondary,
+                                                            ))
+                                                            .child(
+                                                                div()
+                                                                    .font_family(crate::md::render::active_mono_family())
+                                                                    .text_size(sp(11.5))
+                                                                    .text_color(theme.text)
+                                                                    .child(reviewer.clone()),
+                                                            )
+                                                            .into_any_element()
+                                                    })
+                                                    .collect::<Vec<_>>()
+                                            }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.0))
+                                    .text_size(sp(12.5))
+                                    .child(
+                                        div()
+                                            .w(px(104.0))
+                                            .flex_none()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(6.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(icon("icons/message-square.svg", 13.5, theme.text_secondary))
+                                            .child(
+                                                div()
+                                                    .font_family(crate::md::render::active_mono_family())
+                                                    .child("Comments"),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .font_family(crate::md::render::active_mono_family())
+                                            .text_color(theme.text)
+                                            .child(match request.comments_count {
+                                                Some(0) => "No comments".to_owned(),
+                                                Some(1) => "1 comment".to_owned(),
+                                                Some(n) => format!("{n} comments"),
+                                                None => "0 comments".to_owned(),
+                                            }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.0))
+                                    .text_size(sp(12.5))
+                                    .child(
+                                        div()
+                                            .w(px(104.0))
+                                            .flex_none()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(6.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(icon("icons/circle-dashed.svg", 13.5, theme.text_secondary))
+                                            .child(
+                                                div()
+                                                    .font_family(crate::md::render::active_mono_family())
+                                                    .child("Checks"),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .font_family(crate::md::render::active_mono_family())
+                                            .text_color(theme.text)
+                                            .child(
+                                                request
+                                                    .checks_summary
+                                                    .clone()
+                                                    .unwrap_or_else(|| "All checks passed".to_owned()),
+                                            ),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.0))
+                            .pt(px(10.0))
+                            .child(
+                                div()
+                                    .id("pull-request-description-header")
+                                    .cursor_pointer()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .hover(|el| el.opacity(0.85))
+                                    .on_click(move |_, _, cx| {
+                                        let _ = desc_entity.update(cx, |this, cx| {
+                                            this.toggle_pr_section_collapsed(&desc_toggle_key, "description");
+                                            cx.notify();
+                                        });
+                                    })
+                                    .child(
+                                        div()
+                                            .font_family(crate::md::render::active_mono_family())
+                                            .text_size(sp(16.0))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(theme.text)
+                                            .child("Description"),
+                                    )
+                                    .child(icon(
+                                        if is_desc_collapsed {
+                                            "icons/chevron-right.svg"
+                                        } else {
+                                            "icons/chevron-down.svg"
+                                        },
+                                        12.5,
+                                        theme.text_secondary,
+                                    )),
+                            )
+                            .when(!is_desc_collapsed, |el| {
+                                el.child(
+                                    div()
+                                        .text_size(sp(13.5))
+                                        .line_height(sp(21.0))
+                                        .text_color(theme.text)
+                                        .child(description),
+                                )
+                            }),
+                    )
+                    .child(self.render_pull_request_checks_section(&commit_key, &theme, cx))
+                    .child(self.render_pull_request_comments_section(
+                        &commit_key,
+                        request.clone(),
+                        &theme,
+                        cx,
+                    ))
+                    .into_any_element()
+            }
             PullRequestDetailTab::Commits => {
                 let is_commits_loading = self.pull_request_commits_loading.contains(&commit_key)
                     || (!self.pull_request_commits.contains_key(&commit_key)
@@ -1769,9 +2978,9 @@ impl Insulator {
             .bg(theme.surface)
             .child(
                 div()
-                    .h(px(48.0))
+                    .h(px(46.0))
                     .flex_none()
-                    .px(px(12.0))
+                    .px(px(14.0))
                     .flex()
                     .items_center()
                     .justify_between()
@@ -1779,15 +2988,19 @@ impl Insulator {
                     .border_color(theme.border)
                     .child(
                         div()
-                            .px(px(10.0))
-                            .h(px(30.0))
-                            .rounded(px(8.0))
+                            .px(px(8.0))
+                            .h(px(26.0))
+                            .rounded(px(6.0))
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.overlay)
                             .flex()
                             .items_center()
-                            .gap(px(8.0))
-                            .bg(theme.overlay)
+                            .gap(px(6.0))
                             .text_color(theme.text)
-                            .child(icon("icons/git-branch.svg", 15.0, theme.accent))
+                            .text_size(sp(12.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(icon("icons/git-pull-request.svg", 13.0, theme.accent))
                             .child(format!("PR #{}", request.number)),
                     )
                     .child(
@@ -1808,7 +3021,7 @@ impl Insulator {
                                     .tooltip(Tooltip::text("Open on GitHub"))
                                     .child(icon(
                                         "icons/external-link.svg",
-                                        14.0,
+                                        13.5,
                                         theme.text_secondary,
                                     ))
                                     .on_click(move |_, _, cx| cx.open_url(&url))
@@ -1822,7 +3035,8 @@ impl Insulator {
                                     .items_center()
                                     .justify_center()
                                     .hover(|element| element.bg(theme.overlay))
-                                    .child(icon("icons/x.svg", 14.0, theme.text_secondary))
+                                    .tooltip(Tooltip::text("Close panel"))
+                                    .child(icon("icons/x.svg", 13.5, theme.text_secondary))
                                     .on_click(move |_, _, cx| {
                                         let _ = close.update(cx, |this, cx| {
                                             this.pull_request_detail = None;
@@ -1835,13 +3049,13 @@ impl Insulator {
             .child(
                 div()
                     .flex_none()
-                    .h(px(46.0))
-                    .px(px(16.0))
+                    .h(px(40.0))
+                    .px(px(14.0))
                     .border_b_1()
                     .border_color(theme.border)
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
+                    .gap(px(4.0))
                     .children(PullRequestDetailTab::ALL.into_iter().map(|tab| {
                         let active = tab == selected_tab;
                         let detail_entity = detail_entity.clone();
@@ -1852,14 +3066,14 @@ impl Insulator {
                                 tab.label()
                             )))
                             .tab_index(0)
-                            .h(px(32.0))
-                            .px(px(12.0))
-                            .rounded(px(7.0))
+                            .h(px(28.0))
+                            .px(px(10.0))
+                            .rounded(px(6.0))
                             .flex()
                             .items_center()
                             .justify_center()
                             .cursor_default()
-                            .text_size(sp(13.0))
+                            .text_size(sp(12.5))
                             .font_weight(if active {
                                 FontWeight::MEDIUM
                             } else {
@@ -1869,12 +3083,6 @@ impl Insulator {
                                 theme.text
                             } else {
                                 theme.text_secondary
-                            })
-                            .border_1()
-                            .border_color(if active {
-                                theme.border
-                            } else {
-                                gpui::transparent_black()
                             })
                             .when(active, |element| element.bg(theme.overlay_strong))
                             .when(!active, |element| {
@@ -1901,17 +3109,52 @@ impl Insulator {
                             .child(tab.label())
                     })),
             )
-            .child(if selected_tab == PullRequestDetailTab::Code {
-                div()
+            .child(match selected_tab {
+                PullRequestDetailTab::Code => div()
                     .id("pull-request-changes")
                     .flex_1()
                     .min_h_0()
                     .flex()
                     .flex_col()
                     .child(detail_body)
-            } else {
-                div()
-                    .id("pull-request-detail-scroll-pane")
+                    .into_any_element(),
+                PullRequestDetailTab::Summary => div()
+                    .id("pull-request-summary-view")
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .id("pull-request-detail-scroll-pane")
+                            .flex_1()
+                            .min_h_0()
+                            .relative()
+                            .child(
+                                div()
+                                    .id("pull-request-detail-scroll")
+                                    .size_full()
+                                    .overflow_y_scroll()
+                                    .track_scroll(&self.pull_request_detail_scroll_handle)
+                                    .px(px(18.0))
+                                    .py(px(18.0))
+                                    .pb(px(24.0))
+                                    .child(detail_body),
+                            )
+                            .child(scrollbar::vertical(
+                                &self.pull_request_detail_scroll_handle,
+                                &self.pull_request_detail_scrollbar,
+                            )),
+                    )
+                    .child(self.render_pull_request_sticky_comment_bar(
+                        &commit_key,
+                        request.clone(),
+                        &theme,
+                        cx,
+                    ))
+                    .into_any_element(),
+                PullRequestDetailTab::Commits => div()
+                    .id("pull-request-commits-view")
                     .flex_1()
                     .min_h_0()
                     .relative()
@@ -1921,15 +3164,16 @@ impl Insulator {
                             .size_full()
                             .overflow_y_scroll()
                             .track_scroll(&self.pull_request_detail_scroll_handle)
-                            .px(px(24.0))
-                            .py(px(24.0))
-                            .pb(px(48.0))
+                            .px(px(18.0))
+                            .py(px(18.0))
+                            .pb(px(24.0))
                             .child(detail_body),
                     )
                     .child(scrollbar::vertical(
                         &self.pull_request_detail_scroll_handle,
                         &self.pull_request_detail_scrollbar,
                     ))
+                    .into_any_element(),
             })
     }
 }
@@ -1956,17 +3200,13 @@ mod tests {
             number: 1,
             title: "Title".into(),
             author: "author".into(),
-            body: String::new(),
-            body_loaded: false,
             repository: "owner/repo".into(),
             state: "open".into(),
-            url: String::new(),
-            updated_at: String::new(),
-            cached_commits: Vec::new(),
             cached_diff: Some(
                 "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -0,0 +1 @@\n+hello\n"
                     .into(),
             ),
+            ..Default::default()
         };
 
         let (snapshot, patch) = super::load_pull_request_diff(&request).unwrap();
@@ -1986,13 +3226,13 @@ mod tests {
             repository: "owner/repo".into(),
             state: "open".into(),
             url: "https://github.com/owner/repo/pull/1".into(),
-            updated_at: String::new(),
             cached_commits: vec![super::PullRequestCommit {
                 oid: "abc".into(),
                 message: "Commit".into(),
                 authored_at: String::new(),
             }],
             cached_diff: Some("patch".into()),
+            ..Default::default()
         };
         let mut refreshed = vec![super::PullRequest {
             title: "New title".into(),

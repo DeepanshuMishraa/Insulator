@@ -1505,6 +1505,9 @@ pub struct Insulator {
     pull_requests: Vec<pull_requests::PullRequest>,
     pull_requests_loading: bool,
     pull_requests_refreshing: bool,
+    pull_requests_cursor: Option<String>,
+    pull_requests_has_more: bool,
+    pull_requests_loading_more: bool,
     pull_requests_error: Option<String>,
     pull_request_detail: Option<pull_requests::PullRequest>,
     pull_request_detail_tab: pull_requests::PullRequestDetailTab,
@@ -1523,6 +1526,7 @@ pub struct Insulator {
     pull_request_comment_posting: HashSet<(String, u64)>,
     pull_request_comment_post_errors: HashMap<(String, u64), String>,
     pull_request_collapsed_comments: HashSet<String>,
+    pull_request_collapsed_sections: HashSet<String>,
     pull_request_diffs: HashMap<(String, u64), Arc<ReviewDiffSnapshot>>,
     pull_request_diffs_loading: HashSet<(String, u64)>,
     pull_request_diffs_error: HashMap<(String, u64), String>,
@@ -2286,6 +2290,7 @@ impl Insulator {
         let pull_request_comment_input = cx.new(|cx| {
             TextInput::new(window, cx)
                 .multi_line()
+                .submit_on_enter()
                 .auto_height()
                 .placeholder(tr!("pull_requests.comment_placeholder"))
                 .accessibility_label(tr!("pull_requests.comment_label"))
@@ -2949,6 +2954,17 @@ impl Insulator {
             )
             .detach();
             cx.subscribe(
+                &pull_request_comment_input,
+                |this: &mut Self, _, event: &InputEvent, cx| {
+                    if matches!(event, InputEvent::Submit(_)) {
+                        if let Some(request) = this.pull_request_detail.clone() {
+                            this.submit_pull_request_comment(request, cx);
+                        }
+                    }
+                },
+            )
+            .detach();
+            cx.subscribe(
                 &provider_path_input,
                 |this: &mut Self, _, event: &InputEvent, cx| {
                     if matches!(event, InputEvent::Submit(_)) {
@@ -3281,6 +3297,9 @@ impl Insulator {
                 pull_requests: cached_pull_requests,
                 pull_requests_loading: false,
                 pull_requests_refreshing: false,
+                pull_requests_cursor: None,
+                pull_requests_has_more: true,
+                pull_requests_loading_more: false,
                 pull_requests_error: None,
                 pull_request_detail: None,
                 pull_request_detail_tab: pull_requests::PullRequestDetailTab::Summary,
@@ -3299,12 +3318,13 @@ impl Insulator {
                 pull_request_comment_posting: HashSet::new(),
                 pull_request_comment_post_errors: HashMap::new(),
                 pull_request_collapsed_comments: HashSet::new(),
+                pull_request_collapsed_sections: HashSet::new(),
                 pull_request_diffs: HashMap::new(),
                 pull_request_diffs_loading: HashSet::new(),
                 pull_request_diffs_error: HashMap::new(),
                 pull_request_markdown: RefCell::new(None),
                 pull_requests_search,
-                pull_requests_list_state,
+                pull_requests_list_state: pull_requests_list_state.clone(),
                 pull_requests_rows: RefCell::new(Vec::new()),
                 pull_requests_scrollbar: ScrollbarState::new(),
                 pull_request_detail_scroll_handle: ScrollHandle::new(),
@@ -3485,6 +3505,14 @@ impl Insulator {
                 resource_view_mode: resource_monitor::ResourceViewMode::default(),
                 resource_show_all: false,
                 resource_scroll_handle: ScrollHandle::new(),
+            }
+        });
+        let pull_requests_entity = entity.downgrade();
+        pull_requests_list_state.set_scroll_handler(move |event, _, cx| {
+            if event.visible_range.end.saturating_add(4) >= event.count {
+                let _ = pull_requests_entity.update(cx, |this, cx| {
+                    this.ensure_more_pull_requests(cx);
+                });
             }
         });
         navigation_rail.update(cx, |rail, _| rail.set_insulator(entity.downgrade()));

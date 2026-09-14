@@ -2759,37 +2759,62 @@ impl Insulator {
                         SessionStatus::Connecting | SessionStatus::Working
                     );
                     let tab_mark = if working {
-                        dot_matrix_loader(theme.text_secondary, 13.0)
+                        dot_matrix_loader(theme.accent, 12.0)
                     } else {
-                        provider_mark(&theme, provider, 13.0, provider_color(&theme, provider))
+                        provider_mark(&theme, provider, 12.5, provider_color(&theme, provider))
                             .into_any_element()
                     };
                     let tab_insulator = insulator.clone();
                     let close_insulator = insulator.clone();
+                    let middle_close_insulator = insulator.clone();
+                    let tab_group = format!("main-chat-tab-grp-{session_id}");
+
                     tabs.push(
                         div()
                             .id(SharedString::from(format!("main-chat-tab-{session_id}")))
-                            .h_full()
-                            .max_w(px(200.0))
-                            .pl(px(10.0))
-                            .pr(px(6.0))
+                            .group(tab_group.clone())
+                            .h(px(28.0))
+                            .min_w(px(72.0))
+                            .max_w(px(190.0))
+                            .pl(px(8.0))
+                            .pr(px(5.0))
                             .flex_none()
                             .flex()
                             .items_center()
                             .gap(px(6.0))
-                            .cursor_default()
-                            .text_size(sp(12.5))
-                            .text_color(if selected {
-                                theme.text
-                            } else {
-                                theme.text_secondary
-                            })
+                            .rounded(px(6.0))
+                            .cursor_pointer()
+                            .text_size(sp(12.0))
+                            .border_1()
                             .when(selected, |element| {
-                                element.border_b_2().border_color(theme.accent)
+                                element
+                                    .bg(theme.raised)
+                                    .border_color(theme.border_strong)
+                                    .text_color(theme.text)
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .shadow_xs()
                             })
-                            .hover(|element| element.bg(theme.overlay))
+                            .when(!selected, |element| {
+                                element
+                                    .bg(gpui::transparent_black())
+                                    .border_color(gpui::transparent_black())
+                                    .text_color(theme.text_secondary)
+                                    .font_weight(FontWeight::NORMAL)
+                                    .hover(|element| {
+                                        element
+                                            .bg(theme.overlay)
+                                            .border_color(theme.border)
+                                            .text_color(theme.text)
+                                    })
+                            })
                             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                 cx.stop_propagation();
+                            })
+                            .on_mouse_down(MouseButton::Middle, move |_, _, cx| {
+                                cx.stop_propagation();
+                                let _ = middle_close_insulator.update(cx, |insulator, cx| {
+                                    insulator.close_main_chat_tab(session_id, cx);
+                                });
                             })
                             .on_click(move |_, _, cx| {
                                 let _ = tab_insulator.update(cx, |insulator, cx| {
@@ -2809,13 +2834,18 @@ impl Insulator {
                                     .id(SharedString::from(format!(
                                         "main-chat-tab-close-{session_id}"
                                     )))
-                                    .w(px(16.0))
-                                    .h(px(16.0))
+                                    .size(px(16.0))
                                     .flex()
                                     .items_center()
                                     .justify_center()
                                     .rounded(px(3.0))
-                                    .hover(|element| element.bg(theme.overlay_strong))
+                                    .cursor_pointer()
+                                    .when(selected, |el| el.opacity(0.55))
+                                    .when(!selected, |el| el.opacity(0.0))
+                                    .group_hover(tab_group.clone(), |style| style.opacity(1.0))
+                                    .hover(|element| {
+                                        element.bg(theme.overlay_strong).text_color(theme.text)
+                                    })
                                     .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                         cx.stop_propagation();
                                     })
@@ -2825,7 +2855,7 @@ impl Insulator {
                                             insulator.close_main_chat_tab(session_id, cx);
                                         });
                                     })
-                                    .child(icon("icons/x.svg", 10.0, theme.text_tertiary)),
+                                    .child(icon("icons/x.svg", 9.0, theme.text_secondary)),
                             )
                             .into_any_element(),
                     );
@@ -2833,6 +2863,7 @@ impl Insulator {
                 MainTab::File(path) => {
                     let path = path.clone();
                     let path_for_close = path.clone();
+                    let path_for_middle = path.clone();
                     let label = Path::new(&path)
                         .file_name()
                         .and_then(|name| name.to_str())
@@ -2840,39 +2871,65 @@ impl Insulator {
                         .to_owned();
                     let selected = !self.active_main_review_tab
                         && self.active_main_file_tab.as_deref() == Some(path.as_str());
+                    let is_dirty = self.right_panel_file_is_dirty(&path);
                     let activate_insulator = insulator.clone();
                     let close_insulator = insulator.clone();
+                    let middle_close_insulator = insulator.clone();
+                    let tab_group = format!("main-file-tab-grp-{index}");
+
                     tabs.push(
                         div()
                             .id(SharedString::from(format!("main-file-tab-{index}")))
-                            .h_full()
-                            .max_w(px(200.0))
-                            .pl(px(10.0))
-                            .pr(px(6.0))
+                            .group(tab_group.clone())
+                            .h(px(28.0))
+                            .min_w(px(72.0))
+                            .max_w(px(190.0))
+                            .pl(px(8.0))
+                            .pr(px(5.0))
                             .flex_none()
                             .flex()
                             .items_center()
                             .gap(px(6.0))
-                            .cursor_default()
-                            .text_size(sp(12.5))
-                            .text_color(if selected {
-                                theme.text
-                            } else {
-                                theme.text_secondary
-                            })
+                            .rounded(px(6.0))
+                            .cursor_pointer()
+                            .text_size(sp(12.0))
+                            .border_1()
                             .when(selected, |element| {
-                                element.border_b_2().border_color(theme.accent)
+                                element
+                                    .bg(theme.raised)
+                                    .border_color(theme.border_strong)
+                                    .text_color(theme.text)
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .shadow_xs()
                             })
-                            .hover(|element| element.bg(theme.overlay))
+                            .when(!selected, |element| {
+                                element
+                                    .bg(gpui::transparent_black())
+                                    .border_color(gpui::transparent_black())
+                                    .text_color(theme.text_secondary)
+                                    .font_weight(FontWeight::NORMAL)
+                                    .hover(|element| {
+                                        element
+                                            .bg(theme.overlay)
+                                            .border_color(theme.border)
+                                            .text_color(theme.text)
+                                    })
+                            })
                             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                 cx.stop_propagation();
+                            })
+                            .on_mouse_down(MouseButton::Middle, move |_, _, cx| {
+                                cx.stop_propagation();
+                                let _ = middle_close_insulator.update(cx, |insulator, cx| {
+                                    insulator.close_main_file_tab(&path_for_middle, cx);
+                                });
                             })
                             .on_click(move |_, _, cx| {
                                 let _ = activate_insulator.update(cx, |insulator, cx| {
                                     insulator.activate_main_tab_at_index(index, cx);
                                 });
                             })
-                            .child(icon(file_icon_for_path(&path), 13.0, theme.text_tertiary))
+                            .child(crate::ui::file_icon(file_icon_for_path(&path), 12.5))
                             .child(
                                 div()
                                     .min_w_0()
@@ -2883,13 +2940,15 @@ impl Insulator {
                             .child(
                                 div()
                                     .id(SharedString::from(format!("main-file-tab-close-{index}")))
-                                    .w(px(16.0))
-                                    .h(px(16.0))
+                                    .size(px(16.0))
                                     .flex()
                                     .items_center()
                                     .justify_center()
                                     .rounded(px(3.0))
-                                    .hover(|element| element.bg(theme.overlay_strong))
+                                    .cursor_pointer()
+                                    .hover(|element| {
+                                        element.bg(theme.overlay_strong).text_color(theme.text)
+                                    })
                                     .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                         cx.stop_propagation();
                                     })
@@ -2899,7 +2958,33 @@ impl Insulator {
                                             insulator.close_main_file_tab(&path_for_close, cx);
                                         });
                                     })
-                                    .child(icon("icons/x.svg", 10.0, theme.text_tertiary)),
+                                    .when(is_dirty, |el| {
+                                        el.child(
+                                            div()
+                                                .size(px(6.0))
+                                                .rounded_full()
+                                                .bg(theme.accent)
+                                                .group_hover(tab_group.clone(), |style| {
+                                                    style.invisible()
+                                                }),
+                                        )
+                                        .child(
+                                            div()
+                                                .invisible()
+                                                .group_hover(tab_group.clone(), |style| {
+                                                    style.visible()
+                                                })
+                                                .child(icon("icons/x.svg", 9.0, theme.text_secondary)),
+                                        )
+                                    })
+                                    .when(!is_dirty, |el| {
+                                        el.when(selected, |el| el.opacity(0.55))
+                                            .when(!selected, |el| el.opacity(0.0))
+                                            .group_hover(tab_group.clone(), |style| {
+                                                style.opacity(1.0)
+                                            })
+                                            .child(icon("icons/x.svg", 9.0, theme.text_secondary))
+                                    }),
                             )
                             .into_any_element(),
                     );
@@ -2908,37 +2993,70 @@ impl Insulator {
                     let selected = self.active_main_review_tab;
                     let activate_insulator = insulator.clone();
                     let close_insulator = insulator.clone();
+                    let middle_close_insulator = insulator.clone();
+                    let tab_group = format!("main-review-tab-grp-{index}");
+
                     tabs.push(
                         div()
                             .id(SharedString::from(format!("main-review-tab-{index}")))
-                            .h_full()
-                            .max_w(px(200.0))
-                            .pl(px(10.0))
-                            .pr(px(6.0))
+                            .group(tab_group.clone())
+                            .h(px(28.0))
+                            .min_w(px(72.0))
+                            .max_w(px(190.0))
+                            .pl(px(8.0))
+                            .pr(px(5.0))
                             .flex_none()
                             .flex()
                             .items_center()
                             .gap(px(6.0))
-                            .cursor_default()
-                            .text_size(sp(12.5))
-                            .text_color(if selected {
-                                theme.text
-                            } else {
-                                theme.text_secondary
-                            })
+                            .rounded(px(6.0))
+                            .cursor_pointer()
+                            .text_size(sp(12.0))
+                            .border_1()
                             .when(selected, |element| {
-                                element.border_b_2().border_color(theme.accent)
+                                element
+                                    .bg(theme.raised)
+                                    .border_color(theme.border_strong)
+                                    .text_color(theme.text)
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .shadow_xs()
                             })
-                            .hover(|element| element.bg(theme.overlay))
+                            .when(!selected, |element| {
+                                element
+                                    .bg(gpui::transparent_black())
+                                    .border_color(gpui::transparent_black())
+                                    .text_color(theme.text_secondary)
+                                    .font_weight(FontWeight::NORMAL)
+                                    .hover(|element| {
+                                        element
+                                            .bg(theme.overlay)
+                                            .border_color(theme.border)
+                                            .text_color(theme.text)
+                                    })
+                            })
                             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                 cx.stop_propagation();
+                            })
+                            .on_mouse_down(MouseButton::Middle, move |_, _, cx| {
+                                cx.stop_propagation();
+                                let _ = middle_close_insulator.update(cx, |insulator, cx| {
+                                    insulator.close_main_review_tab(cx);
+                                });
                             })
                             .on_click(move |_, _, cx| {
                                 let _ = activate_insulator.update(cx, |insulator, cx| {
                                     insulator.activate_main_tab_at_index(index, cx);
                                 });
                             })
-                            .child(icon("icons/file-diff.svg", 13.0, theme.text_tertiary))
+                            .child(icon(
+                                "icons/file-diff.svg",
+                                12.5,
+                                if selected {
+                                    theme.text_secondary
+                                } else {
+                                    theme.text_tertiary
+                                },
+                            ))
                             .child(
                                 div()
                                     .min_w_0()
@@ -2951,13 +3069,18 @@ impl Insulator {
                                     .id(SharedString::from(format!(
                                         "main-review-tab-close-{index}"
                                     )))
-                                    .w(px(16.0))
-                                    .h(px(16.0))
+                                    .size(px(16.0))
                                     .flex()
                                     .items_center()
                                     .justify_center()
                                     .rounded(px(3.0))
-                                    .hover(|element| element.bg(theme.overlay_strong))
+                                    .cursor_pointer()
+                                    .when(selected, |el| el.opacity(0.55))
+                                    .when(!selected, |el| el.opacity(0.0))
+                                    .group_hover(tab_group.clone(), |style| style.opacity(1.0))
+                                    .hover(|element| {
+                                        element.bg(theme.overlay_strong).text_color(theme.text)
+                                    })
                                     .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                         cx.stop_propagation();
                                     })
@@ -2967,7 +3090,7 @@ impl Insulator {
                                             insulator.close_main_review_tab(cx);
                                         });
                                     })
-                                    .child(icon("icons/x.svg", 10.0, theme.text_tertiary)),
+                                    .child(icon("icons/x.svg", 9.0, theme.text_secondary)),
                             )
                             .into_any_element(),
                     );
@@ -2978,15 +3101,14 @@ impl Insulator {
         let new_tab_insulator = cx.entity().downgrade();
         let new_tab = div()
             .id("session-tabs-new")
-            .size(px(24.0))
-            .ml(px(4.0))
-            .mr(px(2.0))
+            .size(px(26.0))
+            .ml(px(3.0))
             .flex_none()
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(4.0))
-            .cursor_default()
+            .rounded(px(6.0))
+            .cursor_pointer()
             .hover(|element| element.bg(theme.overlay))
             .active(|element| element.bg(theme.overlay_strong))
             .tooltip(|window, cx| Tooltip::new(tr!("session.new_task")).build(window, cx))
@@ -3012,7 +3134,7 @@ impl Insulator {
                     cx.notify();
                 });
             })
-            .child(icon("icons/plus.svg", 13.0, theme.text_secondary));
+            .child(icon("icons/plus.svg", 12.0, theme.text_secondary));
 
         div()
             .id("session-tabs")
@@ -3028,16 +3150,19 @@ impl Insulator {
                     .min_w_0()
                     .flex_shrink(1.0)
                     .h_full()
+                    .flex()
+                    .items_center()
                     .child(
                         h_flex()
                             .id("session-tabs-scroll")
                             .h_full()
+                            .items_center()
                             .overflow_x_scroll()
                             .track_scroll(&self.main_tabs_scroll_handle)
                             .on_scroll_wheel(cx.listener(|this, _, _, cx| {
                                 contain_horizontal_scroll(&this.main_tabs_scroll_handle, cx);
                             }))
-                            .gap(px(2.0))
+                            .gap(px(3.0))
                             .children(tabs),
                     )
                     .child(scrollbar::horizontal(

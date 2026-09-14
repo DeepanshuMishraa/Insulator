@@ -1983,7 +1983,7 @@ impl Insulator {
         }
     }
 
-    fn right_panel_file_is_dirty(&self, relative_path: &str) -> bool {
+    pub(super) fn right_panel_file_is_dirty(&self, relative_path: &str) -> bool {
         self.right_panel_file_editors
             .get(relative_path)
             .is_some_and(|editor| editor.dirty)
