@@ -459,13 +459,13 @@ fn handle_command(
                 match execute_harness_command(server, session_id, &command) {
                     Ok(execution) if execution.success => {}
                     Ok(execution) => {
-                        let _ = events.send(DriverEvent::Error(format!(
+                        let _ = events.send(DriverEvent::PlanModeSwitchFailed(format!(
                             "DeepSeek Harness plan switch failed: {}",
                             execution.text.unwrap_or_else(|| "unknown error".to_owned())
                         )));
                     }
                     Err(error) => {
-                        let _ = events.send(DriverEvent::Error(format!(
+                        let _ = events.send(DriverEvent::PlanModeSwitchFailed(format!(
                             "DeepSeek Harness plan switch failed: {error}"
                         )));
                     }

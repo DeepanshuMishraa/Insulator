@@ -624,7 +624,7 @@ async fn run_sdk_connection(
                                     })
                                     .map(|mode| mode.id.clone())
                             }) else {
-                                let _ = events.send(DriverEvent::Error(format!(
+                                let _ = events.send(DriverEvent::PlanModeSwitchFailed(format!(
                                     "{} has no {requested} session mode.",
                                     provider.display_name()
                                 )));
@@ -644,10 +644,11 @@ async fn run_sdk_connection(
                                     }
                                 }
                                 Err(error) => {
-                                    let _ = events.send(DriverEvent::Error(format!(
-                                        "{} could not switch session mode: {error}",
-                                        provider.display_name()
-                                    )));
+                                    let _ =
+                                        events.send(DriverEvent::PlanModeSwitchFailed(format!(
+                                            "{} could not switch session mode: {error}",
+                                            provider.display_name()
+                                        )));
                                 }
                             }
                         }

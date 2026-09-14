@@ -3584,6 +3584,18 @@ fn resolve_git_dir(project_path: &Path) -> Option<PathBuf> {
 }
 
 fn extract_github_origin_url_from_git_dir(git_dir: &Path) -> Option<String> {
+    // A linked worktree's per-worktree overrides live in
+    // `<worktree-gitdir>/config.worktree` and take precedence over both the
+    // worktree gitdir's `config` and the common repo `config`. Check it first
+    // so an overridden `remote.origin.url` wins, matching Git's effective
+    // configuration (`git remote get-url origin`).
+    let worktree_config_path = git_dir.join("config.worktree");
+    if let Ok(config_text) = std::fs::read_to_string(worktree_config_path)
+        && let Some(url) = find_github_origin_url_in_git_config(&config_text)
+    {
+        return Some(url);
+    }
+
     let config_path = git_dir.join("config");
     if let Ok(config_text) = std::fs::read_to_string(config_path) {
         if let Some(url) = find_github_origin_url_in_git_config(&config_text) {
@@ -3637,6 +3649,15 @@ fn find_github_origin_url_in_git_config(config_text: &str) -> Option<String> {
 }
 
 fn extract_github_url_from_git_dir(git_dir: &Path) -> Option<String> {
+    // Same worktree precedence as the origin-only variant: per-worktree
+    // `config.worktree` overrides win over the shared config.
+    let worktree_config_path = git_dir.join("config.worktree");
+    if let Ok(config_text) = std::fs::read_to_string(worktree_config_path)
+        && let Some(url) = find_github_url_in_git_config(&config_text)
+    {
+        return Some(url);
+    }
+
     let config_path = git_dir.join("config");
     if let Ok(config_text) = std::fs::read_to_string(config_path) {
         if let Some(url) = find_github_url_in_git_config(&config_text) {
@@ -4238,5 +4259,50 @@ mod tests {
 
         let non_git = std::env::temp_dir();
         assert_eq!(github_url_for_project(&non_git), None);
+    }
+
+    #[test]
+    fn linked_worktree_origin_override_wins_over_common_config() {
+        let base = std::env::temp_dir().join(format!(
+            "waku-worktree-origin-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        let common_dir = base.join("common");
+        let worktree_gitdir = base.join("worktree-gitdir");
+        std::fs::create_dir_all(&common_dir).unwrap();
+        std::fs::create_dir_all(&worktree_gitdir).unwrap();
+
+        std::fs::write(
+            common_dir.join("config"),
+            "[remote \"origin\"]\n\turl = https://github.com/owner/common.git\n",
+        )
+        .unwrap();
+        std::fs::write(
+            worktree_gitdir.join("commondir"),
+            common_dir.to_str().unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            worktree_gitdir.join("config.worktree"),
+            "[remote \"origin\"]\n\turl = https://github.com/owner/override.git\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            extract_github_origin_url_from_git_dir(&worktree_gitdir),
+            Some("https://github.com/owner/override".to_string())
+        );
+
+        // Without the per-worktree override the common config applies.
+        std::fs::remove_file(worktree_gitdir.join("config.worktree")).unwrap();
+        assert_eq!(
+            extract_github_origin_url_from_git_dir(&worktree_gitdir),
+            Some("https://github.com/owner/common".to_string())
+        );
+
+        std::fs::remove_dir_all(&base).ok();
     }
 }

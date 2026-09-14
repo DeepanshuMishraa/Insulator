@@ -253,6 +253,8 @@ impl ClaudeDriver {
         let turn_active = Arc::new(Mutex::new(false));
         let pending_task_stops = Arc::new(Mutex::new(HashMap::<String, BackgroundWorkKey>::new()));
         let pending_user_inputs = Arc::new(Mutex::new(HashMap::<String, Value>::new()));
+        let permission_mode_state = Arc::new(Mutex::new(permission_mode(mode)));
+        let pending_permission_modes = Arc::new(Mutex::new(HashMap::<String, &'static str>::new()));
 
         let reader_events = events.clone();
         let reader_commands = commands.clone();
@@ -260,12 +262,16 @@ impl ClaudeDriver {
         let reader_session = session_id.clone();
         let reader_pending_task_stops = pending_task_stops.clone();
         let reader_pending_user_inputs = pending_user_inputs.clone();
+        let reader_permission_mode = permission_mode_state.clone();
+        let reader_pending_permission_modes = pending_permission_modes.clone();
         let reader_thread = thread::Builder::new()
             .name("insulator-claude-reader".into())
             .spawn(move || {
                 let mut state = ClaudeStreamState {
                     pending_task_stops: reader_pending_task_stops,
                     pending_user_inputs: reader_pending_user_inputs,
+                    permission_mode: reader_permission_mode,
+                    pending_permission_modes: reader_pending_permission_modes,
                     ..ClaudeStreamState::default()
                 };
                 for line in BufReader::new(stdout).lines().map_while(Result::ok) {
@@ -290,6 +296,8 @@ impl ClaudeDriver {
         let writer_events = events.clone();
         let writer_turn = turn_active;
         let writer_pending_task_stops = pending_task_stops;
+        let writer_permission_mode = permission_mode_state;
+        let writer_pending_permission_modes = pending_permission_modes;
         let writer_title_refresh = super::title_refresh::NativeTitleRefresh::default();
         let title_session_id = session_id;
         thread::Builder::new()
@@ -299,7 +307,6 @@ impl ClaudeDriver {
                 let mut next_request_id = 0_u64;
                 let mut current_model = launch_model;
                 let launch_permission_mode = permission_mode(mode);
-                let mut current_permission_mode = launch_permission_mode;
                 while let Ok(message) = command_rx.recv() {
                     let written = match message {
                         CommandMessage::Prompt(text) => {
@@ -460,7 +467,7 @@ impl ClaudeDriver {
                             )
                         }
                         CommandMessage::ProviderControl(commands) => {
-                            let mut next_mode = current_permission_mode;
+                            let mut next_mode = *writer_permission_mode.lock();
                             for command in commands {
                                 match command.strip_prefix("permission:").map(str::trim) {
                                     Some("plan") => next_mode = "plan",
@@ -468,19 +475,37 @@ impl ClaudeDriver {
                                     _ => continue,
                                 }
                             }
-                            if next_mode == current_permission_mode {
+                            if next_mode == *writer_permission_mode.lock() {
                                 continue;
                             }
-                            current_permission_mode = next_mode;
                             next_request_id += 1;
-                            write_line(
+                            let request_id = format!("insulator-{next_request_id}");
+                            let written = write_line(
                                 &mut stdin,
                                 &json!({
                                     "type": "control_request",
-                                    "request_id": format!("insulator-{next_request_id}"),
+                                    "request_id": request_id,
                                     "request": {"subtype": "set_permission_mode", "mode": next_mode}
                                 }),
-                            )
+                            );
+                            if written.is_ok() {
+                                // The CLI applies the mode when it reads the
+                                // request; the reader reconciles below if the
+                                // matching control response reports an error.
+                                // Only commit once the transport accepted the
+                                // write so a dead stdin cannot leave the
+                                // bookkeeping ahead of the CLI.
+                                let previous = {
+                                    let mut current = writer_permission_mode.lock();
+                                    let previous = *current;
+                                    *current = next_mode;
+                                    previous
+                                };
+                                writer_pending_permission_modes
+                                    .lock()
+                                    .insert(request_id, previous);
+                            }
+                            written
                         }
                         CommandMessage::StopBackgroundWork { key, control_id } => {
                             next_request_id += 1;
@@ -666,6 +691,12 @@ struct ClaudeStreamState {
     task_output_tails: ClaudeTaskOutputTails,
     pending_task_stops: Arc<Mutex<HashMap<String, BackgroundWorkKey>>>,
     pending_user_inputs: Arc<Mutex<HashMap<String, Value>>>,
+    /// Live permission mode behind the plan toggle, shared with the writer
+    /// so a rejected `set_permission_mode` response can roll it back.
+    permission_mode: Arc<Mutex<&'static str>>,
+    /// `set_permission_mode` request ids awaiting their control response,
+    /// mapped to the mode to restore if the CLI rejects the switch.
+    pending_permission_modes: Arc<Mutex<HashMap<String, &'static str>>>,
     /// Model of the latest main-thread assistant message, so the settled
     /// turn's `modelUsage` map can be read for that model's context window
     /// rather than a subagent's.
@@ -1368,10 +1399,29 @@ fn handle_message(
             else {
                 return;
             };
+            let subtype = value.pointer("/response/subtype").and_then(Value::as_str);
+            if let Some(previous) = state.pending_permission_modes.lock().remove(request_id) {
+                // A tracked permission-mode switch settled. Success needs no
+                // action — the writer committed when the transport accepted
+                // the request — but a rejection rolls the bookkeeping back so
+                // the driver and the next toggle agree on the live mode.
+                if subtype == Some("error") {
+                    *state.permission_mode.lock() = previous;
+                    let message = value
+                        .pointer("/response/error")
+                        .or_else(|| value.pointer("/response/response/message"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| {
+                            "Claude Code rejected the permission mode switch".to_owned()
+                        });
+                    let _ = events.send(DriverEvent::PlanModeSwitchFailed(message));
+                }
+                return;
+            }
             let Some(key) = state.pending_task_stops.lock().remove(request_id) else {
                 return;
             };
-            let subtype = value.pointer("/response/subtype").and_then(Value::as_str);
             let stop_status = value
                 .pointer("/response/response/status")
                 .or_else(|| value.pointer("/response/status"))

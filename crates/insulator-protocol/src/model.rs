@@ -1988,6 +1988,12 @@ pub enum DriverEvent {
         level: ExtensionNotificationLevel,
     },
     PlanApproved,
+    /// A live plan-mode switch the composer requested through
+    /// `provider_control` did not take effect. Carries the human-readable
+    /// reason. The app reverts its optimistic chip to the previously
+    /// requested mode on receipt; drivers emit this instead of a generic
+    /// `Error` so the revert is not mistaken for a turn failure.
+    PlanModeSwitchFailed(String),
     ExtensionStatus {
         key: String,
         text: Option<String>,

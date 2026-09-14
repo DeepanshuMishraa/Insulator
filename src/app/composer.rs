@@ -2462,6 +2462,10 @@ impl Insulator {
             .copied()
             .unwrap_or_default();
         let commands = plan_mode_commands(provider, current, target);
+        // Optimistic chip update: the driver applies the switch
+        // asynchronously. Stash the pre-toggle mode so a
+        // `PlanModeSwitchFailed` event can restore it.
+        self.plan_mode_fallback.insert(session_id, current);
         self.plan_modes.insert(session_id, target);
         if let Some(runtime) = self.runtimes.get(&session_id) {
             runtime.driver.provider_control(commands);
@@ -3347,8 +3351,17 @@ impl Insulator {
         let Some(session) = self.selected_session() else {
             return false;
         };
-        // Typing the toggle command only flips the chip for providers behind
-        // the toggle; everywhere else the text stays a normal submission.
+        // Only command-backed toggle providers consume the typed command.
+        // Everywhere else the text stays a normal submission so a
+        // user-defined `/plan` (or the CLI's own interpretation of it)
+        // still reaches the provider: native-mode providers switch through
+        // the chip, never through intercepted text.
+        if !matches!(
+            session.provider,
+            ProviderKind::Pi | ProviderKind::OhMyPi | ProviderKind::DeepSeek
+        ) {
+            return false;
+        }
         if !plan_mode_supported(session.provider) {
             return false;
         }

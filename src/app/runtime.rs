@@ -3738,6 +3738,13 @@ impl Insulator {
                         .get(&session_id)
                         .copied()
                         .unwrap_or_default();
+                    if target != super::composer::PlanMode::Off {
+                        // A fresh process always starts with planning off, so
+                        // that is the fallback if applying the remembered mode
+                        // fails below.
+                        self.plan_mode_fallback
+                            .insert(session_id, super::composer::PlanMode::Off);
+                    }
                     driver.provider_control(super::composer::plan_mode_commands(
                         provider,
                         super::composer::PlanMode::Off,

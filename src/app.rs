@@ -1398,6 +1398,10 @@ pub struct Insulator {
     /// other providers map it onto their native plan state (OpenCode agent,
     /// Cursor session mode, DeepSeek `/plan`).
     plan_modes: HashMap<Uuid, composer::PlanMode>,
+    /// Pre-toggle mode per session, stashed alongside every optimistic chip
+    /// update. A `PlanModeSwitchFailed` event restores it so a rejected
+    /// switch cannot leave the chip ahead of the provider.
+    plan_mode_fallback: HashMap<Uuid, composer::PlanMode>,
     /// Slash commands discovered per (provider, project root, CLI override).
     /// Filesystem and CLI probes live off the UI thread; frames read this cache.
     slash_commands: QueryCache<(ProviderKind, PathBuf, Option<String>), Vec<SlashCommand>>,
@@ -3255,6 +3259,7 @@ impl Insulator {
                 goal_observed_at: HashMap::new(),
                 commit_operation: None,
                 plan_modes: HashMap::new(),
+                plan_mode_fallback: HashMap::new(),
                 // Providers × workspaces; both scans are small, the cache
                 // only exists to keep them off the frame path.
                 slash_commands: QueryCache::new(2 * MAX_CACHED_WORKSPACES),

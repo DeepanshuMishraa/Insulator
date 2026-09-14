@@ -469,6 +469,18 @@ impl Insulator {
                     self.show_success_toast("Plan approved. Now working on it.");
                 }
             }
+            DriverEvent::PlanModeSwitchFailed(message) => {
+                // The chip was updated optimistically when the switch was
+                // requested; the provider rejected it, so restore the
+                // pre-toggle mode instead of leaving the chip ahead.
+                if let Some(previous) = self.plan_mode_fallback.remove(&session_id) {
+                    self.plan_modes.insert(session_id, previous);
+                    cx.notify();
+                }
+                if self.state.selected_session == Some(session_id) {
+                    self.show_toast(compact_driver_error(&message));
+                }
+            }
             DriverEvent::ExtensionNotification { message, level } => {
                 if self.state.selected_session == Some(session_id) {
                     match level {

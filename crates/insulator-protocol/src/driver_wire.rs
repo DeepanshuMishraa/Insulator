@@ -88,10 +88,12 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
             json!({"message": message, "level": level}),
         ),
         DriverEvent::PlanApproved => ("planApproved", Value::Null),
-        DriverEvent::ExtensionStatus { key, text } => (
-            "extensionStatus",
-            json!({"key": key, "text": text}),
-        ),
+        DriverEvent::PlanModeSwitchFailed(message) => {
+            ("planModeSwitchFailed", Value::String(message))
+        }
+        DriverEvent::ExtensionStatus { key, text } => {
+            ("extensionStatus", json!({"key": key, "text": text}))
+        }
         DriverEvent::SetEditorText(text) => ("setEditorText", Value::String(text)),
         DriverEvent::ComputerUseUpdated(state) => (
             "computerUseUpdated",
@@ -186,6 +188,9 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
             }
         }
         "planApproved" => DriverEvent::PlanApproved,
+        "planModeSwitchFailed" => {
+            DriverEvent::PlanModeSwitchFailed(serde_json::from_value(payload)?)
+        }
         "extensionStatus" => {
             let status: ExtensionStatusWire = serde_json::from_value(payload)?;
             DriverEvent::ExtensionStatus {

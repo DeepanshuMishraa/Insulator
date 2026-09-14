@@ -929,7 +929,7 @@ fn handle_command(worker: &Worker, message: DriverCommand, state: &mut StreamSta
                     && let Err(error) =
                         opencode2_api::switch_agent(&endpoint, &worker.session_id, agent)
                 {
-                    let _ = events.send(DriverEvent::Error(format!(
+                    let _ = events.send(DriverEvent::PlanModeSwitchFailed(format!(
                         "OpenCode 2 agent switch failed: {error}"
                     )));
                 }

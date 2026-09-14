@@ -574,10 +574,12 @@ impl PiDriver {
                                     &mut next_request_id,
                                     json!({"type": "prompt", "message": command}),
                                 ) {
-                                    let _ = writer_events.send(DriverEvent::Error(format!(
-                                        "{} control command failed: {error}",
-                                        flavor.display_name()
-                                    )));
+                                    let _ = writer_events.send(DriverEvent::PlanModeSwitchFailed(
+                                        format!(
+                                            "{} control command failed: {error}",
+                                            flavor.display_name()
+                                        ),
+                                    ));
                                     break;
                                 }
                             }
