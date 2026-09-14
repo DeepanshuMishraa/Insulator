@@ -1532,6 +1532,10 @@ pub struct Insulator {
     pull_request_diffs: HashMap<(String, u64), Arc<ReviewDiffSnapshot>>,
     pull_request_diffs_loading: HashSet<(String, u64)>,
     pull_request_diffs_error: HashMap<(String, u64), String>,
+    /// PRs with a Fix-findings thread being prepared (fetching the PR branch).
+    /// Drives the header Fix button's loading state, mirroring Synara's
+    /// "Preparing findings…" guard.
+    pull_request_fix_preparing: HashSet<(String, u64)>,
     pull_request_markdown: RefCell<Option<((String, u64), MarkdownView)>>,
     pull_requests_search: Entity<TextInput>,
     /// Virtualized filtered PR rows. GitHub accounts can return hundreds of
@@ -3326,6 +3330,7 @@ impl Insulator {
                 pull_request_diffs: HashMap::new(),
                 pull_request_diffs_loading: HashSet::new(),
                 pull_request_diffs_error: HashMap::new(),
+                pull_request_fix_preparing: HashSet::new(),
                 pull_request_markdown: RefCell::new(None),
                 pull_requests_search,
                 pull_requests_list_state: pull_requests_list_state.clone(),
