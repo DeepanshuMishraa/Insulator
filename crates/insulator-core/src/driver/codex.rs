@@ -43,6 +43,11 @@ enum CommandMessage {
     Prompt(String),
     Steer(String),
     Cancel,
+    /// Live plan-mode switch: `sandbox:read-only` pins the next turns to the
+    /// read-only sandbox; `sandbox:restore` returns to the launch posture.
+    /// The sandbox rides on every `turn/start`, so the switch applies without
+    /// restarting the thread.
+    ProviderControl(Vec<String>),
     Respond {
         request_id: String,
         option_id: String,
@@ -350,6 +355,9 @@ impl CodexDriver {
                 let mut model = model;
                 let mut reasoning_effort = reasoning_effort;
                 let mut service_tier = service_tier;
+                // Plan-mode override: `Some` pins the sandbox the toggle
+                // requested, `None` follows the launch posture again.
+                let mut plan_sandbox: Option<&'static str> = None;
                 let open_thread = if let Some(thread_id) = provider_session_id {
                     let mut params = json!({
                         "threadId": thread_id,
@@ -407,7 +415,7 @@ impl CodexDriver {
                                 text,
                                 approval_policy,
                                 approvals_reviewer,
-                                sandbox,
+                                plan_sandbox.unwrap_or(sandbox),
                             );
                             if let Some(model) = model.as_deref() {
                                 params["model"] = json!(model);
@@ -466,6 +474,16 @@ impl CodexDriver {
                                         error = error
                                     ),
                                 });
+                            }
+                            continue;
+                        }
+                        CommandMessage::ProviderControl(commands) => {
+                            for command in commands {
+                                match command.strip_prefix("sandbox:").map(str::trim) {
+                                    Some("read-only") => plan_sandbox = Some("read-only"),
+                                    Some("restore") => plan_sandbox = None,
+                                    _ => continue,
+                                }
                             }
                             continue;
                         }
@@ -916,6 +934,14 @@ impl DriverControl for CodexDriver {
 
     fn steer(&self, prompt: String) {
         let _ = self.commands.send(CommandMessage::Steer(prompt));
+    }
+
+    fn provider_control(&self, commands: Vec<String>) {
+        if !commands.is_empty() {
+            let _ = self
+                .commands
+                .send(CommandMessage::ProviderControl(commands));
+        }
     }
 
     fn cancel(&self) {

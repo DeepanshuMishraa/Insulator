@@ -2982,7 +2982,11 @@ impl Insulator {
                                                 .group_hover(tab_group.clone(), |style| {
                                                     style.visible()
                                                 })
-                                                .child(icon("icons/x.svg", 9.0, theme.text_secondary)),
+                                                .child(icon(
+                                                    "icons/x.svg",
+                                                    9.0,
+                                                    theme.text_secondary,
+                                                )),
                                         )
                                     })
                                     .when(!is_dirty, |el| {
@@ -3619,9 +3623,12 @@ fn find_github_origin_url_in_git_config(config_text: &str) -> Option<String> {
             if remote_name == "origin"
                 && let Some((key, val)) = line.split_once('=')
                 && key.trim() == "url"
-                && let Some(gh_url) = parse_github_remote_url(val.trim())
             {
-                return Some(gh_url);
+                // The first `origin` URL is the effective fetch URL (`git
+                // remote get-url origin`). Do not scan past a non-GitHub
+                // first URL looking for a later GitHub one: the Fix flow's
+                // `git fetch origin ...` uses the first URL.
+                return parse_github_remote_url(val.trim());
             }
         }
     }
@@ -3689,9 +3696,21 @@ fn find_github_url_in_git_config(config_text: &str) -> Option<String> {
     origin_url.or(upstream_url).or(other_url)
 }
 
+/// Release builds launched from Finder/LaunchServices inherit a minimal
+/// `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), so a bare `git` lookup fails
+/// when Git is installed outside those dirs (e.g. Homebrew
+/// `/opt/homebrew/bin`). Extend the search path like the PR Fix fetch does.
+fn git_command() -> std::process::Command {
+    let mut command = std::process::Command::new("git");
+    if let Some(path) = crate::command_env::executable_search_path() {
+        command.env("PATH", path);
+    }
+    command
+}
+
 fn git_remote_github_url_via_cli(path: &Path) -> Option<String> {
     // Check origin first
-    if let Ok(output) = std::process::Command::new("git")
+    if let Ok(output) = git_command()
         .args(["remote", "get-url", "origin"])
         .current_dir(path)
         .output()
@@ -3705,7 +3724,7 @@ fn git_remote_github_url_via_cli(path: &Path) -> Option<String> {
     }
 
     // Check upstream or other remotes
-    if let Ok(output) = std::process::Command::new("git")
+    if let Ok(output) = git_command()
         .args(["config", "--get-regexp", r"^remote\..*\.url$"])
         .current_dir(path)
         .output()
@@ -3738,7 +3757,7 @@ fn git_origin_github_url_via_cli(path: &Path) -> Option<String> {
     // Origin only: callers that fetch from `origin` must not match on
     // `upstream` or other remotes. A non-GitHub `origin` parses to `None`
     // and correctly rejects the project.
-    if let Ok(output) = std::process::Command::new("git")
+    if let Ok(output) = git_command()
         .args(["remote", "get-url", "origin"])
         .current_dir(path)
         .output()

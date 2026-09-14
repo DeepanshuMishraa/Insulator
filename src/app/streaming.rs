@@ -463,8 +463,8 @@ impl Insulator {
                 }
             }
             DriverEvent::PlanApproved => {
-                self.pi_plan_modes
-                    .insert(session_id, super::composer::PiPlanMode::Off);
+                self.plan_modes
+                    .insert(session_id, super::composer::PlanMode::Off);
                 if self.state.selected_session == Some(session_id) {
                     self.show_success_toast("Plan approved. Now working on it.");
                 }
@@ -481,15 +481,15 @@ impl Insulator {
             }
             DriverEvent::ExtensionStatus { key, text } => {
                 let current = self
-                    .pi_plan_modes
+                    .plan_modes
                     .get(&session_id)
                     .copied()
                     .unwrap_or_default();
                 let mode = match (key.as_str(), text.is_some()) {
-                    ("pi-plan", true) => Some(super::composer::PiPlanMode::Plan),
-                    ("plannotator", true) => Some(super::composer::PiPlanMode::Plannotator),
-                    ("pi-plan", false) if current == super::composer::PiPlanMode::Plan => {
-                        Some(super::composer::PiPlanMode::Off)
+                    ("pi-plan", true) => Some(super::composer::PlanMode::Plan),
+                    ("plannotator", true) => Some(super::composer::PlanMode::Plannotator),
+                    ("pi-plan", false) if current == super::composer::PlanMode::Plan => {
+                        Some(super::composer::PlanMode::Off)
                     }
                     // Plannotator clears its status while executing when no
                     // checklist is present. That is still plan mode; only
@@ -497,7 +497,7 @@ impl Insulator {
                     _ => None,
                 };
                 if let Some(mode) = mode {
-                    self.pi_plan_modes.insert(session_id, mode);
+                    self.plan_modes.insert(session_id, mode);
                 }
             }
             DriverEvent::SetEditorText(text) => {

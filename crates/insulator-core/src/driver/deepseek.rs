@@ -31,6 +31,10 @@ enum CommandMessage {
     Prompt(String),
     Steer(String),
     Cancel,
+    /// Live plan-mode switch: `/plan` / `/plan off`, executed as harness
+    /// commands. The composer only offers the toggle when the live command
+    /// registry reports `plan`.
+    ProviderControl(Vec<String>),
     Respond {
         request_id: String,
         option_id: String,
@@ -276,6 +280,14 @@ impl DriverControl for DeepSeekDriver {
         let _ = self.commands.send(CommandMessage::Steer(prompt));
     }
 
+    fn provider_control(&self, commands: Vec<String>) {
+        if !commands.is_empty() {
+            let _ = self
+                .commands
+                .send(CommandMessage::ProviderControl(commands));
+        }
+    }
+
     fn cancel(&self) {
         let _ = self.commands.send(CommandMessage::Cancel);
     }
@@ -440,6 +452,24 @@ fn handle_command(
                 let _ = events.send(DriverEvent::Error(format!(
                     "DeepSeek Harness could not cancel the turn: {error}"
                 )));
+            }
+        }
+        CommandMessage::ProviderControl(commands) => {
+            for command in commands {
+                match execute_harness_command(server, session_id, &command) {
+                    Ok(execution) if execution.success => {}
+                    Ok(execution) => {
+                        let _ = events.send(DriverEvent::Error(format!(
+                            "DeepSeek Harness plan switch failed: {}",
+                            execution.text.unwrap_or_else(|| "unknown error".to_owned())
+                        )));
+                    }
+                    Err(error) => {
+                        let _ = events.send(DriverEvent::Error(format!(
+                            "DeepSeek Harness plan switch failed: {error}"
+                        )));
+                    }
+                }
             }
         }
         CommandMessage::Respond {

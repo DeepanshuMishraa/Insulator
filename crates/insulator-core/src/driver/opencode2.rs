@@ -136,6 +136,9 @@ enum DriverCommand {
     Prompt(String),
     Steer(String),
     Cancel,
+    /// Live plan-mode switch: `agent:plan` / `agent:build`, applied through
+    /// the session agent route without restarting the driver.
+    ProviderControl(Vec<String>),
     Respond {
         request_id: String,
         option_id: String,
@@ -602,6 +605,12 @@ impl DriverControl for OpenCode2Driver {
         let _ = self.commands.send(DriverCommand::Steer(prompt));
     }
 
+    fn provider_control(&self, commands: Vec<String>) {
+        if !commands.is_empty() {
+            let _ = self.commands.send(DriverCommand::ProviderControl(commands));
+        }
+    }
+
     fn cancel(&self) {
         let _ = self.commands.send(DriverCommand::Cancel);
     }
@@ -911,6 +920,19 @@ fn handle_command(worker: &Worker, message: DriverCommand, state: &mut StreamSta
                     provider = "OpenCode 2",
                     error = error
                 )));
+            }
+        }
+        DriverCommand::ProviderControl(commands) => {
+            for command in commands {
+                if let Some(agent) = command.strip_prefix("agent:").map(str::trim)
+                    && !agent.is_empty()
+                    && let Err(error) =
+                        opencode2_api::switch_agent(&endpoint, &worker.session_id, agent)
+                {
+                    let _ = events.send(DriverEvent::Error(format!(
+                        "OpenCode 2 agent switch failed: {error}"
+                    )));
+                }
             }
         }
         DriverCommand::Respond {

@@ -47,6 +47,11 @@ enum CommandMessage {
     Prompt(String),
     Steer(String),
     Cancel,
+    /// Live plan-mode switch: `permission:plan` enters Claude's native `plan`
+    /// permission mode via `set_permission_mode`; `permission:restore`
+    /// returns to the launch posture. Verified against the control protocol
+    /// the SDK's `setPermissionMode()` drives.
+    ProviderControl(Vec<String>),
     Respond {
         request_id: String,
         option_id: String,
@@ -293,6 +298,8 @@ impl ClaudeDriver {
                 let mut stdin = stdin;
                 let mut next_request_id = 0_u64;
                 let mut current_model = launch_model;
+                let launch_permission_mode = permission_mode(mode);
+                let mut current_permission_mode = launch_permission_mode;
                 while let Ok(message) = command_rx.recv() {
                     let written = match message {
                         CommandMessage::Prompt(text) => {
@@ -452,6 +459,29 @@ impl ClaudeDriver {
                                 }),
                             )
                         }
+                        CommandMessage::ProviderControl(commands) => {
+                            let mut next_mode = current_permission_mode;
+                            for command in commands {
+                                match command.strip_prefix("permission:").map(str::trim) {
+                                    Some("plan") => next_mode = "plan",
+                                    Some("restore") => next_mode = launch_permission_mode,
+                                    _ => continue,
+                                }
+                            }
+                            if next_mode == current_permission_mode {
+                                continue;
+                            }
+                            current_permission_mode = next_mode;
+                            next_request_id += 1;
+                            write_line(
+                                &mut stdin,
+                                &json!({
+                                    "type": "control_request",
+                                    "request_id": format!("insulator-{next_request_id}"),
+                                    "request": {"subtype": "set_permission_mode", "mode": next_mode}
+                                }),
+                            )
+                        }
                         CommandMessage::StopBackgroundWork { key, control_id } => {
                             next_request_id += 1;
                             let request_id = format!("insulator-{next_request_id}");
@@ -539,6 +569,14 @@ impl DriverControl for ClaudeDriver {
 
     fn steer(&self, prompt: String) {
         let _ = self.commands.send(CommandMessage::Steer(prompt));
+    }
+
+    fn provider_control(&self, commands: Vec<String>) {
+        if !commands.is_empty() {
+            let _ = self
+                .commands
+                .send(CommandMessage::ProviderControl(commands));
+        }
     }
 
     fn cancel(&self) {

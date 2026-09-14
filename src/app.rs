@@ -1394,8 +1394,10 @@ pub struct Insulator {
     /// started them. Keeping the operation on the app also lets every
     /// Environment surface reflect and gate the same in-flight action.
     commit_operation: Option<commit_dialog::CommitOperationState>,
-    /// Requested Pi planning mode per session. Pi extensions own enforcement.
-    pi_plan_modes: HashMap<Uuid, composer::PiPlanMode>,
+    /// Requested planning mode per session. Pi extensions own enforcement;
+    /// other providers map it onto their native plan state (OpenCode agent,
+    /// Cursor session mode, DeepSeek `/plan`).
+    plan_modes: HashMap<Uuid, composer::PlanMode>,
     /// Slash commands discovered per (provider, project root, CLI override).
     /// Filesystem and CLI probes live off the UI thread; frames read this cache.
     slash_commands: QueryCache<(ProviderKind, PathBuf, Option<String>), Vec<SlashCommand>>,
@@ -3252,7 +3254,7 @@ impl Insulator {
                 goal_runtime_starts: HashSet::new(),
                 goal_observed_at: HashMap::new(),
                 commit_operation: None,
-                pi_plan_modes: HashMap::new(),
+                plan_modes: HashMap::new(),
                 // Providers × workspaces; both scans are small, the cache
                 // only exists to keep them off the frame path.
                 slash_commands: QueryCache::new(2 * MAX_CACHED_WORKSPACES),
