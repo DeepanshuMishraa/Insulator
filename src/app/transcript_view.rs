@@ -3003,6 +3003,55 @@ fn activity_scroll_fade(
     })
 }
 
+/// Whether a provider image URL is safe to hand to `img` for a network fetch.
+/// Allows only `http(s)` destinations and rejects loopback, unspecified, and
+/// private-network literal IPs plus `localhost` names. Non-literal hostnames
+/// cannot be resolved here (no blocking work on the render path), so DNS that
+/// points at private space is not covered — the check stops direct literal
+/// probes such as `http://127.0.0.1/…`, `http://10.…`, or metadata endpoints.
+fn is_safe_remote_image_url(image_url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(image_url) else {
+        return false;
+    };
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return false;
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let normalized = host.trim_end_matches('.').to_ascii_lowercase();
+    if normalized == "localhost" || normalized.ends_with(".localhost") {
+        return false;
+    }
+    if let Ok(ip) = host.trim_matches(['[', ']']).parse::<std::net::IpAddr>() {
+        // Stable deny-list (no `is_global`, which this toolchain gates
+        // behind an unstable feature): anything not clearly public
+        // unicast is rejected.
+        return match ip {
+            std::net::IpAddr::V4(v4) => {
+                !(v4.is_loopback()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_broadcast()
+                    || v4.is_multicast()
+                    || v4.is_unspecified()
+                    || v4.is_documentation())
+            }
+            std::net::IpAddr::V6(v6) => {
+                !(v6.is_loopback()
+                    || v6.is_multicast()
+                    || v6.is_unspecified()
+                    || v6.is_unique_local()
+                    || v6.is_unicast_link_local())
+            }
+        };
+    }
+    true
+}
+
 fn render_activity_image(
     image_url: &str,
     image: Option<Arc<gpui::Image>>,
@@ -3010,6 +3059,11 @@ fn render_activity_image(
     image_index: usize,
     theme: &Theme,
 ) -> AnyElement {
+    // Provider image URLs reach `img`, which fetches them over the network,
+    // so validate before handing them out: only approved schemes, and no
+    // loopback or private-network destinations. Blob, attachment, and `data:`
+    // URLs are excluded here and never reach the remote check (inline data
+    // goes through the bounded legacy cache instead).
     // Daemon blobs arrive only when a visible row requests them and GPUI keeps
     // their decoded form in memory. Legacy inline data URLs are decoded once
     // into the same bounded `remote_images` cache (see
@@ -3031,6 +3085,7 @@ fn render_activity_image(
     if !insulator_protocol::blob::is_reference(image_url)
         && !image_url.starts_with(insulator_protocol::attachments::ATTACHMENT_SCHEME)
         && !image_url.starts_with("data:")
+        && is_safe_remote_image_url(image_url)
     {
         return img(image_url.to_owned())
             .id(id)
@@ -3333,5 +3388,45 @@ mod live_reasoning_window_tests {
     fn window_below_the_threshold_keeps_the_cached_start() {
         let content = "a".repeat(LIVE_REASONING_WINDOW_MAX);
         assert_eq!(live_reasoning_window_anchor(7, &content), 7);
+    }
+}
+
+#[cfg(test)]
+mod remote_image_url_tests {
+    use super::*;
+
+    #[test]
+    fn allows_public_http_and_https_urls() {
+        assert!(is_safe_remote_image_url("https://example.com/image.png"));
+        assert!(is_safe_remote_image_url(
+            "https://cdn.example.com/a/b.jpg?x=1"
+        ));
+        assert!(is_safe_remote_image_url("http://example.com/image.png"));
+    }
+
+    #[test]
+    fn rejects_non_http_schemes() {
+        assert!(!is_safe_remote_image_url("file:///etc/passwd"));
+        assert!(!is_safe_remote_image_url("ftp://example.com/image.png"));
+        assert!(!is_safe_remote_image_url("javascript:alert(1)"));
+        assert!(!is_safe_remote_image_url("data:image/png;base64,aGVsbG8="));
+        assert!(!is_safe_remote_image_url("not a url"));
+    }
+
+    #[test]
+    fn rejects_loopback_and_private_destinations() {
+        assert!(!is_safe_remote_image_url("http://localhost/image.png"));
+        assert!(!is_safe_remote_image_url("http://localhost:8080/image.png"));
+        assert!(!is_safe_remote_image_url("http://127.0.0.1/image.png"));
+        assert!(!is_safe_remote_image_url("http://10.0.0.5/image.png"));
+        assert!(!is_safe_remote_image_url("http://192.168.1.10/image.png"));
+        assert!(!is_safe_remote_image_url("http://172.16.0.1/image.png"));
+        assert!(!is_safe_remote_image_url(
+            "http://169.254.169.254/image.png"
+        ));
+        assert!(!is_safe_remote_image_url("http://[::1]/image.png"));
+        assert!(!is_safe_remote_image_url(
+            "https://user:pass@example.com/image.png"
+        ));
     }
 }

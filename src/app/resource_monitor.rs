@@ -59,6 +59,11 @@ struct Sample {
     ppid: u32,
     /// Cumulative CPU seconds from `ps TIME` (centisecond resolution on macOS).
     cpu_secs: Option<f64>,
+    /// Seconds since process start from `ps ELAPSED`. This is the PID-reuse
+    /// token: a PID observed with a wildly different elapsed time across the
+    /// ~1s sampling interval is a different process, even when the cumulative
+    /// CPU delta looks plausible.
+    elapsed_secs: Option<f32>,
     /// `ps %CPU` decaying average, used only when no delta baseline exists.
     cpu_fallback: f32,
     rss_kb: u64,
@@ -72,7 +77,7 @@ struct Sample {
 fn sample_processes() -> HashMap<u32, Sample> {
     let mut out = HashMap::new();
     let output = Command::new("ps")
-        .args(["-eo", "pid,ppid,time,%cpu,rss,comm"])
+        .args(["-eo", "pid,ppid,time,%cpu,rss,etime,comm"])
         .output();
     let Ok(output) = output else {
         return out;
@@ -86,15 +91,16 @@ fn sample_processes() -> HashMap<u32, Sample> {
         if trimmed.is_empty() || trimmed.starts_with("PID") {
             continue;
         }
-        // pid, ppid, time, %cpu and rss contain no whitespace; everything
-        // after them is the command path.
+        // pid, ppid, time, %cpu, rss and etime contain no whitespace;
+        // everything after them is the command path.
         let mut parts = trimmed.split_whitespace();
-        let (Some(pid), Some(ppid), Some(time), Some(cpu), Some(rss_kb)) = (
+        let (Some(pid), Some(ppid), Some(time), Some(cpu), Some(rss_kb), Some(etime)) = (
             parts.next().and_then(|p| p.parse::<u32>().ok()),
             parts.next().and_then(|p| p.parse::<u32>().ok()),
             parts.next(),
             parts.next().and_then(|p| p.parse::<f32>().ok()),
             parts.next().and_then(|p| p.parse::<u64>().ok()),
+            parts.next(),
         ) else {
             continue;
         };
@@ -108,6 +114,7 @@ fn sample_processes() -> HashMap<u32, Sample> {
                 pid,
                 ppid,
                 cpu_secs: parse_ps_time(time),
+                elapsed_secs: parse_ps_etime(etime),
                 cpu_fallback: cpu,
                 rss_kb,
                 comm,
@@ -130,6 +137,38 @@ fn parse_ps_time(field: &str) -> Option<f64> {
         factor *= 60.0;
     }
     Some(total)
+}
+
+/// Parse BSD `ps ELAPSED` (`MM:SS`, `HH:MM:SS`, or `D-HH:MM:SS`) into seconds.
+/// Second resolution is coarse, so callers must allow a few seconds of slack
+/// for truncation and timer jitter; a reused PID shows up as tens of seconds
+/// (usually the whole previous lifetime) off, well outside that slack.
+fn parse_ps_etime(field: &str) -> Option<f32> {
+    let (days, rest) = match field.split_once('-') {
+        Some((days, rest)) => (days.parse::<f32>().ok()? * 86400.0, rest),
+        None => (0.0, field),
+    };
+    let mut parts = rest.split(':').collect::<Vec<_>>();
+    let secs = parts.pop()?.parse::<f32>().ok()?;
+    let mut total = secs;
+    let mut factor = 60.0;
+    while let Some(part) = parts.pop() {
+        total += part.parse::<f32>().ok()? * factor;
+        factor *= 60.0;
+    }
+    Some(days + total)
+}
+
+/// Returns true when the two samples cannot be the same process: the elapsed
+/// (since-start) clock must advance by roughly the wall interval. Identity
+/// comes from PID plus this start token — never from ppid or comm, which a
+/// replacement process can share with its predecessor.
+fn pid_reused(prev_elapsed: f32, elapsed: f32, wall_secs: f32) -> bool {
+    // ELAPSED truncates to whole seconds and the wall timer jitters, so allow
+    // a few seconds of slack either way.
+    const SLACK_SECS: f32 = 3.0;
+    let drift = elapsed - prev_elapsed - wall_secs;
+    drift.abs() > SLACK_SECS
 }
 
 /// Upper bound for a believable per-process CPU%: one process cannot burn more
@@ -159,11 +198,19 @@ fn snapshot_from_samples(
     let max_plausible = max_plausible_cpu_percent();
 
     for sample in second.values() {
-        let cpu = match (
-            first.get(&sample.pid).and_then(|prev| prev.cpu_secs),
-            sample.cpu_secs,
-        ) {
-            (Some(before), Some(after)) => {
+        let prev = first.get(&sample.pid);
+        // PID plus the elapsed-since-start token identifies a process. When
+        // the token disagrees, the PID was reused across the interval: the
+        // cumulative-CPU delta mixes two lifetimes, so discard it and use the
+        // `ps %CPU` average instead. The invalid delta must not reach the
+        // rendered per-process value or the summed total.
+        let reused = match (prev.and_then(|p| p.elapsed_secs), sample.elapsed_secs) {
+            (Some(before), Some(after)) => pid_reused(before, after, wall_secs),
+            _ => false,
+        };
+        let cpu = match (reused, prev.and_then(|prev| prev.cpu_secs), sample.cpu_secs) {
+            (true, _, _) => sample.cpu_fallback,
+            (false, Some(before), Some(after)) => {
                 let delta = after - before;
                 if delta < 0.0 {
                     // PID reuse across the interval; fall back to the average.
@@ -943,5 +990,51 @@ mod tests {
         assert_eq!(parse_ps_time("-"), None);
         assert_eq!(parse_ps_time("abc"), None);
         assert_eq!(parse_ps_time("12:ab"), None);
+    }
+
+    #[test]
+    fn ps_etime_parses_plain_and_day_qualified_durations() {
+        assert_eq!(parse_ps_etime("55:11"), Some(55.0 * 60.0 + 11.0));
+        assert_eq!(parse_ps_etime("01:02:03"), Some(3723.0));
+        assert_eq!(parse_ps_etime("1-02:03:04"), Some(86400.0 + 7384.0));
+        assert_eq!(parse_ps_etime(""), None);
+        assert_eq!(parse_ps_etime("abc"), None);
+    }
+
+    #[test]
+    fn pid_reuse_token_disagrees_despite_plausible_cpu_delta() {
+        // Same PID, but the elapsed-since-start token restarted: the new
+        // process happens to have a slightly larger cumulative CPU time, so
+        // the delta alone looks like an ordinary ~50% tick. Identity must
+        // come from PID + start token, and the invalid delta must fall back
+        // rather than render.
+        let first = HashMap::from([(
+            123u32,
+            Sample {
+                pid: 123,
+                ppid: 1,
+                cpu_secs: Some(100.0),
+                elapsed_secs: Some(500.0),
+                cpu_fallback: 1.0,
+                rss_kb: 100,
+                comm: "old".to_string(),
+            },
+        )]);
+        let second = HashMap::from([(
+            123u32,
+            Sample {
+                pid: 123,
+                ppid: 1,
+                cpu_secs: Some(100.5),
+                elapsed_secs: Some(0.5),
+                cpu_fallback: 2.5,
+                rss_kb: 100,
+                comm: "old".to_string(),
+            },
+        )]);
+        let snapshot = snapshot_from_samples(123, None, &first, second, 1.0);
+        assert_eq!(snapshot.total_cpu_percent, 2.5);
+        assert_eq!(snapshot.tree_entries.len(), 1);
+        assert_eq!(snapshot.tree_entries[0].cpu_percent, 2.5);
     }
 }

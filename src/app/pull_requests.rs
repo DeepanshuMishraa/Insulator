@@ -2658,10 +2658,8 @@ impl Insulator {
                             .items_center()
                             .justify_center()
                             .flex_none()
-                            .when(!is_refreshing, |el| {
-                                el.hover(|element| element.bg(theme.overlay))
-                                    .active(|element| element.bg(theme.overlay_strong))
-                            })
+                            .hover(|element| element.bg(theme.overlay))
+                            .active(|element| element.bg(theme.overlay_strong))
                             .when(is_refreshing, |el| el.opacity(0.5))
                             .tooltip(Tooltip::text(if is_refreshing {
                                 "Refreshing pull requests…"
@@ -2677,12 +2675,16 @@ impl Insulator {
                                 icon("icons/rotate-cw.svg", 14.0, theme.text_secondary)
                                     .into_any_element()
                             })
-                            .when(!is_refreshing, |el| {
-                                el.on_click(move |_, _, cx| {
-                                    let _ = refresh.update(cx, |this, cx| {
-                                        this.ensure_pull_requests(true, cx);
-                                    });
-                                })
+                            // The click handler stays installed while a lookup is
+                            // in flight: `ensure_pull_requests(true, …)` queues
+                            // one follow-up refresh instead of dropping it, so
+                            // repeated manual refreshes are queued. Only the
+                            // visual state (spinner, opacity, tooltip) reflects
+                            // `is_refreshing`.
+                            .on_click(move |_, _, cx| {
+                                let _ = refresh.update(cx, |this, cx| {
+                                    this.ensure_pull_requests(true, cx);
+                                });
                             })
                     }),
             )
