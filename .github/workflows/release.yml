@@ -162,7 +162,7 @@ jobs:
   windows-x86_64:
     name: Windows x86_64
     needs: version
-    runs-on: avrea-windows-2025-2-vcpu
+    runs-on: windows-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
