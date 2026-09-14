@@ -1910,9 +1910,7 @@ fn render_environment_summary_section(
         )
         .child(commit)
         .when(
-            environment.can_open_pull_request
-                || pull_request_pending
-                || environment.has_non_default_branch,
+            environment.has_non_default_branch || pull_request_pending,
             |section| section.child(pull_request),
         )
         .child(compare)
