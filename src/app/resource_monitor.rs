@@ -53,52 +53,166 @@ struct RawProcess {
     comm: String,
 }
 
-pub fn collect_resource_usage(app_pid: u32, daemon_pid: Option<u32>) -> ResourceUsageSnapshot {
+#[derive(Clone, Debug)]
+struct Sample {
+    pid: u32,
+    ppid: u32,
+    /// Cumulative CPU seconds from `ps TIME` (centisecond resolution on macOS).
+    cpu_secs: Option<f64>,
+    /// `ps %CPU` decaying average, used only when no delta baseline exists.
+    cpu_fallback: f32,
+    rss_kb: u64,
+    comm: String,
+}
+
+/// One `ps` snapshot. `TIME` is cumulative per-process CPU time, which is what
+/// lets the caller derive an instantaneous rate from two samples instead of
+/// trusting `ps %CPU` (a decaying ~1-minute average that lags and smooths
+/// spikes).
+fn sample_processes() -> HashMap<u32, Sample> {
+    let mut out = HashMap::new();
     let output = Command::new("ps")
-        .args(["-eo", "pid,ppid,%cpu,rss,comm"])
+        .args(["-eo", "pid,ppid,time,%cpu,rss,comm"])
         .output();
-
     let Ok(output) = output else {
-        return ResourceUsageSnapshot::default();
+        return out;
     };
-
     if !output.status.success() {
-        return ResourceUsageSnapshot::default();
+        return out;
     }
-
     let text = String::from_utf8_lossy(&output.stdout);
-    let mut raw_procs = HashMap::new();
-    let mut children_by_ppid: HashMap<u32, Vec<u32>> = HashMap::new();
-
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with("PID") {
             continue;
         }
+        // pid, ppid, time, %cpu and rss contain no whitespace; everything
+        // after them is the command path.
         let mut parts = trimmed.split_whitespace();
-        let Some(pid) = parts.next().and_then(|p| p.parse::<u32>().ok()) else {
-            continue;
-        };
-        let Some(ppid) = parts.next().and_then(|p| p.parse::<u32>().ok()) else {
-            continue;
-        };
-        let Some(cpu) = parts.next().and_then(|p| p.parse::<f32>().ok()) else {
-            continue;
-        };
-        let Some(rss_kb) = parts.next().and_then(|p| p.parse::<u64>().ok()) else {
+        let (Some(pid), Some(ppid), Some(time), Some(cpu), Some(rss_kb)) = (
+            parts.next().and_then(|p| p.parse::<u32>().ok()),
+            parts.next().and_then(|p| p.parse::<u32>().ok()),
+            parts.next(),
+            parts.next().and_then(|p| p.parse::<f32>().ok()),
+            parts.next().and_then(|p| p.parse::<u64>().ok()),
+        ) else {
             continue;
         };
         let comm = parts.collect::<Vec<_>>().join(" ");
-
-        children_by_ppid.entry(ppid).or_default().push(pid);
-        raw_procs.insert(
+        if comm.is_empty() {
+            continue;
+        }
+        out.insert(
             pid,
-            RawProcess {
+            Sample {
                 pid,
                 ppid,
-                cpu,
+                cpu_secs: parse_ps_time(time),
+                cpu_fallback: cpu,
                 rss_kb,
                 comm,
+            },
+        );
+    }
+    out
+}
+
+/// Parse BSD `ps TIME` (`MM:SS.cc` or `HH:MM:SS.cc`) into cumulative seconds.
+fn parse_ps_time(field: &str) -> Option<f64> {
+    let mut parts = field.split(':').collect::<Vec<_>>();
+    let secs = parts.pop()?.parse::<f64>().ok()?;
+    let mut total = secs;
+    let mut factor = 60.0;
+    // Remaining parts, right to left, are minutes then hours (days never
+    // appear; minutes grow past 59 instead).
+    while let Some(part) = parts.pop() {
+        total += part.parse::<f64>().ok()? * factor;
+        factor *= 60.0;
+    }
+    Some(total)
+}
+
+/// Start time of a process as unix seconds, used to attribute WebKit XPC
+/// services (reparented to `launchd`, so the ppid walk cannot see them) to the
+/// app instance that launched before them.
+#[cfg(target_os = "macos")]
+fn process_start_secs(pid: u32) -> Option<u64> {
+    use std::mem::MaybeUninit;
+    let mut info = MaybeUninit::<libc::proc_bsdinfo>::uninit();
+    // SAFETY: `proc_pidinfo` with `PROC_PIDTBSDINFO` writes exactly one
+    // `proc_bsdinfo`; the byte count is checked before the value is read.
+    let filled = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::pid_t,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr() as *mut libc::c_void,
+            std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int,
+        )
+    };
+    if filled as usize != std::mem::size_of::<libc::proc_bsdinfo>() {
+        return None;
+    }
+    let info = unsafe { info.assume_init() };
+    let secs = info.pbi_start_tvsec;
+    (secs != 0).then_some(secs)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn process_start_secs(_pid: u32) -> Option<u64> {
+    None
+}
+
+fn is_webkit_xpc(comm: &str) -> bool {
+    Path::new(comm)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|base| base.starts_with("com.apple.WebKit."))
+}
+
+pub fn collect_resource_usage(app_pid: u32, daemon_pid: Option<u32>) -> ResourceUsageSnapshot {
+    // Two samples ~1s apart: per-process CPU% is the delta of cumulative CPU
+    // time over wall time, i.e. what Activity Monitor shows, not the decaying
+    // average `ps %CPU` reports. Runs on the background executor already.
+    let wall_start = Instant::now();
+    let first = sample_processes();
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    let wall_secs = wall_start.elapsed().as_secs_f32().max(0.001);
+    let second = sample_processes();
+
+    let mut raw_procs = HashMap::new();
+    let mut children_by_ppid: HashMap<u32, Vec<u32>> = HashMap::new();
+
+    for sample in second.values() {
+        let cpu = match (
+            first.get(&sample.pid).and_then(|prev| prev.cpu_secs),
+            sample.cpu_secs,
+        ) {
+            (Some(before), Some(after)) => {
+                let delta = after - before;
+                if delta < 0.0 {
+                    // PID reuse across the interval; fall back to the average.
+                    sample.cpu_fallback
+                } else {
+                    delta as f32 / wall_secs * 100.0
+                }
+            }
+            // Process appeared between samples: no baseline, so the
+            // since-birth average is the most honest instantaneous proxy.
+            _ => sample.cpu_fallback,
+        };
+        children_by_ppid
+            .entry(sample.ppid)
+            .or_default()
+            .push(sample.pid);
+        raw_procs.insert(
+            sample.pid,
+            RawProcess {
+                pid: sample.pid,
+                ppid: sample.ppid,
+                cpu,
+                rss_kb: sample.rss_kb,
+                comm: sample.comm.clone(),
             },
         );
     }
@@ -119,7 +233,7 @@ pub fn collect_resource_usage(app_pid: u32, daemon_pid: Option<u32>) -> Resource
     let mut tree_entries = Vec::new();
     let mut visited = HashSet::new();
 
-    // 1. App Process (Renderer)
+    // 1. App process and everything parented to it.
     if raw_procs.contains_key(&app_pid) {
         collect_subtree(
             app_pid,
@@ -134,7 +248,46 @@ pub fn collect_resource_usage(app_pid: u32, daemon_pid: Option<u32>) -> Resource
         );
     }
 
-    // 2. Daemon Process (Main) and its subprocesses
+    // 2. WebKit XPC services backing our WKWebViews. They are reparented to
+    // `launchd` (ppid 1), so the tree walk above never reaches them even
+    // though their CPU/RSS is ours — a WebContent process alone can outweigh
+    // the app row. Attribute the ones launched at or after this app instance
+    // started; anything older belongs to another app (e.g. Safari) and stays
+    // out rather than inflating our totals.
+    if let Some(app_start) = process_start_secs(app_pid) {
+        let mut webkit: Vec<&RawProcess> = raw_procs
+            .values()
+            .filter(|p| {
+                !visited.contains(&p.pid)
+                    && is_webkit_xpc(&p.comm)
+                    && process_start_secs(p.pid).is_some_and(|start| start >= app_start)
+            })
+            .collect();
+        webkit.sort_by(|a, b| b.rss_kb.cmp(&a.rss_kb));
+        // Nest directly under the App row so the flat view keeps working and
+        // the tree shows exactly what is included.
+        let insert_at = tree_entries
+            .first()
+            .filter(|entry| entry.pid == app_pid)
+            .map(|_| 1)
+            .unwrap_or(tree_entries.len());
+        for (offset, proc_) in webkit.iter().enumerate() {
+            visited.insert(proc_.pid);
+            tree_entries.insert(
+                insert_at + offset,
+                ProcessResourceEntry {
+                    pid: proc_.pid,
+                    ppid: proc_.ppid,
+                    name: clean_process_name(&proc_.comm),
+                    cpu_percent: proc_.cpu,
+                    rss_bytes: proc_.rss_kb * 1024,
+                    depth: 1,
+                },
+            );
+        }
+    }
+
+    // 3. Daemon process (Main) and its subprocesses
     if let Some(dpid) = effective_daemon_pid {
         if !visited.contains(&dpid) && raw_procs.contains_key(&dpid) {
             collect_subtree(
@@ -191,7 +344,7 @@ fn collect_subtree(
 
     if let Some(proc) = raw_procs.get(&pid) {
         let name = if is_renderer && pid == app_pid {
-            "Renderer".to_string()
+            "App".to_string()
         } else if Some(pid) == daemon_pid {
             "Main".to_string()
         } else {
@@ -795,4 +948,39 @@ fn render_copy_icon_button(
                 this.copy_resource_usage(cx);
             });
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ps_time_parses_minutes_and_hours_with_centiseconds() {
+        assert_eq!(parse_ps_time("0:00.02"), Some(0.02));
+        assert_eq!(parse_ps_time("22:12.43"), Some(22.0 * 60.0 + 12.43));
+        assert_eq!(parse_ps_time("1:02:03"), Some(3723.0));
+        assert_eq!(parse_ps_time("43:02.72"), Some(43.0 * 60.0 + 2.72));
+    }
+
+    #[test]
+    fn ps_time_rejects_garbage() {
+        assert_eq!(parse_ps_time(""), None);
+        assert_eq!(parse_ps_time("-"), None);
+        assert_eq!(parse_ps_time("abc"), None);
+        assert_eq!(parse_ps_time("12:ab"), None);
+    }
+
+    #[test]
+    fn webkit_xpc_matches_service_binaries_only() {
+        assert!(is_webkit_xpc(
+            "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent"
+        ));
+        assert!(is_webkit_xpc(
+            "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU"
+        ));
+        assert!(!is_webkit_xpc("/Applications/Safari.app/Contents/MacOS/Safari"));
+        assert!(!is_webkit_xpc(
+            "/Applications/Insulator.app/Contents/MacOS/Insulator"
+        ));
+    }
 }

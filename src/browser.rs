@@ -1186,6 +1186,12 @@ pub struct BrowserView {
     snapshot_pending: bool,
     /// Discards snapshot completions that land after their occlusion ended.
     snapshot_epoch: u64,
+    /// Guards the loading progress poll so `render` arms at most one 100 ms
+    /// wake-up instead of re-arming `request_animation_frame` every frame
+    /// (display rate) while a navigation is in flight. A stuck `loading=true`
+    /// used to pin the whole window — and every visible transcript row — at
+    /// 120 Hz.
+    progress_poll_armed: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -1284,6 +1290,7 @@ impl BrowserView {
             snapshot: None,
             snapshot_pending: false,
             snapshot_epoch: 0,
+            progress_poll_armed: false,
             _subscriptions: vec![submit_subscription, focus_in_address, focus_out_surface],
         };
         this.build_webview(window, cx);
@@ -2480,10 +2487,23 @@ impl Render for BrowserView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::current(cx);
         self.reconcile_focus(window, cx);
-        if self.loading {
+        if self.loading && !self.progress_poll_armed {
             // `estimatedProgress` moves without any observable notification;
-            // while a load is in flight the toolbar redraws with the frames.
-            window.request_animation_frame();
+            // while a load is in flight the toolbar redraws on a 100 ms poll
+            // instead of every display frame.
+            self.progress_poll_armed = true;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(100))
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    this.progress_poll_armed = false;
+                    if this.loading {
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
         }
 
         let body = if let Some(error) = self.host_error.clone() {

@@ -2618,13 +2618,11 @@ impl Insulator {
                     detail_card = detail_card.child(section_view);
                 }
                 for (image_index, image_url) in activity.image_urls.iter().enumerate() {
-                    let image = self.image_for_reference(image_url, None, None, cx);
+                    let image = self
+                        .image_for_reference(image_url, None, None, cx)
+                        .or_else(|| self.legacy_activity_image(image_url));
                     detail_card = detail_card.child(render_activity_image(
-                        image_url,
-                        image,
-                        id,
-                        image_index,
-                        theme,
+                        image, id, image_index, theme,
                     ));
                 }
                 item = item.child(detail_card);
@@ -3006,15 +3004,16 @@ fn activity_scroll_fade(
 }
 
 fn render_activity_image(
-    image_url: &str,
     image: Option<Arc<gpui::Image>>,
     activity_id: Uuid,
     image_index: usize,
     theme: &Theme,
 ) -> AnyElement {
     // Daemon blobs arrive only when a visible row requests them and GPUI keeps
-    // their decoded form in memory. Only legacy inline data URLs still pay a
-    // per-render base64 decode.
+    // their decoded form in memory. Legacy inline data URLs are decoded once
+    // into the same bounded `remote_images` cache (see
+    // `legacy_activity_image`); a miss here renders the same placeholder as a
+    // pending blob instead of paying a per-frame base64 decode.
     let id = SharedString::from(format!("activity-image-{activity_id}-{image_index}"));
     if let Some(image) = image {
         return img(image)
@@ -3027,36 +3026,19 @@ fn render_activity_image(
             .object_fit(ObjectFit::Contain)
             .into_any_element();
     }
-    if insulator_protocol::blob::is_reference(image_url)
-        || image_url.starts_with(insulator_protocol::attachments::ATTACHMENT_SCHEME)
-    {
-        return div()
-            .id(id)
-            .w(px(ACTIVITY_IMAGE_WIDTH))
-            .max_w(gpui::relative(1.0))
-            .h(px(80.0))
-            .mt(px(8.0))
-            .rounded(px(4.0))
-            .bg(theme.inset)
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(icon("icons/file-types/image.svg", 18.0, theme.text_ghost))
-            .into_any_element();
-    };
-
-    match decode_activity_image(image_url) {
-        Some(image) => img(image),
-        None => img(image_url.to_owned()),
-    }
-    .id(id)
-    .w(px(ACTIVITY_IMAGE_WIDTH))
-    .max_w(gpui::relative(1.0))
-    .max_h(px(ACTIVITY_IMAGE_HEIGHT))
-    .mt(px(8.0))
-    .rounded(px(4.0))
-    .object_fit(ObjectFit::Contain)
-    .into_any_element()
+    div()
+        .id(id)
+        .w(px(ACTIVITY_IMAGE_WIDTH))
+        .max_w(gpui::relative(1.0))
+        .h(px(80.0))
+        .mt(px(8.0))
+        .rounded(px(4.0))
+        .bg(theme.inset)
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(icon("icons/file-types/image.svg", 18.0, theme.text_ghost))
+        .into_any_element()
 }
 
 fn decode_activity_image(image_url: &str) -> Option<std::sync::Arc<gpui::Image>> {
@@ -3067,6 +3049,31 @@ fn decode_activity_image(image_url: &str) -> Option<std::sync::Arc<gpui::Image>>
         .decode(encoded)
         .ok()?;
     (!bytes.is_empty()).then(|| std::sync::Arc::new(gpui::Image::from_bytes(format, bytes)))
+}
+
+impl Insulator {
+    /// Decode a legacy inline `data:` image URL once into the bounded
+    /// `remote_images` cache. Render calls this per visible row per frame, so
+    /// a cache hit must cost only a hash lookup: the base64 decode and image
+    /// alloc happen on the first miss only. Failures cache as `None` so an
+    /// invalid URL never retries every frame.
+    fn legacy_activity_image(&self, image_url: &str) -> Option<Arc<gpui::Image>> {
+        if !image_url.starts_with("data:") {
+            return None;
+        }
+        let cache_key = image_url.to_owned();
+        match self.remote_images.borrow_mut().read(&cache_key) {
+            Query::Ready(cached) => cached.as_ref().clone(),
+            Query::Pending => None,
+            Query::Missing(token) => {
+                let decoded = decode_activity_image(image_url);
+                self.remote_images
+                    .borrow_mut()
+                    .fulfill(token, decoded.clone());
+                decoded
+            }
+        }
+    }
 }
 
 #[cfg(test)]

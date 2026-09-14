@@ -641,6 +641,9 @@ pub struct TerminalView {
     cursor_blink: gpui::Entity<TerminalCursorBlink>,
     cursor_focus_tracking_started: bool,
     context_menu: ContextMenuHandle,
+    /// Bumped on every `restart()` so a superseded 24 ms poll loop exits
+    /// instead of stacking another ~41 Hz wake-up behind the new one.
+    poll_generation: usize,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -664,18 +667,27 @@ impl TerminalView {
             {
                 return;
             }
+            let generation = this
+                .update(cx, |this, _| this.poll_generation)
+                .unwrap_or(usize::MAX);
             loop {
                 cx.background_executor()
                     .timer(Duration::from_millis(24))
                     .await;
-                if this
+                let done = this
                     .update(cx, |this, cx| {
+                        // A `restart()` supersedes this loop; exit so only the
+                        // newest loop polls.
+                        if this.poll_generation != generation {
+                            return true;
+                        }
                         if this.poll(cx) {
                             cx.notify();
                         }
+                        false
                     })
-                    .is_err()
-                {
+                    .unwrap_or(true);
+                if done {
                     break;
                 }
             }
@@ -705,6 +717,7 @@ impl TerminalView {
             cursor_blink,
             cursor_focus_tracking_started: false,
             context_menu,
+            poll_generation: 0,
             _subscriptions: subscriptions,
         }
     }
@@ -735,6 +748,8 @@ impl TerminalView {
         self.session = None;
         self.error = None;
         self.exited = false;
+        self.poll_generation = self.poll_generation.wrapping_add(1);
+        let generation = self.poll_generation;
         cx.spawn(async move |this, cx| {
             let started = cx
                 .background_executor()
@@ -742,6 +757,9 @@ impl TerminalView {
                 .await;
             if this
                 .update(cx, |this, cx| {
+                    if this.poll_generation != generation {
+                        return;
+                    }
                     match started {
                         Ok(session) => this.session = Some(session),
                         Err(error) => this.error = Some(error.to_string()),
@@ -756,14 +774,18 @@ impl TerminalView {
                 cx.background_executor()
                     .timer(Duration::from_millis(24))
                     .await;
-                if this
+                let done = this
                     .update(cx, |this, cx| {
+                        if this.poll_generation != generation {
+                            return true;
+                        }
                         if this.poll(cx) {
                             cx.notify();
                         }
+                        false
                     })
-                    .is_err()
-                {
+                    .unwrap_or(true);
+                if done {
                     break;
                 }
             }

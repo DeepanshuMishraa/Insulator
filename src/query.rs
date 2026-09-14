@@ -119,6 +119,10 @@ impl<K: Clone + Eq + Hash, V> QueryCache<K, V> {
                 last_used: clock,
             },
         );
+        // `read` is the path that creates `Loading` slots, so enforce the
+        // bound here too — otherwise keys whose fetches never resolve (daemon
+        // down, 404s) accumulate without ever hitting `insert`/`fulfill`.
+        self.evict_over_capacity();
         Query::Missing(FetchToken {
             key: key.clone(),
             generation,
@@ -212,6 +216,21 @@ impl<K: Clone + Eq + Hash, V> QueryCache<K, V> {
                 .map(|(key, _)| key.clone());
             // Only in-flight entries are left; evicting one would strand its
             // token, so let the cache run over until they resolve.
+            let Some(victim) = victim else { break };
+            self.entries.remove(&victim);
+        }
+        // In-flight entries never resolve if the daemon is down or a fetch is
+        // abandoned without `abandon()`. Cap them too, or distinct keys (image
+        // 404s, branch fetch storms) grow the map without bound. Evicting a
+        // `Loading` slot strands its token, but `fulfill` treats that as a
+        // refusal and the next read simply retries — safe, just one refetch.
+        const MAX_INFLIGHT_OVERFLOW: usize = 64;
+        while self.entries.len() > self.capacity.saturating_add(MAX_INFLIGHT_OVERFLOW) {
+            let victim = self
+                .entries
+                .iter()
+                .min_by_key(|(_, cached)| cached.last_used)
+                .map(|(key, _)| key.clone());
             let Some(victim) = victim else { break };
             self.entries.remove(&victim);
         }
