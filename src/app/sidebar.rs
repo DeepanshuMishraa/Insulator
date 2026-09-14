@@ -2947,6 +2947,7 @@ impl Insulator {
                                 div()
                                     .id(SharedString::from(format!("main-file-tab-close-{index}")))
                                     .tab_index(0)
+                                    .focus_visible(|el| el.opacity(1.0).bg(theme.overlay_strong))
                                     .size(px(16.0))
                                     .flex()
                                     .items_center()
@@ -3079,7 +3080,11 @@ impl Insulator {
                                         "main-review-tab-close-{index}"
                                     )))
                                     .tab_index(0)
-                                    .focus_visible(|el| el.bg(theme.overlay_strong).text_color(theme.text))
+                                    .focus_visible(|el| {
+                                        el.opacity(1.0)
+                                            .bg(theme.overlay_strong)
+                                            .text_color(theme.text)
+                                    })
                                     .size(px(16.0))
                                     .flex()
                                     .items_center()
