@@ -2620,9 +2620,9 @@ impl Insulator {
                 for (image_index, image_url) in activity.image_urls.iter().enumerate() {
                     let image = self
                         .image_for_reference(image_url, None, None, cx)
-                        .or_else(|| self.legacy_activity_image(image_url));
+                        .or_else(|| self.legacy_activity_image(image_url, cx));
                     detail_card = detail_card.child(render_activity_image(
-                        image, id, image_index, theme,
+                        image_url, image, id, image_index, theme,
                     ));
                 }
                 item = item.child(detail_card);
@@ -3004,6 +3004,7 @@ fn activity_scroll_fade(
 }
 
 fn render_activity_image(
+    image_url: &str,
     image: Option<Arc<gpui::Image>>,
     activity_id: Uuid,
     image_index: usize,
@@ -3013,10 +3014,25 @@ fn render_activity_image(
     // their decoded form in memory. Legacy inline data URLs are decoded once
     // into the same bounded `remote_images` cache (see
     // `legacy_activity_image`); a miss here renders the same placeholder as a
-    // pending blob instead of paying a per-frame base64 decode.
+    // pending blob instead of paying a per-frame base64 decode. Plain provider
+    // URLs are not daemon references, so they keep the direct `img` fallback.
     let id = SharedString::from(format!("activity-image-{activity_id}-{image_index}"));
     if let Some(image) = image {
         return img(image)
+            .id(id)
+            .w(px(ACTIVITY_IMAGE_WIDTH))
+            .max_w(gpui::relative(1.0))
+            .max_h(px(ACTIVITY_IMAGE_HEIGHT))
+            .mt(px(8.0))
+            .rounded(px(4.0))
+            .object_fit(ObjectFit::Contain)
+            .into_any_element();
+    }
+    if !insulator_protocol::blob::is_reference(image_url)
+        && !image_url.starts_with(insulator_protocol::attachments::ATTACHMENT_SCHEME)
+        && !image_url.starts_with("data:")
+    {
+        return img(image_url.to_owned())
             .id(id)
             .w(px(ACTIVITY_IMAGE_WIDTH))
             .max_w(gpui::relative(1.0))
@@ -3051,26 +3067,59 @@ fn decode_activity_image(image_url: &str) -> Option<std::sync::Arc<gpui::Image>>
     (!bytes.is_empty()).then(|| std::sync::Arc::new(gpui::Image::from_bytes(format, bytes)))
 }
 
+std::thread_local! {
+    /// Scratch key buffer for `legacy_activity_image`. The shared
+    /// `remote_images` cache is keyed by `String`, so a cache read needs a
+    /// `&String`; reusing this buffer keeps a per-frame hit free of the
+    /// hundreds-of-KB clone a `to_owned()` of an inline `data:` URL would pay.
+    static LEGACY_ACTIVITY_IMAGE_KEY: RefCell<String> = RefCell::new(String::new());
+}
+
 impl Insulator {
     /// Decode a legacy inline `data:` image URL once into the bounded
     /// `remote_images` cache. Render calls this per visible row per frame, so
-    /// a cache hit must cost only a hash lookup: the base64 decode and image
-    /// alloc happen on the first miss only. Failures cache as `None` so an
-    /// invalid URL never retries every frame.
-    fn legacy_activity_image(&self, image_url: &str) -> Option<Arc<gpui::Image>> {
+    /// a cache hit must cost only a hash lookup: the lookup reuses a scratch
+    /// key, and the base64 decode plus image alloc run on the background
+    /// executor on the first miss only, with `cx.notify()` re-rendering once
+    /// fulfilled. Failures cache as `None` so an invalid URL never retries
+    /// every frame.
+    fn legacy_activity_image(
+        &self,
+        image_url: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<Arc<gpui::Image>> {
         if !image_url.starts_with("data:") {
             return None;
         }
-        let cache_key = image_url.to_owned();
-        match self.remote_images.borrow_mut().read(&cache_key) {
+        // Bind the `Query` to a local so the `RefMut` temporary from the
+        // `read` scrutinee drops before any arm borrows the cache again.
+        // Matching directly on the scrutinee would keep that borrow alive for
+        // the whole match and panic on the second borrow in `Missing`.
+        let query = LEGACY_ACTIVITY_IMAGE_KEY.with(|scratch| {
+            let mut key = scratch.borrow_mut();
+            key.clear();
+            key.push_str(image_url);
+            let key: &String = &key;
+            self.remote_images.borrow_mut().read(key)
+        });
+        match query {
             Query::Ready(cached) => cached.as_ref().clone(),
             Query::Pending => None,
             Query::Missing(token) => {
-                let decoded = decode_activity_image(image_url);
-                self.remote_images
-                    .borrow_mut()
-                    .fulfill(token, decoded.clone());
-                decoded
+                let image_url = image_url.to_owned();
+                cx.spawn(async move |insulator, cx| {
+                    let decoded = cx
+                        .background_executor()
+                        .spawn(async move { decode_activity_image(&image_url) })
+                        .await;
+                    let _ = insulator.update(cx, |insulator, cx| {
+                        if insulator.remote_images.borrow_mut().fulfill(token, decoded) {
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+                None
             }
         }
     }

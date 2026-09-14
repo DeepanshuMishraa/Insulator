@@ -207,7 +207,15 @@ impl<K: Clone + Eq + Hash, V> QueryCache<K, V> {
     }
 
     fn evict_over_capacity(&mut self) {
-        while self.entries.len() > self.capacity {
+        // `capacity` bounds resolved values only; in-flight slots don't count
+        // toward it, so a miss adding a `Loading` slot never evicts `Ready`.
+        while self
+            .entries
+            .values()
+            .filter(|cached| matches!(cached.slot, Slot::Ready(_)))
+            .count()
+            > self.capacity
+        {
             let victim = self
                 .entries
                 .iter()
@@ -229,9 +237,13 @@ impl<K: Clone + Eq + Hash, V> QueryCache<K, V> {
             let victim = self
                 .entries
                 .iter()
+                .filter(|(_, cached)| matches!(cached.slot, Slot::Loading))
                 .min_by_key(|(_, cached)| cached.last_used)
                 .map(|(key, _)| key.clone());
             let Some(victim) = victim else { break };
+            // Advance the generation so a stranded token cannot fulfill into
+            // a recreated `Loading` slot if the key is retried.
+            self.generation += 1;
             self.entries.remove(&victim);
         }
     }

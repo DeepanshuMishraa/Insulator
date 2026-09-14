@@ -1536,6 +1536,10 @@ pub struct Insulator {
     /// Drives the header Fix button's loading state, mirroring Synara's
     /// "Preparing findings…" guard.
     pull_request_fix_preparing: HashSet<(String, u64)>,
+    /// Fix requests waiting for review comments + checks to load so the
+    /// prompt is built from complete findings instead of an empty cache.
+    pull_request_fix_pending:
+        HashMap<(String, u64), (pull_requests::PullRequest, gpui::AnyWindowHandle)>,
     pull_request_markdown: RefCell<Option<((String, u64), MarkdownView)>>,
     pull_requests_search: Entity<TextInput>,
     /// Virtualized filtered PR rows. GitHub accounts can return hundreds of
@@ -3331,6 +3335,7 @@ impl Insulator {
                 pull_request_diffs_loading: HashSet::new(),
                 pull_request_diffs_error: HashMap::new(),
                 pull_request_fix_preparing: HashSet::new(),
+                pull_request_fix_pending: HashMap::new(),
                 pull_request_markdown: RefCell::new(None),
                 pull_requests_search,
                 pull_requests_list_state: pull_requests_list_state.clone(),

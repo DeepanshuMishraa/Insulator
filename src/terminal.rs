@@ -651,12 +651,19 @@ impl TerminalView {
     pub fn new(working_directory: PathBuf, cx: &mut Context<Self>) -> Self {
         let terminal_cwd = working_directory.clone();
         cx.spawn(async move |this, cx| {
+            let generation = match this.update(cx, |this, _| this.poll_generation) {
+                Ok(generation) => generation,
+                Err(_) => return,
+            };
             let started = cx
                 .background_executor()
                 .spawn(async move { TerminalSession::new(&terminal_cwd, 52, 36) })
                 .await;
             if this
                 .update(cx, |this, cx| {
+                    if this.poll_generation != generation {
+                        return;
+                    }
                     match started {
                         Ok(session) => this.session = Some(session),
                         Err(error) => this.error = Some(error.to_string()),
@@ -667,9 +674,6 @@ impl TerminalView {
             {
                 return;
             }
-            let generation = this
-                .update(cx, |this, _| this.poll_generation)
-                .unwrap_or(usize::MAX);
             loop {
                 cx.background_executor()
                     .timer(Duration::from_millis(24))

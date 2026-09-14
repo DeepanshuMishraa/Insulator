@@ -132,54 +132,26 @@ fn parse_ps_time(field: &str) -> Option<f64> {
     Some(total)
 }
 
-/// Start time of a process as unix seconds, used to attribute WebKit XPC
-/// services (reparented to `launchd`, so the ppid walk cannot see them) to the
-/// app instance that launched before them.
-#[cfg(target_os = "macos")]
-fn process_start_secs(pid: u32) -> Option<u64> {
-    use std::mem::MaybeUninit;
-    let mut info = MaybeUninit::<libc::proc_bsdinfo>::uninit();
-    // SAFETY: `proc_pidinfo` with `PROC_PIDTBSDINFO` writes exactly one
-    // `proc_bsdinfo`; the byte count is checked before the value is read.
-    let filled = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::pid_t,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            info.as_mut_ptr() as *mut libc::c_void,
-            std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int,
-        )
-    };
-    if filled as usize != std::mem::size_of::<libc::proc_bsdinfo>() {
-        return None;
-    }
-    let info = unsafe { info.assume_init() };
-    let secs = info.pbi_start_tvsec;
-    (secs != 0).then_some(secs)
+/// Upper bound for a believable per-process CPU%: one process cannot burn more
+/// than every core at once. Catches PID reuse that the `delta < 0.0` check
+/// below misses — a reused PID whose new process already has more cumulative
+/// CPU time would otherwise show as a huge one-sample spike.
+fn max_plausible_cpu_percent() -> f32 {
+    std::thread::available_parallelism().map_or(6400.0, |cores| cores.get() as f32 * 100.0)
 }
 
-#[cfg(not(target_os = "macos"))]
-fn process_start_secs(_pid: u32) -> Option<u64> {
-    None
-}
-
-fn is_webkit_xpc(comm: &str) -> bool {
-    Path::new(comm)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|base| base.starts_with("com.apple.WebKit."))
-}
-
-pub fn collect_resource_usage(app_pid: u32, daemon_pid: Option<u32>) -> ResourceUsageSnapshot {
-    // Two samples ~1s apart: per-process CPU% is the delta of cumulative CPU
-    // time over wall time, i.e. what Activity Monitor shows, not the decaying
-    // average `ps %CPU` reports. Runs on the background executor already.
-    let wall_start = Instant::now();
-    let first = sample_processes();
-    std::thread::sleep(std::time::Duration::from_millis(1000));
-    let wall_secs = wall_start.elapsed().as_secs_f32().max(0.001);
-    let second = sample_processes();
-
+/// Build a snapshot from two `ps` samples. `wall_secs` must span the same
+/// interval the samples were taken over (timed from the end of the first to
+/// the end of the second); per-process CPU% is the delta of cumulative CPU
+/// time over that wall time, i.e. what Activity Monitor shows rather than the
+/// decaying average `ps %CPU` reports.
+fn snapshot_from_samples(
+    app_pid: u32,
+    daemon_pid: Option<u32>,
+    first: &HashMap<u32, Sample>,
+    second: HashMap<u32, Sample>,
+    wall_secs: f32,
+) -> ResourceUsageSnapshot {
     let mut raw_procs = HashMap::new();
     let mut children_by_ppid: HashMap<u32, Vec<u32>> = HashMap::new();
 
@@ -192,6 +164,12 @@ pub fn collect_resource_usage(app_pid: u32, daemon_pid: Option<u32>) -> Resource
                 let delta = after - before;
                 if delta < 0.0 {
                     // PID reuse across the interval; fall back to the average.
+                    sample.cpu_fallback
+                } else if delta as f32 / wall_secs * 100.0 > max_plausible_cpu_percent() {
+                    // PID reuse where the new process already has more
+                    // cumulative CPU than the old one: the delta is the new
+                    // process's whole lifetime, not one interval, so it would
+                    // read as an implausible multi-thousand-% spike.
                     sample.cpu_fallback
                 } else {
                     delta as f32 / wall_secs * 100.0
@@ -248,46 +226,19 @@ pub fn collect_resource_usage(app_pid: u32, daemon_pid: Option<u32>) -> Resource
         );
     }
 
-    // 2. WebKit XPC services backing our WKWebViews. They are reparented to
+    // NOTE: WebKit XPC services backing our WKWebViews are reparented to
     // `launchd` (ppid 1), so the tree walk above never reaches them even
-    // though their CPU/RSS is ours — a WebContent process alone can outweigh
-    // the app row. Attribute the ones launched at or after this app instance
-    // started; anything older belongs to another app (e.g. Safari) and stays
-    // out rather than inflating our totals.
-    if let Some(app_start) = process_start_secs(app_pid) {
-        let mut webkit: Vec<&RawProcess> = raw_procs
-            .values()
-            .filter(|p| {
-                !visited.contains(&p.pid)
-                    && is_webkit_xpc(&p.comm)
-                    && process_start_secs(p.pid).is_some_and(|start| start >= app_start)
-            })
-            .collect();
-        webkit.sort_by(|a, b| b.rss_kb.cmp(&a.rss_kb));
-        // Nest directly under the App row so the flat view keeps working and
-        // the tree shows exactly what is included.
-        let insert_at = tree_entries
-            .first()
-            .filter(|entry| entry.pid == app_pid)
-            .map(|_| 1)
-            .unwrap_or(tree_entries.len());
-        for (offset, proc_) in webkit.iter().enumerate() {
-            visited.insert(proc_.pid);
-            tree_entries.insert(
-                insert_at + offset,
-                ProcessResourceEntry {
-                    pid: proc_.pid,
-                    ppid: proc_.ppid,
-                    name: clean_process_name(&proc_.comm),
-                    cpu_percent: proc_.cpu,
-                    rss_bytes: proc_.rss_kb * 1024,
-                    depth: 1,
-                },
-            );
-        }
-    }
+    // though their CPU/RSS is ours. They were previously attributed by a
+    // global start-time cutoff (helpers launched at/after this app instance),
+    // but that also claims any other WebKit client's helpers whenever that
+    // client starts after us: `ps` exposes no ownership signal to tell ours
+    // apart (identical binary path and args, ppid 1, sess 0 for every
+    // client's helpers). So they are deliberately left out rather than
+    // inflating our totals with another app's WebContent; attributing them
+    // correctly needs the WK process identifiers plumbed from the webview
+    // layer, not guessed here.
 
-    // 3. Daemon process (Main) and its subprocesses
+    // 2. Daemon process (Main) and its subprocesses
     if let Some(dpid) = effective_daemon_pid {
         if !visited.contains(&dpid) && raw_procs.contains_key(&dpid) {
             collect_subtree(
@@ -475,10 +426,25 @@ impl Insulator {
 
         let weak = cx.entity().downgrade();
         cx.spawn(async move |_this, cx| {
-            let snapshot = cx
+            // Two `ps` snapshots ~1s apart, each taken on a pool worker. The
+            // wait between them is an async timer so no worker is held while
+            // idle, and the wall interval runs end-of-first to end-of-second
+            // so it spans exactly the samples the CPU deltas come from.
+            let first = cx
                 .background_executor()
-                .spawn(async move { collect_resource_usage(app_pid, daemon_pid) })
+                .spawn(async move { sample_processes() })
                 .await;
+            let wall_start = Instant::now();
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(1000))
+                .await;
+            let second = cx
+                .background_executor()
+                .spawn(async move { sample_processes() })
+                .await;
+            let wall_secs = wall_start.elapsed().as_secs_f32().max(0.001);
+            let snapshot =
+                snapshot_from_samples(app_pid, daemon_pid, &first, second, wall_secs);
 
             let _ = weak.update(cx, |this, cx| {
                 if this.resource_usage_generation != generation {
@@ -968,19 +934,5 @@ mod tests {
         assert_eq!(parse_ps_time("-"), None);
         assert_eq!(parse_ps_time("abc"), None);
         assert_eq!(parse_ps_time("12:ab"), None);
-    }
-
-    #[test]
-    fn webkit_xpc_matches_service_binaries_only() {
-        assert!(is_webkit_xpc(
-            "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent"
-        ));
-        assert!(is_webkit_xpc(
-            "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU"
-        ));
-        assert!(!is_webkit_xpc("/Applications/Safari.app/Contents/MacOS/Safari"));
-        assert!(!is_webkit_xpc(
-            "/Applications/Insulator.app/Contents/MacOS/Insulator"
-        ));
     }
 }

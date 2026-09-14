@@ -1339,9 +1339,10 @@ impl Insulator {
                         this.pull_request_checks_error.remove(&request_key);
                     }
                     Err(error) => {
-                        this.pull_request_checks_error.insert(request_key, error.to_string());
+                        this.pull_request_checks_error.insert(request_key.clone(), error.to_string());
                     }
                 }
+                this.maybe_run_pending_fix(request_key, cx);
                 cx.notify();
             });
         })
@@ -1393,9 +1394,11 @@ impl Insulator {
                         this.pull_request_comments_error.remove(&request_key);
                     }
                     Err(error) => {
-                        this.pull_request_comments_error.insert(request_key, error.to_string());
+                        this.pull_request_comments_error
+                            .insert(request_key.clone(), error.to_string());
                     }
                 }
+                this.maybe_run_pending_fix(request_key, cx);
                 cx.notify();
             });
         })
@@ -1978,20 +1981,68 @@ impl Insulator {
         repository.rsplit('/').next().unwrap_or(repository)
     }
 
+    /// True when a GitHub web URL (`https://github.com/owner/repo`) names the
+    /// requested `owner/repo`, case-insensitively.
+    fn fix_github_url_matches_repository(url: &str, repository: &str) -> bool {
+        let path = url
+            .strip_prefix("https://github.com/")
+            .unwrap_or(url)
+            .trim_matches('/')
+            .trim_end_matches(".git");
+        path.eq_ignore_ascii_case(repository.trim_matches('/').trim_end_matches(".git"))
+    }
+
+    /// True when the project's git origin names the requested repository.
+    /// A click handler may run this synchronously; the helper prefers the
+    /// fast `.git/config` read and only falls back to `git` for worktrees or
+    /// subdirectory projects the file lookup misses.
+    fn fix_project_matches_repository(path: &std::path::Path, repository: &str) -> bool {
+        super::sidebar::github_url_for_project(path)
+            .is_some_and(|url| Self::fix_github_url_matches_repository(&url, repository))
+    }
+
     fn find_fix_project_id(&self, repository: &str) -> Option<Uuid> {
         let wanted = Self::pull_request_repo_dir_name(repository);
+        // Directory names collide across forks and unrelated repos, so a
+        // name match alone can open the Fix flow on the wrong checkout
+        // (and fetch `pull/N/head` from its origin). Only return a project
+        // whose git origin names the requested repository; otherwise reject
+        // so the caller clones the right repo or asks for a location.
         self.state
             .projects
             .iter()
             .filter(|project| !project.is_projectless())
-            .find(|project| {
+            .filter(|project| {
                 project
                     .path
                     .file_name()
                     .and_then(|name| name.to_str())
                     .is_some_and(|name| name.eq_ignore_ascii_case(wanted))
             })
+            .find(|project| Self::fix_project_matches_repository(&project.path, repository))
             .map(|project| project.id)
+    }
+
+    /// Review findings are ready when both comments and checks have settled
+    /// into either a cached value or a terminal error. Anything else means a
+    /// fetch is still in flight (or never started).
+    fn fix_findings_ready(&self, key: &(String, u64)) -> bool {
+        (self.pull_request_comments.contains_key(key)
+            || self.pull_request_comments_error.contains_key(key))
+            && (self.pull_request_checks.contains_key(key)
+                || self.pull_request_checks_error.contains_key(key))
+    }
+
+    /// Resume a deferred Fix request once its findings arrive. Called from
+    /// the comments/checks completion callbacks; no-ops unless both are
+    /// ready so the prompt is never built from a half-empty cache.
+    fn maybe_run_pending_fix(&mut self, key: (String, u64), cx: &mut Context<Self>) {
+        if !self.fix_findings_ready(&key) || !self.pull_request_fix_pending.contains_key(&key) {
+            return;
+        }
+        if let Some((request, window_handle)) = self.pull_request_fix_pending.remove(&key) {
+            self.continue_fix_after_loads(request, window_handle, cx);
+        }
     }
 
     /// Local branch the Fix flow fetches the PR head into before opening the
@@ -2228,13 +2279,33 @@ impl Insulator {
         if self.pull_request_fix_preparing.contains(&key) {
             return;
         }
-        // Comments/checks may still be loading when Fix is pressed; kick the
-        // fetches so the next pass has them, and build the prompt from what's
-        // cached now.
+        // Comments/checks may still be loading when Fix is pressed. Kick the
+        // fetches and defer the prompt until both settle; building it now
+        // would permanently omit those findings from the new chat.
         self.ensure_pull_request_comments(request.clone(), cx);
         self.ensure_pull_request_checks(request.clone(), cx);
+        if !self.fix_findings_ready(&key) {
+            self.pull_request_fix_preparing.insert(key.clone());
+            self.pull_request_fix_pending
+                .insert(key, (request, window.window_handle()));
+            cx.notify();
+            return;
+        }
+        self.continue_fix_after_loads(request, window.window_handle(), cx);
+    }
+
+    /// Project resolution + thread spawn once comments/checks are settled.
+    /// Separated from [`Self::fix_pull_request_findings`] so the
+    /// comments/checks completion callbacks can resume the deferred Fix
+    /// with a complete prompt.
+    fn continue_fix_after_loads(
+        &mut self,
+        request: PullRequest,
+        window_handle: gpui::AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
+        let key = (request.repository.clone(), request.number);
         let prompt = self.build_fix_prompt(&request);
-        let window_handle = window.window_handle();
         if let Some(project_id) = self.find_fix_project_id(&request.repository) {
             let project_path = self
                 .state
@@ -2270,7 +2341,13 @@ impl Insulator {
                     cx,
                 );
             } else {
+                // Origin verification rejected the reuse candidate (wrong
+                // repo behind a colliding directory name); clear the
+                // deferred "Preparing…" state instead of leaving it stuck.
+                self.pull_request_fix_preparing.remove(&key);
+                self.pull_request_fix_pending.remove(&key);
                 self.show_toast(tr!("project.clone_location_required"));
+                cx.notify();
             }
             return;
         }
@@ -2337,12 +2414,14 @@ impl Insulator {
                         );
                     } else {
                         this.pull_request_fix_preparing.remove(&key);
+                        this.pull_request_fix_pending.remove(&key);
                         this.show_toast(tr!("project.clone_location_required"));
                         cx.notify();
                     }
                 }
                 Err(error) => {
                     this.pull_request_fix_preparing.remove(&key);
+                    this.pull_request_fix_pending.remove(&key);
                     this.show_toast(error.to_string());
                     cx.notify();
                 }
@@ -3505,6 +3584,8 @@ impl Insulator {
                             .when(request.state.eq_ignore_ascii_case("open"), |el| {
                                 let fix_request = request.clone();
                                 let fix_entity = close.clone();
+                                let key_fix_request = request.clone();
+                                let key_fix_entity = close.clone();
                                 let fix_key = (
                                     request.repository.clone(),
                                     request.number,
@@ -3515,6 +3596,10 @@ impl Insulator {
                                 el.child(
                                     div()
                                         .id("fix-pull-request-findings")
+                                        .tab_index(0)
+                                        .focus_visible(|style| {
+                                            style.border_1().border_color(theme.accent)
+                                        })
                                         .h(px(26.0))
                                         .px(px(10.0))
                                         .rounded(px(6.0))
@@ -3525,6 +3610,7 @@ impl Insulator {
                                         .border_1()
                                         .border_color(theme.border)
                                         .bg(theme.overlay)
+                                        .cursor_pointer()
                                         .when(!is_preparing, |element| {
                                             element.hover(|element| {
                                                 element.bg(theme.overlay_strong)
@@ -3554,15 +3640,34 @@ impl Insulator {
                                             "Fix"
                                         })
                                         .when(!is_preparing, |element| {
-                                            element.on_click(move |_, window, cx| {
-                                                let _ = fix_entity.update(cx, |this, cx| {
-                                                    this.fix_pull_request_findings(
-                                                        fix_request.clone(),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                });
-                                            })
+                                            element
+                                                .on_click(move |_, window, cx| {
+                                                    let _ = fix_entity.update(cx, |this, cx| {
+                                                        this.fix_pull_request_findings(
+                                                            fix_request.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    });
+                                                })
+                                                .on_key_down(move |event: &KeyDownEvent,
+                                                                   window,
+                                                                   cx| {
+                                                    if matches!(
+                                                        event.keystroke.key.as_str(),
+                                                        "enter" | "space"
+                                                    ) {
+                                                        let _ =
+                                                            key_fix_entity.update(cx, |this, cx| {
+                                                                this.fix_pull_request_findings(
+                                                                    key_fix_request.clone(),
+                                                                    window,
+                                                                    cx,
+                                                                );
+                                                            });
+                                                        cx.stop_propagation();
+                                                    }
+                                                })
                                         }),
                                 )
                             })
@@ -3807,5 +3912,26 @@ mod tests {
         assert_eq!(refreshed[0].body, "Cached body");
         assert_eq!(refreshed[0].cached_commits.len(), 1);
         assert_eq!(refreshed[0].cached_diff.as_deref(), Some("patch"));
+    }
+
+    #[test]
+    fn fix_origin_url_matches_requested_repository() {
+        use super::Insulator;
+        assert!(Insulator::fix_github_url_matches_repository(
+            "https://github.com/owner/repo",
+            "owner/repo"
+        ));
+        assert!(Insulator::fix_github_url_matches_repository(
+            "https://github.com/Owner/Repo",
+            "owner/repo"
+        ));
+        assert!(!Insulator::fix_github_url_matches_repository(
+            "https://github.com/fork/repo",
+            "owner/repo"
+        ));
+        assert!(!Insulator::fix_github_url_matches_repository(
+            "https://github.com/owner/other",
+            "owner/repo"
+        ));
     }
 }
