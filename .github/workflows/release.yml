@@ -23,7 +23,7 @@ env:
 jobs:
   version:
     name: Resolve version
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-2-vcpu
     timeout-minutes: 5
     outputs:
       version: ${{ steps.resolve.outputs.version }}
@@ -162,7 +162,7 @@ jobs:
   windows-x86_64:
     name: Windows x86_64
     needs: version
-    runs-on: windows-latest
+    runs-on: avrea-windows-2025-2-vcpu
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
@@ -270,7 +270,7 @@ jobs:
   macos:
     name: macOS
     needs: version
-    runs-on: macos-latest
+    runs-on: avrea-macos-latest-8-vcpu
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
