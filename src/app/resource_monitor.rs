@@ -63,7 +63,7 @@ struct Sample {
     /// token: a PID observed with a wildly different elapsed time across the
     /// ~1s sampling interval is a different process, even when the cumulative
     /// CPU delta looks plausible.
-    elapsed_secs: Option<f32>,
+    elapsed_secs: Option<f64>,
     /// `ps %CPU` decaying average, used only when no delta baseline exists.
     cpu_fallback: f32,
     rss_kb: u64,
@@ -143,17 +143,17 @@ fn parse_ps_time(field: &str) -> Option<f64> {
 /// Second resolution is coarse, so callers must allow a few seconds of slack
 /// for truncation and timer jitter; a reused PID shows up as tens of seconds
 /// (usually the whole previous lifetime) off, well outside that slack.
-fn parse_ps_etime(field: &str) -> Option<f32> {
+fn parse_ps_etime(field: &str) -> Option<f64> {
     let (days, rest) = match field.split_once('-') {
-        Some((days, rest)) => (days.parse::<f32>().ok()? * 86400.0, rest),
+        Some((days, rest)) => (days.parse::<f64>().ok()? * 86400.0, rest),
         None => (0.0, field),
     };
     let mut parts = rest.split(':').collect::<Vec<_>>();
-    let secs = parts.pop()?.parse::<f32>().ok()?;
+    let secs = parts.pop()?.parse::<f64>().ok()?;
     let mut total = secs;
     let mut factor = 60.0;
     while let Some(part) = parts.pop() {
-        total += part.parse::<f32>().ok()? * factor;
+        total += part.parse::<f64>().ok()? * factor;
         factor *= 60.0;
     }
     Some(days + total)
@@ -163,10 +163,10 @@ fn parse_ps_etime(field: &str) -> Option<f32> {
 /// (since-start) clock must advance by roughly the wall interval. Identity
 /// comes from PID plus this start token — never from ppid or comm, which a
 /// replacement process can share with its predecessor.
-fn pid_reused(prev_elapsed: f32, elapsed: f32, wall_secs: f32) -> bool {
+fn pid_reused(prev_elapsed: f64, elapsed: f64, wall_secs: f64) -> bool {
     // ELAPSED truncates to whole seconds and the wall timer jitters, so allow
     // a few seconds of slack either way.
-    const SLACK_SECS: f32 = 3.0;
+    const SLACK_SECS: f64 = 3.0;
     let drift = elapsed - prev_elapsed - wall_secs;
     drift.abs() > SLACK_SECS
 }
@@ -189,7 +189,7 @@ fn snapshot_from_samples(
     daemon_pid: Option<u32>,
     first: &HashMap<u32, Sample>,
     second: HashMap<u32, Sample>,
-    wall_secs: f32,
+    wall_secs: f64,
 ) -> ResourceUsageSnapshot {
     let mut raw_procs = HashMap::new();
     let mut children_by_ppid: HashMap<u32, Vec<u32>> = HashMap::new();
@@ -215,14 +215,14 @@ fn snapshot_from_samples(
                 if delta < 0.0 {
                     // PID reuse across the interval; fall back to the average.
                     sample.cpu_fallback
-                } else if delta as f32 / wall_secs * 100.0 > max_plausible {
+                } else if delta / wall_secs * 100.0 > max_plausible as f64 {
                     // PID reuse where the new process already has more
                     // cumulative CPU than the old one: the delta is the new
                     // process's whole lifetime, not one interval, so it would
                     // read as an implausible multi-thousand-% spike.
                     sample.cpu_fallback
                 } else {
-                    delta as f32 / wall_secs * 100.0
+                    (delta / wall_secs * 100.0) as f32
                 }
             }
             // Process appeared between samples: no baseline, so the
@@ -492,7 +492,7 @@ impl Insulator {
                 .background_executor()
                 .spawn(async move { sample_processes() })
                 .await;
-            let wall_secs = wall_start.elapsed().as_secs_f32().max(0.001);
+            let wall_secs = wall_start.elapsed().as_secs_f64().max(0.001);
             // Aggregate off the UI executor: walking/cloning/sorting the full
             // process list can block frames while the monitor polls.
             let snapshot = cx
@@ -999,6 +999,19 @@ mod tests {
         assert_eq!(parse_ps_etime("1-02:03:04"), Some(86400.0 + 7384.0));
         assert_eq!(parse_ps_etime(""), None);
         assert_eq!(parse_ps_etime("abc"), None);
+    }
+
+    #[test]
+    fn pid_reuse_token_stable_for_long_lived_process() {
+        // `f32` has a ULP of 8 above 2^26 (~776.7 days in seconds), so a
+        // true one-second ELAPSED increment straddling a quantum boundary
+        // (e.g. ...04 -> ...05) quantizes to an eight-second jump and trips
+        // the 3s slack. `f64` keeps 1s resolution essentially forever.
+        assert!(!pid_reused(67132804.0, 67132805.0, 1.0));
+        assert_eq!(
+            parse_ps_etime("777-01:02:03"),
+            Some(777.0 * 86400.0 + 3723.0)
+        );
     }
 
     #[test]

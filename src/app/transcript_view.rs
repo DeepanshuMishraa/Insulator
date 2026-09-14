@@ -3009,6 +3009,16 @@ fn activity_scroll_fade(
 /// cannot be resolved here (no blocking work on the render path), so DNS that
 /// points at private space is not covered — the check stops direct literal
 /// probes such as `http://127.0.0.1/…`, `http://10.…`, or metadata endpoints.
+fn is_public_unicast_v4(v4: std::net::Ipv4Addr) -> bool {
+    !(v4.is_loopback()
+        || v4.is_private()
+        || v4.is_link_local()
+        || v4.is_broadcast()
+        || v4.is_multicast()
+        || v4.is_unspecified()
+        || v4.is_documentation())
+}
+
 fn is_safe_remote_image_url(image_url: &str) -> bool {
     let Ok(parsed) = url::Url::parse(image_url) else {
         return false;
@@ -3031,16 +3041,14 @@ fn is_safe_remote_image_url(image_url: &str) -> bool {
         // behind an unstable feature): anything not clearly public
         // unicast is rejected.
         return match ip {
-            std::net::IpAddr::V4(v4) => {
-                !(v4.is_loopback()
-                    || v4.is_private()
-                    || v4.is_link_local()
-                    || v4.is_broadcast()
-                    || v4.is_multicast()
-                    || v4.is_unspecified()
-                    || v4.is_documentation())
-            }
+            std::net::IpAddr::V4(v4) => is_public_unicast_v4(v4),
             std::net::IpAddr::V6(v6) => {
+                // An IPv4-mapped literal such as `http://[::ffff:127.0.0.1]/`
+                // parses as V6 but addresses IPv4 space, so it must face the
+                // IPv4 deny-list rather than the V6 one.
+                if let Some(mapped) = v6.to_ipv4_mapped() {
+                    return is_public_unicast_v4(mapped);
+                }
                 !(v6.is_loopback()
                     || v6.is_multicast()
                     || v6.is_unspecified()
@@ -3050,6 +3058,34 @@ fn is_safe_remote_image_url(image_url: &str) -> bool {
         };
     }
     true
+}
+
+std::thread_local! {
+    /// Verdicts from `is_safe_remote_image_url` keyed by the raw URL. Render
+    /// calls this per visible image per frame, so a hit must cost only a hash
+    /// lookup: the parse plus lowercase allocation run on the first miss only.
+    /// Keys are short provider URLs — `data:` and attachment URLs never reach
+    /// the check — so a bounded map with clear-on-full eviction is enough.
+    static REMOTE_IMAGE_SAFETY_CACHE: RefCell<HashMap<String, bool>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Bounded verdict cache for `is_safe_remote_image_url`; render reads this.
+fn is_safe_remote_image_url_cached(image_url: &str) -> bool {
+    if let Some(verdict) =
+        REMOTE_IMAGE_SAFETY_CACHE.with(|cache| cache.borrow().get(image_url).copied())
+    {
+        return verdict;
+    }
+    let verdict = is_safe_remote_image_url(image_url);
+    REMOTE_IMAGE_SAFETY_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= 256 {
+            cache.clear();
+        }
+        cache.insert(image_url.to_owned(), verdict);
+    });
+    verdict
 }
 
 fn render_activity_image(
@@ -3085,7 +3121,7 @@ fn render_activity_image(
     if !insulator_protocol::blob::is_reference(image_url)
         && !image_url.starts_with(insulator_protocol::attachments::ATTACHMENT_SCHEME)
         && !image_url.starts_with("data:")
-        && is_safe_remote_image_url(image_url)
+        && is_safe_remote_image_url_cached(image_url)
     {
         return img(image_url.to_owned())
             .id(id)
@@ -3428,5 +3464,41 @@ mod remote_image_url_tests {
         assert!(!is_safe_remote_image_url(
             "https://user:pass@example.com/image.png"
         ));
+    }
+
+    #[test]
+    fn rejects_ipv4_mapped_ipv6_literals() {
+        // `::ffff:127.0.0.1` parses as V6 but targets IPv4 loopback.
+        assert!(!is_safe_remote_image_url(
+            "http://[::ffff:127.0.0.1]/image.png"
+        ));
+        assert!(!is_safe_remote_image_url(
+            "http://[::ffff:10.0.0.5]/image.png"
+        ));
+        assert!(!is_safe_remote_image_url(
+            "http://[::ffff:192.168.1.10]/image.png"
+        ));
+        assert!(!is_safe_remote_image_url(
+            "http://[::ffff:169.254.169.254]/image.png"
+        ));
+    }
+
+    #[test]
+    fn cached_verdict_matches_direct_check() {
+        for url in [
+            "https://example.com/image.png",
+            "http://[::ffff:127.0.0.1]/image.png",
+            "http://10.0.0.5/image.png",
+        ] {
+            assert_eq!(
+                is_safe_remote_image_url_cached(url),
+                is_safe_remote_image_url(url)
+            );
+            // Second call exercises the cache hit.
+            assert_eq!(
+                is_safe_remote_image_url_cached(url),
+                is_safe_remote_image_url(url)
+            );
+        }
     }
 }

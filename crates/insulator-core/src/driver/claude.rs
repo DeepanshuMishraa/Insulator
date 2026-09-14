@@ -480,30 +480,32 @@ impl ClaudeDriver {
                             }
                             next_request_id += 1;
                             let request_id = format!("insulator-{next_request_id}");
+                            // Register and commit before writing so a control
+                            // response that lands before the write returns is
+                            // still reconciled; a failed write removes the
+                            // registration and rolls the commit back so a dead
+                            // stdin cannot leave the bookkeeping ahead of the
+                            // CLI.
+                            let previous = {
+                                let mut current = writer_permission_mode.lock();
+                                let previous = *current;
+                                *current = next_mode;
+                                previous
+                            };
+                            writer_pending_permission_modes
+                                .lock()
+                                .insert(request_id.clone(), previous);
                             let written = write_line(
                                 &mut stdin,
                                 &json!({
                                     "type": "control_request",
-                                    "request_id": request_id,
+                                    "request_id": request_id.clone(),
                                     "request": {"subtype": "set_permission_mode", "mode": next_mode}
                                 }),
                             );
-                            if written.is_ok() {
-                                // The CLI applies the mode when it reads the
-                                // request; the reader reconciles below if the
-                                // matching control response reports an error.
-                                // Only commit once the transport accepted the
-                                // write so a dead stdin cannot leave the
-                                // bookkeeping ahead of the CLI.
-                                let previous = {
-                                    let mut current = writer_permission_mode.lock();
-                                    let previous = *current;
-                                    *current = next_mode;
-                                    previous
-                                };
-                                writer_pending_permission_modes
-                                    .lock()
-                                    .insert(request_id, previous);
+                            if written.is_err() {
+                                writer_pending_permission_modes.lock().remove(&request_id);
+                                *writer_permission_mode.lock() = previous;
                             }
                             written
                         }

@@ -3741,9 +3741,11 @@ impl Insulator {
                     if target != super::composer::PlanMode::Off {
                         // A fresh process always starts with planning off, so
                         // that is the fallback if applying the remembered mode
-                        // fails below.
+                        // fails below. Keep an older in-flight pre-toggle mode
+                        // for the same reason as `set_pi_plan_mode`.
                         self.plan_mode_fallback
-                            .insert(session_id, super::composer::PlanMode::Off);
+                            .entry(session_id)
+                            .or_insert(super::composer::PlanMode::Off);
                     }
                     driver.provider_control(super::composer::plan_mode_commands(
                         provider,

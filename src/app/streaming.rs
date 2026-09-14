@@ -465,6 +465,9 @@ impl Insulator {
             DriverEvent::PlanApproved => {
                 self.plan_modes
                     .insert(session_id, super::composer::PlanMode::Off);
+                // The provider confirmed the mode; no in-flight toggle remains
+                // to restore.
+                self.plan_mode_fallback.remove(&session_id);
                 if self.state.selected_session == Some(session_id) {
                     self.show_success_toast("Plan approved. Now working on it.");
                 }
@@ -510,6 +513,10 @@ impl Insulator {
                 };
                 if let Some(mode) = mode {
                     self.plan_modes.insert(session_id, mode);
+                    // The provider reported its authoritative mode, confirming
+                    // any in-flight toggle; drop the restorable pre-mode so a
+                    // late failure cannot revert this confirmation.
+                    self.plan_mode_fallback.remove(&session_id);
                 }
             }
             DriverEvent::SetEditorText(text) => {

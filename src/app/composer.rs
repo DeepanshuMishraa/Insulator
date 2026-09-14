@@ -2464,8 +2464,15 @@ impl Insulator {
         let commands = plan_mode_commands(provider, current, target);
         // Optimistic chip update: the driver applies the switch
         // asynchronously. Stash the pre-toggle mode so a
-        // `PlanModeSwitchFailed` event can restore it.
-        self.plan_mode_fallback.insert(session_id, current);
+        // `PlanModeSwitchFailed` event can restore it. Keep the oldest
+        // in-flight pre-mode: a second toggle issued before the first
+        // settles must not clobber it, or a late failure for the first
+        // would restore the mode before the *latest* toggle. The entry
+        // is cleared when the switch is confirmed (`ExtensionStatus`,
+        // `PlanApproved`) or consumed by a failure.
+        self.plan_mode_fallback
+            .entry(session_id)
+            .or_insert(current);
         self.plan_modes.insert(session_id, target);
         if let Some(runtime) = self.runtimes.get(&session_id) {
             runtime.driver.provider_control(commands);

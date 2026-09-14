@@ -1400,7 +1400,10 @@ pub struct Insulator {
     plan_modes: HashMap<Uuid, composer::PlanMode>,
     /// Pre-toggle mode per session, stashed alongside every optimistic chip
     /// update. A `PlanModeSwitchFailed` event restores it so a rejected
-    /// switch cannot leave the chip ahead of the provider.
+    /// switch cannot leave the chip ahead of the provider. Only the oldest
+    /// in-flight toggle has an entry: it is cleared when the switch is
+    /// confirmed (`ExtensionStatus`, `PlanApproved`), consumed by a failure,
+    /// or dropped with the session.
     plan_mode_fallback: HashMap<Uuid, composer::PlanMode>,
     /// Slash commands discovered per (provider, project root, CLI override).
     /// Filesystem and CLI probes live off the UI thread; frames read this cache.
