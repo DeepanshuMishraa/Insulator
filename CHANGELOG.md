@@ -16,6 +16,28 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.6]
+
+### Added
+
+- Extend the composer plan toggle beyond Pi to OpenCode, Cursor, Fx, Claude Code, Codex, and DeepSeek, with one remembered mode per session applied live and when a fresh session starts
+- Add a pull-request Fix action that addresses review findings in a new chat, with a preparing state while the PR branch and findings load
+- Detect process-ID reuse in the resource monitor so CPU readings stay attached to the right process
+
+### Changed
+
+- Wait for review comments and checks to finish loading before building the Fix prompt, so it never starts from an empty findings cache
+- Fetch the pull-request head through the `origin` remote only and respect worktree git overrides when matching a checkout
+- Queue pull-request refreshes so the existing list stays visible instead of flashing or dropping requests
+- Lower background overhead from CPU sampling, browser progress polling, terminal polling, and remote image caching
+
+### Fixed
+
+- Fix `gh`, `curl`, and `git` lookup when the app is launched from Finder with a minimal `PATH`
+- Roll back the plan chip when a plan-mode switch fails instead of leaving it ahead of the provider
+- Prevent transcript jumps when images load and skip invalid image URLs
+- Fix resource monitor blocking, stale origin reuse, and macOS-only platform state leaking onto Windows
+
 ## [0.1.5]
 
 ### Added

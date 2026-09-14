@@ -3737,7 +3737,7 @@ dependencies = [
 
 [[package]]
 name = "insulator"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "accesskit",
  "alacritty_terminal",
