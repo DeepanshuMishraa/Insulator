@@ -3542,6 +3542,21 @@ pub fn github_url_for_project(path: &Path) -> Option<String> {
     git_remote_github_url_via_cli(path)
 }
 
+/// Resolves the GitHub repository web URL from the project's `origin` remote
+/// only. Unlike [`github_url_for_project`], this never falls back to
+/// `upstream` or other remotes: flows that fetch from `origin` (e.g. the PR
+/// Fix flow's `git fetch origin pull/N/head`) must not reuse a checkout whose
+/// `origin` points elsewhere just because `upstream` happens to match.
+pub fn github_origin_url_for_project(path: &Path) -> Option<String> {
+    if let Some(git_dir) = resolve_git_dir(path) {
+        if let Some(url) = extract_github_origin_url_from_git_dir(&git_dir) {
+            return Some(url);
+        }
+    }
+
+    git_origin_github_url_via_cli(path)
+}
+
 fn resolve_git_dir(project_path: &Path) -> Option<PathBuf> {
     let dot_git = project_path.join(".git");
     if dot_git.is_dir() {
@@ -3561,6 +3576,56 @@ fn resolve_git_dir(project_path: &Path) -> Option<PathBuf> {
             }
         }
     }
+    None
+}
+
+fn extract_github_origin_url_from_git_dir(git_dir: &Path) -> Option<String> {
+    let config_path = git_dir.join("config");
+    if let Ok(config_text) = std::fs::read_to_string(config_path) {
+        if let Some(url) = find_github_origin_url_in_git_config(&config_text) {
+            return Some(url);
+        }
+    }
+
+    // If this is a worktree, its commondir points to the common repo git dir
+    let commondir_file = git_dir.join("commondir");
+    if let Ok(commondir_content) = std::fs::read_to_string(commondir_file) {
+        let common_path = git_dir.join(commondir_content.trim());
+        let config_path = common_path.join("config");
+        if let Ok(config_text) = std::fs::read_to_string(config_path) {
+            if let Some(url) = find_github_origin_url_in_git_config(&config_text) {
+                return Some(url);
+            }
+        }
+    }
+
+    None
+}
+
+fn find_github_origin_url_in_git_config(config_text: &str) -> Option<String> {
+    let mut current_remote: Option<String> = None;
+
+    for line in config_text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            let section = line[1..line.len() - 1].trim();
+            if let Some(rest) = section.strip_prefix("remote ") {
+                let name = rest.trim_matches('"').trim();
+                current_remote = Some(name.to_owned());
+            } else {
+                current_remote = None;
+            }
+        } else if let Some(ref remote_name) = current_remote {
+            if remote_name == "origin"
+                && let Some((key, val)) = line.split_once('=')
+                && key.trim() == "url"
+                && let Some(gh_url) = parse_github_remote_url(val.trim())
+            {
+                return Some(gh_url);
+            }
+        }
+    }
+
     None
 }
 
@@ -3663,6 +3728,25 @@ fn git_remote_github_url_via_cli(path: &Path) -> Option<String> {
                 }
             }
             return upstream_url.or(other_url);
+        }
+    }
+
+    None
+}
+
+fn git_origin_github_url_via_cli(path: &Path) -> Option<String> {
+    // Origin only: callers that fetch from `origin` must not match on
+    // `upstream` or other remotes. A non-GitHub `origin` parses to `None`
+    // and correctly rejects the project.
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(path)
+        .output()
+        && output.status.success()
+    {
+        let raw = String::from_utf8_lossy(&output.stdout);
+        if let Some(url) = parse_github_remote_url(&raw) {
+            return Some(url);
         }
     }
 

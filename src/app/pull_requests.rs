@@ -1995,9 +1995,11 @@ impl Insulator {
     /// True when the project's git origin names the requested repository.
     /// A click handler may run this synchronously; the helper prefers the
     /// fast `.git/config` read and only falls back to `git` for worktrees or
-    /// subdirectory projects the file lookup misses.
+    /// subdirectory projects the file lookup misses. Only `origin` is
+    /// considered: the Fix flow fetches `origin`, so an `upstream` match
+    /// must not reuse a checkout whose `origin` points elsewhere.
     fn fix_project_matches_repository(path: &std::path::Path, repository: &str) -> bool {
-        super::sidebar::github_url_for_project(path)
+        super::sidebar::github_origin_url_for_project(path)
             .is_some_and(|url| Self::fix_github_url_matches_repository(&url, repository))
     }
 
@@ -2024,13 +2026,19 @@ impl Insulator {
     }
 
     /// Review findings are ready when both comments and checks have settled
-    /// into either a cached value or a terminal error. Anything else means a
-    /// fetch is still in flight (or never started).
+    /// into either a cached value or a terminal error, and neither is still
+    /// loading. Anything else means a fetch is still in flight (or never
+    /// started). The loading check matters on retry: `ensure_*` leaves a
+    /// stale error in place while the retry runs, so value-or-error alone
+    /// would treat the in-flight retry as ready and build the prompt without
+    /// the newly fetched findings.
     fn fix_findings_ready(&self, key: &(String, u64)) -> bool {
         (self.pull_request_comments.contains_key(key)
             || self.pull_request_comments_error.contains_key(key))
             && (self.pull_request_checks.contains_key(key)
                 || self.pull_request_checks_error.contains_key(key))
+            && !self.pull_request_comments_loading.contains(key)
+            && !self.pull_request_checks_loading.contains(key)
     }
 
     /// Resume a deferred Fix request once its findings arrive. Called from

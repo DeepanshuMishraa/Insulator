@@ -154,6 +154,9 @@ fn snapshot_from_samples(
 ) -> ResourceUsageSnapshot {
     let mut raw_procs = HashMap::new();
     let mut children_by_ppid: HashMap<u32, Vec<u32>> = HashMap::new();
+    // Core count cannot meaningfully change mid-call; hoist the
+    // `available_parallelism()` syscall out of the per-process loop.
+    let max_plausible = max_plausible_cpu_percent();
 
     for sample in second.values() {
         let cpu = match (
@@ -165,7 +168,7 @@ fn snapshot_from_samples(
                 if delta < 0.0 {
                     // PID reuse across the interval; fall back to the average.
                     sample.cpu_fallback
-                } else if delta as f32 / wall_secs * 100.0 > max_plausible_cpu_percent() {
+                } else if delta as f32 / wall_secs * 100.0 > max_plausible {
                     // PID reuse where the new process already has more
                     // cumulative CPU than the old one: the delta is the new
                     // process's whole lifetime, not one interval, so it would
@@ -443,8 +446,14 @@ impl Insulator {
                 .spawn(async move { sample_processes() })
                 .await;
             let wall_secs = wall_start.elapsed().as_secs_f32().max(0.001);
-            let snapshot =
-                snapshot_from_samples(app_pid, daemon_pid, &first, second, wall_secs);
+            // Aggregate off the UI executor: walking/cloning/sorting the full
+            // process list can block frames while the monitor polls.
+            let snapshot = cx
+                .background_executor()
+                .spawn(async move {
+                    snapshot_from_samples(app_pid, daemon_pid, &first, second, wall_secs)
+                })
+                .await;
 
             let _ = weak.update(cx, |this, cx| {
                 if this.resource_usage_generation != generation {

@@ -3036,6 +3036,10 @@ fn render_activity_image(
             .id(id)
             .w(px(ACTIVITY_IMAGE_WIDTH))
             .max_w(gpui::relative(1.0))
+            // Reserve the placeholder height while the network image loads so
+            // the row does not collapse to zero height and jump on arrival.
+            // `min_h` keeps the loaded ceiling (`max_h`) intact.
+            .min_h(px(80.0))
             .max_h(px(ACTIVITY_IMAGE_HEIGHT))
             .mt(px(8.0))
             .rounded(px(4.0))
