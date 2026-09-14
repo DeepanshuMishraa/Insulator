@@ -170,7 +170,11 @@ fn cache_github_avatar(login: &str, url: &str) -> Option<String> {
         return Some(path.to_string_lossy().into_owned());
     }
     std::fs::create_dir_all(&cache_dir).ok()?;
-    let output = std::process::Command::new("curl")
+    let mut curl = std::process::Command::new("curl");
+    if let Some(path) = crate::command_env::executable_search_path() {
+        curl.env("PATH", path);
+    }
+    let output = curl
         .args(["--fail", "--silent", "--show-error", "--location", "--max-time", "10", url])
         .output()
         .ok()?;
@@ -190,18 +194,41 @@ struct GhRepository {
 const GH_FIELDS: &str = "number,title,author,body,state,updatedAt,url,repository,createdAt";
 const PULL_REQUEST_ROW_HEIGHT: f32 = 56.0;
 
+/// Release builds launched from Finder/LaunchServices inherit a minimal
+/// `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), so a bare `gh` lookup fails
+/// with `No such file or directory (os error 2)` even though it works when
+/// launched from a terminal (dev watcher). `crate::command_env` extends the
+/// search path with the usual Homebrew/user-tool locations, matching the
+/// terminal surface.
+fn gh_command() -> std::process::Command {
+    let mut command = std::process::Command::new("gh");
+    if let Some(path) = crate::command_env::executable_search_path() {
+        command.env("PATH", path);
+    }
+    command
+}
+
+fn gh_spawn_error(error: std::io::Error) -> anyhow::Error {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        anyhow::anyhow!("GitHub CLI (gh) not found. Install it (e.g. `brew install gh`) and restart Insulator.")
+    } else {
+        error.into()
+    }
+}
+
 fn load_owned_repository_pull_requests(limit: usize) -> anyhow::Result<Vec<GhPullRequest>> {
-    let login = std::process::Command::new("gh")
+    let login = gh_command()
         .args(["api", "user", "--jq", ".login"])
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_PAGER", "cat")
         .stdin(Stdio::null())
-        .output()?;
+        .output()
+        .map_err(gh_spawn_error)?;
     if !login.status.success() {
         anyhow::bail!("gh api user failed");
     }
     let owner = String::from_utf8_lossy(&login.stdout).trim().to_owned();
-    let output = std::process::Command::new("gh")
+    let output = gh_command()
         .args([
             "search", "prs", "--owner", &owner, "--state", "open", "--limit", &limit.to_string(), "--json",
             GH_FIELDS,
@@ -209,7 +236,8 @@ fn load_owned_repository_pull_requests(limit: usize) -> anyhow::Result<Vec<GhPul
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_PAGER", "cat")
         .stdin(Stdio::null())
-        .output()?;
+        .output()
+        .map_err(gh_spawn_error)?;
     if !output.status.success() {
         anyhow::bail!(
             "gh search prs --owner failed: {}",
@@ -217,7 +245,7 @@ fn load_owned_repository_pull_requests(limit: usize) -> anyhow::Result<Vec<GhPul
         );
     }
     let mut requests: Vec<GhPullRequest> = serde_json::from_slice(&output.stdout)?;
-    let closed = std::process::Command::new("gh")
+    let closed = gh_command()
         .args([
             "search", "prs", "--owner", &owner, "--state", "closed", "--limit", &limit.to_string(), "--json",
             GH_FIELDS,
@@ -225,7 +253,8 @@ fn load_owned_repository_pull_requests(limit: usize) -> anyhow::Result<Vec<GhPul
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_PAGER", "cat")
         .stdin(Stdio::null())
-        .output()?;
+        .output()
+        .map_err(gh_spawn_error)?;
     if closed.status.success() {
         requests.extend(serde_json::from_slice::<Vec<GhPullRequest>>(
             &closed.stdout,
@@ -235,7 +264,7 @@ fn load_owned_repository_pull_requests(limit: usize) -> anyhow::Result<Vec<GhPul
 }
 
 fn gh_output(args: &[&str]) -> anyhow::Result<std::process::Output> {
-    let mut command = std::process::Command::new("gh");
+    let mut command = gh_command();
     command
         .args(args)
         .env("GH_PROMPT_DISABLED", "1")
@@ -243,7 +272,7 @@ fn gh_output(args: &[&str]) -> anyhow::Result<std::process::Output> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn()?;
+    let mut child = command.spawn().map_err(gh_spawn_error)?;
     let stdout = child.stdout.take().expect("stdout was piped");
     let stderr = child.stderr.take().expect("stderr was piped");
     let stdout_reader = thread::spawn(move || {
@@ -900,7 +929,7 @@ fn load_pull_request_commits(request: &PullRequest) -> anyhow::Result<Vec<PullRe
 
 fn load_pull_requests(limit: usize) -> anyhow::Result<Vec<PullRequest>> {
     let search = |args: &[&str], state: Option<&str>| -> anyhow::Result<Vec<GhPullRequest>> {
-        let mut command = std::process::Command::new("gh");
+        let mut command = gh_command();
         command
             .args(["search", "prs"])
             .args(args)
@@ -912,7 +941,8 @@ fn load_pull_requests(limit: usize) -> anyhow::Result<Vec<PullRequest>> {
         }
         let output = command
             .args(["--limit", &limit.to_string(), "--json", GH_FIELDS])
-            .output()?;
+            .output()
+            .map_err(gh_spawn_error)?;
         if !output.status.success() {
             anyhow::bail!(
                 "gh search prs failed: {}",
