@@ -1071,6 +1071,10 @@ fn sort_pull_requests(entries: &mut [PullRequest]) {
 
 impl Insulator {
     pub(super) fn ensure_pull_requests(&mut self, force: bool, cx: &mut Context<Self>) {
+        if self.pull_requests_loading_more {
+            self.pull_requests_refresh_queued = true;
+            return;
+        }
         if self.pull_requests_refreshing {
             return;
         }
@@ -1116,14 +1120,11 @@ impl Insulator {
     }
 
     pub(super) fn ensure_more_pull_requests(&mut self, cx: &mut Context<Self>) {
-        if self.pull_requests_refreshing
-            || self.pull_requests_loading_more
-            || !self.pull_requests_has_more
-        {
+        if self.pull_requests_loading_more || !self.pull_requests_has_more {
             return;
         }
         self.pull_requests_loading_more = true;
-        self.pull_requests_refreshing = true;
+        self.pull_requests_page_error = None;
         cx.notify();
         let cursor = self.pull_requests_cursor.clone();
         let cached = self.pull_requests.clone();
@@ -1138,7 +1139,6 @@ impl Insulator {
                 .await;
             let _ = entity.update(cx, |this, cx| {
                 this.pull_requests_loading_more = false;
-                this.pull_requests_refreshing = false;
                 match result {
                     Ok((mut entries, next_cursor, cached)) => {
                         preserve_cached_details(&mut entries, &cached);
@@ -1156,8 +1156,12 @@ impl Insulator {
                         this.pull_requests_error = None;
                     }
                     Err(error) => {
-                        this.pull_requests_error = Some(error.to_string());
+                        this.pull_requests_page_error = Some(error.to_string());
                     }
+                }
+                if this.pull_requests_refresh_queued {
+                    this.pull_requests_refresh_queued = false;
+                    this.ensure_pull_requests(true, cx);
                 }
                 cx.notify();
             });
@@ -1957,6 +1961,18 @@ impl Insulator {
             })
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
+        if entries.is_empty()
+            && self.pull_requests_has_more
+            && !self.pull_requests_loading
+            && !self.pull_requests_loading_more
+        {
+            let entity = cx.entity().downgrade();
+            cx.defer(move |cx| {
+                let _ = entity.update(cx, |this, cx| {
+                    this.ensure_more_pull_requests(cx);
+                });
+            });
+        }
         self.sync_pull_request_rows(&entries);
         let search = TextField::new("pull-requests-search", self.pull_requests_search.clone())
             .icon("icons/search.svg", 14.0)
@@ -1996,6 +2012,20 @@ impl Insulator {
                 .py(px(40.0))
                 .text_color(theme.danger)
                 .child(SharedString::from(error.clone()))
+                .into_any_element()
+        } else if entries.is_empty() && self.pull_requests_page_error.is_some() {
+            div()
+                .px(px(20.0))
+                .py(px(40.0))
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(8.0))
+                .text_color(theme.danger)
+                .child(SharedString::from(
+                    self.pull_requests_page_error.clone().unwrap_or_default(),
+                ))
+                .child("Scroll or refresh to retry")
                 .into_any_element()
         } else if entries.is_empty() {
             div()
@@ -2139,8 +2169,8 @@ impl Insulator {
                     .w_full()
                     .child(body)
                     .when(self.pull_requests_loading_more, |el| {
-                        el.child(
-                            div()
+                            el.child(
+                                div()
                                 .absolute()
                                 .left(px(12.0))
                                 .right(px(12.0))
@@ -2161,6 +2191,31 @@ impl Insulator {
                                         .text_size(sp(12.0))
                                         .text_color(theme.text_secondary),
                                 ),
+                            )
+                        }
+                    )
+                    .when_some(self.pull_requests_page_error.clone(), |el, error| {
+                        let entity = pull_requests.clone();
+                        el.child(
+                            div()
+                                .absolute()
+                                .left(px(12.0))
+                                .right(px(12.0))
+                                .bottom(px(12.0))
+                                .py(px(10.0))
+                                .id("pull-requests-pagination-retry")
+                                .rounded(px(8.0))
+                                .bg(theme.surface)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_color(theme.danger)
+                                .child(SharedString::from(format!("Could not load more: {error}")))
+                                .on_click(move |_, _, cx| {
+                                    let _ = entity.update(cx, |this, cx| {
+                                        this.ensure_more_pull_requests(cx);
+                                    });
+                                }),
                         )
                     })
                     .child(scrollbar::vertical(

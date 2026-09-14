@@ -1909,12 +1909,9 @@ fn render_environment_summary_section(
                 .child(tr!("environment.title")),
         )
         .child(commit)
-        .when(
-            environment.can_open_pull_request
-                || pull_request_pending
-                || environment.has_non_default_branch,
-            |section| section.child(pull_request),
-        )
+        .when(environment.has_non_default_branch, |section| {
+            section.child(pull_request)
+        })
         .child(compare)
 }
 

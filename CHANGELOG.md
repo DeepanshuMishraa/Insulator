@@ -16,6 +16,35 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.5]
+
+### Added
+
+- Add a dedicated pull-request workspace with All, Open, Closed, and Merged filters
+- Add pull-request search across titles and repositories
+- Add pull-request detail views for Summary, Timeline, and Code
+- Add branch names, change statistics, reviewers, checks, status, timestamps, and GitHub links to the detail view
+- Add pull-request comments with issue and review-comment support, inline file locations, severity tags, collapse/expand controls, and replies
+- Add pull-request comment submission with Enter to send and Shift-Enter for a multiline comment
+- Add cursor-based pull-request pagination with automatic loading as the list is scrolled
+- Add cached GitHub author avatars for pull-request headers
+
+### Changed
+
+- Keep existing pull requests visible while refreshing or loading another page
+- Sort pull requests newest first
+- Show inline progress and retry feedback when another page is loading or fails
+- Refresh pull-request metadata on demand so cached entries receive current branch and comment data
+- Make main chat, file, and review tabs and their close controls keyboard-focusable with visible focus states
+
+### Fixed
+
+- Show pull requests opened by other users in repositories owned by the signed-in GitHub user
+- Show the correct head and base branches instead of fallback labels
+- Show the actual comment count, including review comments
+- Show the correct avatar for each pull-request author
+- Prevent refresh requests from being lost while pagination is in progress
+
 ## [0.1.4]
 
 - Add a Transparent window style with native macOS vibrancy and live window transparency controls
