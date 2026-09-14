@@ -842,12 +842,15 @@ pub fn set_sidebar_material_transparency(sidebar_color: Hsla, sidebar_transparen
 pub fn set_sidebar_material_transparency(_: Hsla, _: f32) {}
 
 thread_local! {
+    #[cfg(target_os = "macos")]
     static LIQUID_GLASS_VIEW: std::cell::RefCell<Option<objc2::rc::Retained<objc2_app_kit::NSView>>> =
         const { std::cell::RefCell::new(None) };
     static CURRENT_WINDOW_STYLE: std::cell::Cell<insulator_protocol::theme::WindowStyle> =
         const { std::cell::Cell::new(insulator_protocol::theme::WindowStyle::Solid) };
+    #[cfg(target_os = "macos")]
     static MAIN_WINDOW: std::cell::RefCell<Option<objc2::rc::Retained<objc2_app_kit::NSWindow>>> =
         const { std::cell::RefCell::new(None) };
+    #[cfg(target_os = "macos")]
     static MAIN_VIEW: std::cell::RefCell<Option<objc2::rc::Retained<objc2_app_kit::NSView>>> =
         const { std::cell::RefCell::new(None) };
 }
