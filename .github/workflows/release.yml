@@ -298,6 +298,10 @@ jobs:
       # Insulator is distributed without a Developer ID certificate or
       # notarization. Sparkle still authenticates the update archive with its
       # Ed25519 key, while the app and DMG use an ad-hoc signature.
+      - name: Clean stale DMG mounts
+        run: |
+          hdiutil detach "/Volumes/Insulator" -force || true
+          rm -f dist/rw.*.dmg || true
       - name: Release
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}

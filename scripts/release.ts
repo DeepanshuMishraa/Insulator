@@ -449,7 +449,35 @@ try {
   await rm(outputPath, { force: true });
 
   logStep(`Creating the styled DMG at ${outputPath}`);
-  await $`create-dmg --volname ${volumeName} --window-pos 200 120 --window-size 660 400 --text-size 13 --icon-size 128 --icon ${`${appName}.app`} 180 178 --hide-extension ${`${appName}.app`} --app-drop-link 480 178 --filesystem APFS --format ULFO --no-internet-enable --overwrite ${outputPath} ${stagingDirectory}`;
+  // create-dmg flakes on CI with "interstitial disk image was not found"
+  // (stale /Volumes/<name> mount left by a prior attempt, or an hdiutil
+  // attach race). Clear stale state and retry so one flake doesn't fail the release.
+  await $`rm -f ${join(dirname(outputPath), "rw.*.dmg")}`
+    .quiet()
+    .nothrow();
+  await $`hdiutil detach ${`/Volumes/${volumeName}`} -force`
+    .quiet()
+    .nothrow();
+  let createDmgFailed = true;
+  for (let attempt = 1; attempt <= 3 && createDmgFailed; attempt++) {
+    const result =
+      await $`create-dmg --volname ${volumeName} --window-pos 200 120 --window-size 660 400 --text-size 13 --icon-size 128 --icon ${`${appName}.app`} 180 178 --hide-extension ${`${appName}.app`} --app-drop-link 480 178 --filesystem APFS --format ULFO --no-internet-enable --overwrite ${outputPath} ${stagingDirectory}`
+        .nothrow();
+    createDmgFailed = result.exitCode !== 0;
+    if (createDmgFailed && attempt < 3) {
+      console.warn(`create-dmg attempt ${attempt}/3 failed, retrying...`);
+      await $`hdiutil detach ${`/Volumes/${volumeName}`} -force`
+        .quiet()
+        .nothrow();
+      await $`rm -f ${join(dirname(outputPath), "rw.*.dmg")}`
+        .quiet()
+        .nothrow();
+      await Bun.sleep(5000);
+    }
+  }
+  if (createDmgFailed) {
+    throw new Error("create-dmg failed after 3 attempts.");
+  }
 
   logStep(adhoc ? "Ad-hoc signing the DMG" : "Signing the DMG");
   if (adhoc) {
