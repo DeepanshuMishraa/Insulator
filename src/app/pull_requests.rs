@@ -207,6 +207,12 @@ struct GhAuthor {
 fn cache_pull_request_media(urls: Vec<String>) -> HashMap<String, std::path::PathBuf> {
     use std::hash::{Hash, Hasher as _};
 
+    // Bound what an attacker-controlled PR body can make us fetch: HTTPS
+    // only (redirects too), a short redirect chain, and a hard byte cap
+    // enforced by curl plus a pre-write length check (curl buffers stdout
+    // in memory before we persist anything).
+    const MAX_MEDIA_BYTES: usize = 20 * 1024 * 1024;
+
     let Some(cache_dir) = dirs::cache_dir().map(|dir| dir.join("Insulator/pull-request-media"))
     else {
         return HashMap::new();
@@ -216,6 +222,7 @@ fn cache_pull_request_media(urls: Vec<String>) -> HashMap<String, std::path::Pat
     }
 
     urls.into_iter()
+        .filter(|url| url.starts_with("https://"))
         .filter_map(|url| {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             url.hash(&mut hasher);
@@ -231,13 +238,24 @@ fn cache_pull_request_media(urls: Vec<String>) -> HashMap<String, std::path::Pat
                         "--silent",
                         "--show-error",
                         "--location",
+                        "--proto",
+                        "=https",
+                        "--proto-redir",
+                        "=https",
+                        "--max-redirs",
+                        "5",
+                        "--max-filesize",
+                        &MAX_MEDIA_BYTES.to_string(),
                         "--max-time",
                         "20",
                         &url,
                     ])
                     .output()
                     .ok()?;
-                if !output.status.success() || output.stdout.is_empty() {
+                if !output.status.success()
+                    || output.stdout.is_empty()
+                    || output.stdout.len() > MAX_MEDIA_BYTES
+                {
                     return None;
                 }
                 std::fs::write(&path, output.stdout).ok()?;
@@ -248,6 +266,10 @@ fn cache_pull_request_media(urls: Vec<String>) -> HashMap<String, std::path::Pat
 }
 
 fn cache_github_avatar(login: &str, url: &str) -> Option<String> {
+    const MAX_AVATAR_BYTES: usize = 5 * 1024 * 1024;
+    if !url.starts_with("https://") {
+        return None;
+    }
     let cache_dir = dirs::cache_dir()?.join("Insulator").join("github-avatars");
     let path = cache_dir.join(format!("{login}.png"));
     if path.is_file() {
@@ -259,10 +281,29 @@ fn cache_github_avatar(login: &str, url: &str) -> Option<String> {
         curl.env("PATH", path);
     }
     let output = curl
-        .args(["--fail", "--silent", "--show-error", "--location", "--max-time", "10", url])
+        .args([
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--location",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--max-redirs",
+            "5",
+            "--max-filesize",
+            &MAX_AVATAR_BYTES.to_string(),
+            "--max-time",
+            "10",
+            url,
+        ])
         .output()
         .ok()?;
-    if !output.status.success() || output.stdout.is_empty() {
+    if !output.status.success()
+        || output.stdout.is_empty()
+        || output.stdout.len() > MAX_AVATAR_BYTES
+    {
         return None;
     }
     std::fs::write(&path, output.stdout).ok()?;
@@ -3114,6 +3155,7 @@ fn render_pull_request_row(
         .on_click(move |_, _, cx| {
             let _ = insulator.update(cx, |this, cx| {
                 this.pull_request_detail = Some(request.clone());
+                this.pull_request_detail_selection.clear();
                 this.pull_request_comment_input.update(cx, |input, cx| input.clear(cx));
                 this.pull_request_detail_tab = PullRequestDetailTab::Summary;
                 this.pull_request_detail_scroll_handle.set_offset(Point::default());
@@ -3316,20 +3358,39 @@ impl Insulator {
                     player.update(cx, |player, cx| player.sync_native_state(false, false, cx));
                 }
             }
+            let mut missing_video_urls = Vec::new();
             for url in &video_urls {
                 if !self.pull_request_video_views.contains_key(url) {
-                    let player_url = url.clone();
-                    let detail_scroll = self.pull_request_detail_scroll_handle.clone();
-                    let player = cx.new(|cx| {
-                        crate::browser::BrowserView::new_embedded_video(
-                            &player_url,
-                            detail_scroll,
-                            window,
-                            cx,
-                        )
-                    });
-                    self.pull_request_video_views.insert(url.clone(), player);
+                    missing_video_urls.push(url.clone());
                 }
+            }
+            if !missing_video_urls.is_empty() {
+                // Native webview construction blocks, so it must not run
+                // inside render: defer entity creation past this frame and
+                // paint the link-card fallback until the players land.
+                let detail_scroll = self.pull_request_detail_scroll_handle.clone();
+                let entity = cx.entity().downgrade();
+                window.defer(cx, move |window, cx| {
+                    let _ = entity.update(cx, |this, cx| {
+                        for url in &missing_video_urls {
+                            if this.pull_request_video_views.contains_key(url) {
+                                continue;
+                            }
+                            let player_url = url.clone();
+                            let scroll = detail_scroll.clone();
+                            let player = cx.new(|cx| {
+                                crate::browser::BrowserView::new_embedded_video(
+                                    &player_url,
+                                    scroll,
+                                    window,
+                                    cx,
+                                )
+                            });
+                            this.pull_request_video_views.insert(url.clone(), player);
+                        }
+                        cx.notify();
+                    });
+                });
             }
             for player in self.pull_request_video_views.values() {
                 player.update(cx, |player, cx| {
@@ -4063,6 +4124,7 @@ impl Insulator {
                                     .on_click(move |_, _, cx| {
                                         let _ = close.update(cx, |this, cx| {
                                             this.pull_request_detail = None;
+                                            this.pull_request_detail_selection.clear();
                                             this.set_right_panel_visible(false, cx);
                                         });
                                     }),

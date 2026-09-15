@@ -415,7 +415,8 @@ impl Insulator {
                 .right_panel_active_surface
                 .and_then(|index| self.right_panel_surfaces.get(index))
                 .is_some_and(|surface| matches!(surface, RightPanelSurface::BackgroundWork { .. }));
-        let reviewing_pull_request = self.pull_request_detail.is_some()
+        let reviewing_pull_request = self.right_panel_visible
+            && self.pull_request_detail.is_some()
             && self.pull_request_detail_tab == crate::app::pull_requests::PullRequestDetailTab::Summary;
         let selected = reviewing_diff
             .then(|| {
