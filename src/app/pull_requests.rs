@@ -7,7 +7,7 @@ use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use gpui::Point;
+use gpui::{Bounds, Pixels, Point};
 
 use crate::theme::ActiveTheme as _;
 use crate::ui::scrollbar;
@@ -18,6 +18,47 @@ pub(super) enum PullRequestDetailTab {
     Summary,
     Commits,
     Code,
+}
+
+fn pull_request_selection_offset(
+    current: Pixels,
+    max_offset: Pixels,
+    top: Pixels,
+    bottom: Pixels,
+    position_y: Pixels,
+) -> Pixels {
+    let edge_zone = px(40.0);
+    if position_y < top + edge_zone {
+        let distance = (top + edge_zone - position_y).max(Pixels::ZERO);
+        let speed = (f32::from(distance) * 0.4 + 4.0).clamp(3.0, 35.0);
+        (current + px(speed)).min(Pixels::ZERO)
+    } else if position_y > bottom - edge_zone {
+        let distance = (position_y - (bottom - edge_zone)).max(Pixels::ZERO);
+        let speed = (f32::from(distance) * 0.4 + 4.0).clamp(3.0, 35.0);
+        (current - px(speed)).max(-max_offset)
+    } else {
+        current
+    }
+}
+
+fn scroll_pull_request_selection_at_edge(
+    scroll: &ScrollHandle,
+    bounds: Bounds<Pixels>,
+    position: Point<Pixels>,
+) -> bool {
+    let current = scroll.offset().y;
+    let next = pull_request_selection_offset(
+        current,
+        scroll.max_offset().y,
+        bounds.top(),
+        bounds.bottom(),
+        position.y,
+    );
+    if next == current {
+        return false;
+    }
+    scroll.set_offset(point(Pixels::ZERO, next));
+    true
 }
 
 impl PullRequestDetailTab {
@@ -161,6 +202,49 @@ struct GhAuthor {
     login: String,
     #[serde(rename = "avatarUrl", default)]
     avatar_url: String,
+}
+
+fn cache_pull_request_media(urls: Vec<String>) -> HashMap<String, std::path::PathBuf> {
+    use std::hash::{Hash, Hasher as _};
+
+    let Some(cache_dir) = dirs::cache_dir().map(|dir| dir.join("Insulator/pull-request-media"))
+    else {
+        return HashMap::new();
+    };
+    if std::fs::create_dir_all(&cache_dir).is_err() {
+        return HashMap::new();
+    }
+
+    urls.into_iter()
+        .filter_map(|url| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            url.hash(&mut hasher);
+            let path = cache_dir.join(format!("{:016x}", hasher.finish()));
+            if !path.is_file() {
+                let mut curl = std::process::Command::new("curl");
+                if let Some(search_path) = crate::command_env::executable_search_path() {
+                    curl.env("PATH", search_path);
+                }
+                let output = curl
+                    .args([
+                        "--fail",
+                        "--silent",
+                        "--show-error",
+                        "--location",
+                        "--max-time",
+                        "20",
+                        &url,
+                    ])
+                    .output()
+                    .ok()?;
+                if !output.status.success() || output.stdout.is_empty() {
+                    return None;
+                }
+                std::fs::write(&path, output.stdout).ok()?;
+            }
+            Some((url, path))
+        })
+        .collect()
 }
 
 fn cache_github_avatar(login: &str, url: &str) -> Option<String> {
@@ -752,9 +836,10 @@ fn without_html_comments(body: &str) -> String {
     // destinations inline and routes video destinations to an inline player
     // card.
     let with_media = html_media_to_markdown(&result);
+    let with_video_urls = rewrite_video_heading_urls(&with_media);
 
-    let mut summary_cleaned = String::with_capacity(with_media.len());
-    let mut rest = with_media.as_str();
+    let mut summary_cleaned = String::with_capacity(with_video_urls.len());
+    let mut rest = with_video_urls.as_str();
     while let Some(start) = rest.find("<summary>") {
         summary_cleaned.push_str(&rest[..start]);
         if let Some(end) = rest[start + 9..].find("</summary>") {
@@ -837,6 +922,31 @@ fn html_media_to_markdown(body: &str) -> String {
     }
     output.push_str(rest);
     output
+}
+
+fn rewrite_video_heading_urls(body: &str) -> String {
+    let mut in_video_section = false;
+    body.lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with('#') {
+                in_video_section = trimmed
+                    .trim_start_matches('#')
+                    .trim()
+                    .eq_ignore_ascii_case("video");
+                return line.to_owned();
+            }
+            if in_video_section
+                && trimmed.starts_with("https://")
+                && !trimmed.contains(char::is_whitespace)
+            {
+                let url = trimmed.trim_end_matches(['.', ',', ')']);
+                return line.replace(trimmed, &format!("![insulator-video-marker]({url})"));
+            }
+            line.to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Extract the `src` attribute value from a single HTML tag (double- or
@@ -1339,6 +1449,40 @@ impl Insulator {
         .detach();
     }
 
+    fn ensure_pull_request_media(&mut self, body: &str, cx: &mut Context<Self>) {
+        let cleaned = without_html_comments(body);
+        let mut markdown = MarkdownView::new();
+        markdown.set_text(&cleaned, false);
+        let urls = markdown
+            .image_urls()
+            .into_iter()
+            .filter(|url| {
+                !self.pull_request_media_paths.contains_key(url)
+                    && self.pull_request_media_loading.insert(url.clone())
+            })
+            .collect::<Vec<_>>();
+        if urls.is_empty() {
+            return;
+        }
+
+        let entity = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let requested = urls.clone();
+            let loaded = cx
+                .background_executor()
+                .spawn(async move { cache_pull_request_media(urls) })
+                .await;
+            let _ = entity.update(cx, |this, cx| {
+                for url in requested {
+                    this.pull_request_media_loading.remove(&url);
+                }
+                this.pull_request_media_paths.extend(loaded);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn ensure_pull_request_body(
         &mut self,
         request: PullRequest,
@@ -1365,6 +1509,7 @@ impl Insulator {
                 match result {
                     Ok(loaded) => {
                         this.pull_request_body_error.remove(&key);
+                        this.ensure_pull_request_media(&loaded.body, cx);
                         if let Some(entry) = this.pull_requests.iter_mut().find(|entry| {
                             entry.repository == key.0 && entry.number == key.1
                         }) {
@@ -1977,7 +2122,7 @@ impl Insulator {
                                     format!("pull-request-comment-{}-{index}", key.1),
                                     &palette,
                                     MarkdownMetrics::document(self.state.ui_font_size, self.state.code_font_size),
-                                    self.transcript_selection.clone(),
+                                    self.pull_request_detail_selection.clone(),
                                 )
                                 .with_math_enabled(self.state.render_math)
                                 .with_link_handler(self.markdown_link_handler.clone());
@@ -2972,6 +3117,7 @@ fn render_pull_request_row(
                 this.pull_request_comment_input.update(cx, |input, cx| input.clear(cx));
                 this.pull_request_detail_tab = PullRequestDetailTab::Summary;
                 this.pull_request_detail_scroll_handle.set_offset(Point::default());
+                this.ensure_pull_request_media(&request.body, cx);
                 this.ensure_pull_request_body(request.clone(), cx);
                 this.ensure_pull_request_commits(request.clone(), cx);
                 this.ensure_pull_request_checks(request.clone(), cx);
@@ -3084,6 +3230,7 @@ impl Insulator {
     pub(super) fn render_pull_request_detail_panel(
         &mut self,
         width: f32,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let theme = Theme::current(cx);
@@ -3091,6 +3238,7 @@ impl Insulator {
             return div().id("pull-request-detail-empty").w(px(width)).h_full();
         };
         let close = cx.entity().downgrade();
+        let view_id = cx.entity().entity_id();
         let selected_tab = self.pull_request_detail_tab;
         let detail_entity = cx.entity().downgrade();
         let commit_key = (request.repository.clone(), request.number);
@@ -3104,6 +3252,8 @@ impl Insulator {
             request.url.clone()
         };
         let body = without_html_comments(&request.body);
+        let show_video_players = selected_tab == PullRequestDetailTab::Summary
+            && !self.is_pr_section_collapsed(&commit_key, "description");
         let loading_style = ShimmerStyle::new()
             .duration(Duration::from_secs(3))
             .highlight_color(cx.theme().primary)
@@ -3153,6 +3303,45 @@ impl Insulator {
             }
             let (_, view) = cache.as_mut().expect("markdown cache initialized");
             view.set_text(&body, false);
+            let video_urls = view.video_urls();
+
+            let stale_urls = self
+                .pull_request_video_views
+                .keys()
+                .filter(|url| !video_urls.contains(url))
+                .cloned()
+                .collect::<Vec<_>>();
+            for url in stale_urls {
+                if let Some(player) = self.pull_request_video_views.remove(&url) {
+                    player.update(cx, |player, cx| player.sync_native_state(false, false, cx));
+                }
+            }
+            for url in &video_urls {
+                if !self.pull_request_video_views.contains_key(url) {
+                    let player_url = url.clone();
+                    let detail_scroll = self.pull_request_detail_scroll_handle.clone();
+                    let player = cx.new(|cx| {
+                        crate::browser::BrowserView::new_embedded_video(
+                            &player_url,
+                            detail_scroll,
+                            window,
+                            cx,
+                        )
+                    });
+                    self.pull_request_video_views.insert(url.clone(), player);
+                }
+            }
+            for player in self.pull_request_video_views.values() {
+                player.update(cx, |player, cx| {
+                    player.sync_native_state(show_video_players, false, cx)
+                });
+            }
+            let players = self.pull_request_video_views.clone();
+            let image_paths = self.pull_request_media_paths.clone();
+            let pending_images = self.pull_request_media_loading.clone();
+            let image_loading_color = theme.text_secondary;
+            let image_loading_highlight = theme.accent;
+
             let palette = MarkdownPalette::from_theme(&theme);
             let markdown_context = MarkdownCtx::new(
                 format!(
@@ -3161,10 +3350,44 @@ impl Insulator {
                 ),
                 &palette,
                 MarkdownMetrics::document(self.state.ui_font_size, self.state.code_font_size),
-                self.transcript_selection.clone(),
+                self.pull_request_detail_selection.clone(),
             )
             .with_math_enabled(self.state.render_math)
-            .with_link_handler(self.markdown_link_handler.clone());
+            .with_link_handler(self.markdown_link_handler.clone())
+            .with_image_resolver(std::rc::Rc::new(move |url| image_paths.get(url).cloned()))
+            .with_image_placeholder(std::rc::Rc::new(move |url| {
+                pending_images.contains(url).then(|| {
+                    div()
+                        .w_full()
+                        .h(px(160.0))
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(12.0))
+                        .child(crate::app::components::dot_matrix_loader(
+                            image_loading_color,
+                            18.0,
+                        ))
+                        .child(
+                            ShimmerText::new("Loading image…")
+                                .with_shimmer_style(
+                                    ShimmerStyle::new()
+                                        .duration(Duration::from_secs(3))
+                                        .highlight_color(image_loading_highlight)
+                                        .spread(0.45)
+                                        .reverse(true)
+                                        .once(false),
+                                )
+                                .text_size(sp(12.5))
+                                .text_color(image_loading_color),
+                        )
+                        .into_any_element()
+                })
+            }))
+            .with_video_renderer(std::rc::Rc::new(move |url| {
+                players.get(url).map(|player| player.clone().into_any_element())
+            }));
             md::render::markdown(view, &markdown_context).unwrap_or_else(|| {
                 md::render::plain_text(
                     body,
@@ -3930,6 +4153,9 @@ impl Insulator {
                             .flex_1()
                             .min_h_0()
                             .relative()
+                            .child(md::render::frame_reset(
+                                self.pull_request_detail_selection.clone(),
+                            ))
                             .child(
                                 div()
                                     .id("pull-request-detail-scroll")
@@ -3944,7 +4170,44 @@ impl Insulator {
                             .child(scrollbar::vertical(
                                 &self.pull_request_detail_scroll_handle,
                                 &self.pull_request_detail_scrollbar,
-                            )),
+                            ))
+                            .child({
+                                let selection = self.pull_request_detail_selection.clone();
+                                let scroll = self.pull_request_detail_scroll_handle.clone();
+                                canvas(
+                                    |bounds, _, _| bounds,
+                                    move |bounds, _, window, cx| {
+                                        if selection.selection.borrow().is_dragging() {
+                                            if let Some((x, y)) = selection.last_drag_position.get() {
+                                                let position = point(px(x), px(y));
+                                                if scroll_pull_request_selection_at_edge(
+                                                    &scroll, bounds, position,
+                                                ) {
+                                                    md::render::update_selection_at_position(
+                                                        &selection, position,
+                                                    );
+                                                    crate::ui::motion::pulse_lease(view_id, cx);
+                                                }
+                                            }
+                                        }
+                                        md::render::install_selection_input_with_scroll(
+                                            window,
+                                            &selection,
+                                            move |_, _, cx| {
+                                                // ScrollHandle mutability can overlap GPUI's
+                                                // native mouse dispatch. Defer the mutation to
+                                                // the next paint, matching transcript autoscroll.
+                                                crate::ui::motion::pulse_lease(view_id, cx);
+                                                false
+                                            },
+                                        )
+                                    },
+                                )
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full()
+                            }),
                     )
                     .child(self.render_pull_request_sticky_comment_bar(
                         &commit_key,
@@ -3980,6 +4243,28 @@ impl Insulator {
 
 #[cfg(test)]
 mod tests {
+    use gpui::px;
+
+    #[test]
+    fn selection_autoscroll_moves_toward_each_edge_and_clamps() {
+        assert_eq!(
+            super::pull_request_selection_offset(px(-100.0), px(500.0), px(0.0), px(400.0), px(0.0)),
+            px(-80.0)
+        );
+        assert_eq!(
+            super::pull_request_selection_offset(px(-100.0), px(500.0), px(0.0), px(400.0), px(400.0)),
+            px(-120.0)
+        );
+        assert_eq!(
+            super::pull_request_selection_offset(px(0.0), px(500.0), px(0.0), px(400.0), px(0.0)),
+            px(0.0)
+        );
+        assert_eq!(
+            super::pull_request_selection_offset(px(-500.0), px(500.0), px(0.0), px(400.0), px(400.0)),
+            px(-500.0)
+        );
+    }
+
     #[test]
     fn gh_fields_include_the_list_data() {
         assert!(super::GH_FIELDS.contains("repository"));
@@ -4021,6 +4306,13 @@ mod tests {
         );
         assert!(extensionless.ends_with("after"), "{extensionless}");
         assert_eq!(super::html_media_to_markdown("ordinary text"), "ordinary text");
+
+        let bare_video = super::without_html_comments(
+            "#### Video\n\nhttps://github.com/user-attachments/assets/clip-id",
+        );
+        assert!(bare_video.contains(
+            "![insulator-video-marker](https://github.com/user-attachments/assets/clip-id)"
+        ));
     }
 
     #[test]

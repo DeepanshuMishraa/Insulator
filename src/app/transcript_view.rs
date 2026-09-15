@@ -415,6 +415,8 @@ impl Insulator {
                 .right_panel_active_surface
                 .and_then(|index| self.right_panel_surfaces.get(index))
                 .is_some_and(|surface| matches!(surface, RightPanelSurface::BackgroundWork { .. }));
+        let reviewing_pull_request = self.pull_request_detail.is_some()
+            && self.pull_request_detail_tab == crate::app::pull_requests::PullRequestDetailTab::Summary;
         let selected = reviewing_diff
             .then(|| {
                 self.right_panel_diff_selection
@@ -430,6 +432,16 @@ impl Insulator {
                             .selected_session
                             .and_then(|session_id| self.background_work.get(&session_id))
                             .and_then(BackgroundWorkRegistry::selected_text)
+                    })
+                    .flatten()
+            })
+            .or_else(|| {
+                reviewing_pull_request
+                    .then(|| {
+                        self.pull_request_detail_selection
+                            .selection
+                            .borrow()
+                            .selected_text()
                     })
                     .flatten()
             })
