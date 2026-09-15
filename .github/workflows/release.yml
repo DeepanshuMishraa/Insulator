@@ -282,9 +282,6 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
-      - name: Install create-dmg
-        run: brew install create-dmg
-
       - uses: actions/cache@v6
         with:
           path: |
@@ -353,9 +350,6 @@ jobs:
           rustup default 1.96.0
 
       - uses: oven-sh/setup-bun@v2
-
-      - name: Install create-dmg
-        run: brew install create-dmg
 
       - uses: actions/cache@v6
         with:

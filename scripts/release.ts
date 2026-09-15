@@ -13,6 +13,7 @@ import { dirname, extname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { defaultDownloadUrlPrefix, generateAppcast } from "./appcast";
 import { extractReleaseNotes } from "./changelog";
+import { createStyledDmg } from "./dmg";
 
 const appName = "Insulator";
 const executableName = "Insulator";
@@ -179,9 +180,10 @@ if (!Number.isSafeInteger(historyCount) || historyCount < 0) {
 for (const tool of [
   "cargo",
   "codesign",
-  "create-dmg",
   "diskutil",
   "ditto",
+  "hdiutil",
+  "osascript",
   "plutil",
   "xattr",
 ]) {
@@ -449,35 +451,19 @@ try {
   await rm(outputPath, { force: true });
 
   logStep(`Creating the styled DMG at ${outputPath}`);
-  // create-dmg flakes on CI with "interstitial disk image was not found"
-  // (stale /Volumes/<name> mount left by a prior attempt, or an hdiutil
-  // attach race). Clear stale state and retry so one flake doesn't fail the release.
-  await $`rm -f ${join(dirname(outputPath), "rw.*.dmg")}`
-    .quiet()
-    .nothrow();
+  // create-dmg's interstitial mount discovery (`-mountrandom` + parsing
+  // `hdiutil info`) fails on some CI runners; createStyledDmg mounts at an
+  // explicit mountpoint instead. Detach leftovers from earlier create-dmg
+  // runs so they cannot shadow this build.
   await $`hdiutil detach ${`/Volumes/${volumeName}`} -force`
     .quiet()
     .nothrow();
-  let createDmgFailed = true;
-  for (let attempt = 1; attempt <= 3 && createDmgFailed; attempt++) {
-    const result =
-      await $`create-dmg --volname ${volumeName} --window-pos 200 120 --window-size 660 400 --text-size 13 --icon-size 128 --icon ${`${appName}.app`} 180 178 --hide-extension ${`${appName}.app`} --app-drop-link 480 178 --filesystem APFS --format ULFO --no-internet-enable --overwrite ${outputPath} ${stagingDirectory}`
-        .nothrow();
-    createDmgFailed = result.exitCode !== 0;
-    if (createDmgFailed && attempt < 3) {
-      console.warn(`create-dmg attempt ${attempt}/3 failed, retrying...`);
-      await $`hdiutil detach ${`/Volumes/${volumeName}`} -force`
-        .quiet()
-        .nothrow();
-      await $`rm -f ${join(dirname(outputPath), "rw.*.dmg")}`
-        .quiet()
-        .nothrow();
-      await Bun.sleep(5000);
-    }
-  }
-  if (createDmgFailed) {
-    throw new Error("create-dmg failed after 3 attempts.");
-  }
+  await createStyledDmg({
+    stagingDirectory,
+    outputPath,
+    volumeName,
+    appFileName: `${appName}.app`,
+  });
 
   logStep(adhoc ? "Ad-hoc signing the DMG" : "Signing the DMG");
   if (adhoc) {
