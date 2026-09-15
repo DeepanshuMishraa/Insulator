@@ -16,6 +16,17 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.7]
+
+### Added
+
+- Add inline rendering for embedded media in pull-request content
+
+### Changed
+
+- Sort pull requests newest first
+- Build release DMGs with an explicit mount point and retry transient mount failures
+
 ## [0.1.6]
 
 ### Added
