@@ -2907,6 +2907,11 @@ impl Insulator {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
+        if self.pull_request_detail.is_none() {
+            for player in self.pull_request_video_views.values() {
+                player.update(cx, |player, cx| player.sync_native_state(false, false, cx));
+            }
+        }
         if self.pull_request_detail.is_some() {
             return div()
                 .id("right-panel")
@@ -2914,7 +2919,7 @@ impl Insulator {
                 .h_full()
                 .flex_none()
                 .relative()
-                .child(self.render_pull_request_detail_panel(width, cx))
+                .child(self.render_pull_request_detail_panel(width, window, cx))
                 .child(self.render_panel_resize_handle(
                     "right-panel-resize-handle",
                     PanelResizeTarget::RightPanel,

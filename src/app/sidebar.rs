@@ -914,6 +914,14 @@ impl Insulator {
         self.state.selected_session = None;
         self.active_main_file_tab = None;
         self.active_main_review_tab = false;
+        // Reopening must start at the newest entries at the top. The list
+        // state persists across opens, so without this a previous scroll to
+        // the bottom (oldest) is restored and the section appears to load
+        // oldest-first.
+        self.pull_requests_list_state.scroll_to(ListOffset {
+            item_ix: 0,
+            offset_in_item: px(0.0),
+        });
         self.ensure_pull_requests(false, cx);
         self.save();
         cx.notify();

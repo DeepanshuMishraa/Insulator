@@ -7,7 +7,7 @@ use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use gpui::Point;
+use gpui::{Bounds, Pixels, Point};
 
 use crate::theme::ActiveTheme as _;
 use crate::ui::scrollbar;
@@ -18,6 +18,47 @@ pub(super) enum PullRequestDetailTab {
     Summary,
     Commits,
     Code,
+}
+
+fn pull_request_selection_offset(
+    current: Pixels,
+    max_offset: Pixels,
+    top: Pixels,
+    bottom: Pixels,
+    position_y: Pixels,
+) -> Pixels {
+    let edge_zone = px(40.0);
+    if position_y < top + edge_zone {
+        let distance = (top + edge_zone - position_y).max(Pixels::ZERO);
+        let speed = (f32::from(distance) * 0.4 + 4.0).clamp(3.0, 35.0);
+        (current + px(speed)).min(Pixels::ZERO)
+    } else if position_y > bottom - edge_zone {
+        let distance = (position_y - (bottom - edge_zone)).max(Pixels::ZERO);
+        let speed = (f32::from(distance) * 0.4 + 4.0).clamp(3.0, 35.0);
+        (current - px(speed)).max(-max_offset)
+    } else {
+        current
+    }
+}
+
+fn scroll_pull_request_selection_at_edge(
+    scroll: &ScrollHandle,
+    bounds: Bounds<Pixels>,
+    position: Point<Pixels>,
+) -> bool {
+    let current = scroll.offset().y;
+    let next = pull_request_selection_offset(
+        current,
+        scroll.max_offset().y,
+        bounds.top(),
+        bounds.bottom(),
+        position.y,
+    );
+    if next == current {
+        return false;
+    }
+    scroll.set_offset(point(Pixels::ZERO, next));
+    true
 }
 
 impl PullRequestDetailTab {
@@ -163,7 +204,72 @@ struct GhAuthor {
     avatar_url: String,
 }
 
+fn cache_pull_request_media(urls: Vec<String>) -> HashMap<String, std::path::PathBuf> {
+    use std::hash::{Hash, Hasher as _};
+
+    // Bound what an attacker-controlled PR body can make us fetch: HTTPS
+    // only (redirects too), a short redirect chain, and a hard byte cap
+    // enforced by curl plus a pre-write length check (curl buffers stdout
+    // in memory before we persist anything).
+    const MAX_MEDIA_BYTES: usize = 20 * 1024 * 1024;
+
+    let Some(cache_dir) = dirs::cache_dir().map(|dir| dir.join("Insulator/pull-request-media"))
+    else {
+        return HashMap::new();
+    };
+    if std::fs::create_dir_all(&cache_dir).is_err() {
+        return HashMap::new();
+    }
+
+    urls.into_iter()
+        .filter(|url| url.starts_with("https://"))
+        .filter_map(|url| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            url.hash(&mut hasher);
+            let path = cache_dir.join(format!("{:016x}", hasher.finish()));
+            if !path.is_file() {
+                let mut curl = std::process::Command::new("curl");
+                if let Some(search_path) = crate::command_env::executable_search_path() {
+                    curl.env("PATH", search_path);
+                }
+                let output = curl
+                    .args([
+                        "--fail",
+                        "--silent",
+                        "--show-error",
+                        "--location",
+                        "--proto",
+                        "=https",
+                        "--proto-redir",
+                        "=https",
+                        "--max-redirs",
+                        "5",
+                        "--max-filesize",
+                        &MAX_MEDIA_BYTES.to_string(),
+                        "--max-time",
+                        "20",
+                        &url,
+                    ])
+                    .output()
+                    .ok()?;
+                if !output.status.success()
+                    || output.stdout.is_empty()
+                    || output.stdout.len() > MAX_MEDIA_BYTES
+                {
+                    return None;
+                }
+                std::fs::write(&path, output.stdout).ok()?;
+            }
+            Some((url, path))
+        })
+        .collect()
+}
+
 fn cache_github_avatar(login: &str, url: &str) -> Option<String> {
+    const MAX_AVATAR_BYTES: usize = 5 * 1024 * 1024;
+    if !url.starts_with("https://") {
+        return None;
+    }
     let cache_dir = dirs::cache_dir()?.join("Insulator").join("github-avatars");
     let path = cache_dir.join(format!("{login}.png"));
     if path.is_file() {
@@ -175,10 +281,29 @@ fn cache_github_avatar(login: &str, url: &str) -> Option<String> {
         curl.env("PATH", path);
     }
     let output = curl
-        .args(["--fail", "--silent", "--show-error", "--location", "--max-time", "10", url])
+        .args([
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--location",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--max-redirs",
+            "5",
+            "--max-filesize",
+            &MAX_AVATAR_BYTES.to_string(),
+            "--max-time",
+            "10",
+            url,
+        ])
         .output()
         .ok()?;
-    if !output.status.success() || output.stdout.is_empty() {
+    if !output.status.success()
+        || output.stdout.is_empty()
+        || output.stdout.len() > MAX_AVATAR_BYTES
+    {
         return None;
     }
     std::fs::write(&path, output.stdout).ok()?;
@@ -230,7 +355,8 @@ fn load_owned_repository_pull_requests(limit: usize) -> anyhow::Result<Vec<GhPul
     let owner = String::from_utf8_lossy(&login.stdout).trim().to_owned();
     let output = gh_command()
         .args([
-            "search", "prs", "--owner", &owner, "--state", "open", "--limit", &limit.to_string(), "--json",
+            "search", "prs", "--owner", &owner, "--state", "open", "--sort", "created", "--order",
+            "desc", "--limit", &limit.to_string(), "--json",
             GH_FIELDS,
         ])
         .env("GH_PROMPT_DISABLED", "1")
@@ -247,7 +373,8 @@ fn load_owned_repository_pull_requests(limit: usize) -> anyhow::Result<Vec<GhPul
     let mut requests: Vec<GhPullRequest> = serde_json::from_slice(&output.stdout)?;
     let closed = gh_command()
         .args([
-            "search", "prs", "--owner", &owner, "--state", "closed", "--limit", &limit.to_string(), "--json",
+            "search", "prs", "--owner", &owner, "--state", "closed", "--sort", "created", "--order",
+            "desc", "--limit", &limit.to_string(), "--json",
             GH_FIELDS,
         ])
         .env("GH_PROMPT_DISABLED", "1")
@@ -742,8 +869,18 @@ fn without_html_comments(body: &str) -> String {
     }
     result.push_str(rest);
 
-    let mut summary_cleaned = String::with_capacity(result.len());
-    let mut rest = result.as_str();
+    // Preserve embedded media before the generic tag strip below: GitHub PR
+    // bodies paste uploads as `<img src="…">`, `<video src="…">`, or
+    // `<video><source src="…"></video>`. The old code stripped every tag, so
+    // GIFs/videos/photos collapsed to a bare link line or vanished. Rewrite
+    // them to markdown image syntax first; the markdown parser renders image
+    // destinations inline and routes video destinations to an inline player
+    // card.
+    let with_media = html_media_to_markdown(&result);
+    let with_video_urls = rewrite_video_heading_urls(&with_media);
+
+    let mut summary_cleaned = String::with_capacity(with_video_urls.len());
+    let mut rest = with_video_urls.as_str();
     while let Some(start) = rest.find("<summary>") {
         summary_cleaned.push_str(&rest[..start]);
         if let Some(end) = rest[start + 9..].find("</summary>") {
@@ -776,6 +913,138 @@ fn without_html_comments(body: &str) -> String {
     plain = plain.replace("</blockquote></details>", "");
     plain = plain.replace("</details>", "");
     plain.trim().to_owned()
+}
+
+/// Rewrite `<img>`, `<video>`, and `<source>` tags carrying a `src` into
+/// markdown image syntax so the markdown renderer displays them inline.
+/// Anything without a usable `src` is dropped (it carried no content).
+fn html_media_to_markdown(body: &str) -> String {
+    const VIDEO_MARKER: &str = "insulator-video-marker";
+    let mut output = String::with_capacity(body.len());
+    let mut rest = body;
+    let mut inside_video = false;
+    while let Some(start) = rest.find('<') {
+        output.push_str(&rest[..start]);
+        let Some(end) = rest[start..].find('>') else {
+            output.push_str(&rest[start..]);
+            return output;
+        };
+        let tag = &rest[start..start + end + 1];
+        let tag_lower = tag.to_ascii_lowercase();
+        let is_video = tag_lower.starts_with("<video")
+            || (tag_lower.starts_with("<source")
+                && (inside_video
+                    || tag_lower.contains("type=\"video/")
+                    || tag_lower.contains("type='video/")));
+        let is_media_tag = tag_lower.starts_with("<img")
+            || tag_lower.starts_with("<video")
+            || tag_lower.starts_with("<source");
+        if is_media_tag {
+            if let Some(src) = html_tag_src(tag) {
+                let src = src.trim();
+                if !src.is_empty() {
+                    let alt = if is_video { VIDEO_MARKER } else { "" };
+                    output.push_str("\n\n![");
+                    output.push_str(alt);
+                    output.push_str("](");
+                    output.push_str(src);
+                    output.push_str(")\n\n");
+                }
+            }
+            if tag_lower.starts_with("<video") && !tag_lower.starts_with("</video") {
+                inside_video = true;
+            } else if tag_lower.starts_with("</video") {
+                inside_video = false;
+            }
+        } else {
+            output.push_str(tag);
+        }
+        rest = &rest[start + end + 1..];
+    }
+    output.push_str(rest);
+    output
+}
+
+fn rewrite_video_heading_urls(body: &str) -> String {
+    let mut in_video_section = false;
+    body.lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with('#') {
+                in_video_section = trimmed
+                    .trim_start_matches('#')
+                    .trim()
+                    .eq_ignore_ascii_case("video");
+                return line.to_owned();
+            }
+            if in_video_section
+                && trimmed.starts_with("https://")
+                && !trimmed.contains(char::is_whitespace)
+            {
+                let url = trimmed.trim_end_matches(['.', ',', ')']);
+                return line.replace(trimmed, &format!("![insulator-video-marker]({url})"));
+            }
+            line.to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Extract the `src` attribute value from a single HTML tag (double- or
+/// single-quoted). Returns `None` when absent or unterminated.
+fn html_tag_src(tag: &str) -> Option<&str> {
+    let bytes = tag.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        // Find a case-insensitive `src` word boundary.
+        let remaining = &tag[index..];
+        let Some(pos) = remaining
+            .to_ascii_lowercase()
+            .find("src")
+        else {
+            return None;
+        };
+        let key = index + pos;
+        let before_ok = key == 0
+            || !(bytes[key - 1].is_ascii_alphanumeric() || bytes[key - 1] == b'-');
+        let after = key + 3;
+        let after_ok = after >= bytes.len()
+            || !(bytes[after].is_ascii_alphanumeric() || bytes[after] == b'-');
+        index = after;
+        if !(before_ok && after_ok) {
+            continue;
+        }
+        let mut cursor = after;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() || bytes[cursor] != b'=' {
+            continue;
+        }
+        cursor += 1;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() {
+            return None;
+        }
+        let quote = bytes[cursor];
+        if quote != b'"' && quote != b'\'' {
+            // Unquoted attribute values are rare in pasted GitHub HTML; skip
+            // rather than guess a terminator.
+            continue;
+        }
+        let value_start = cursor + 1;
+        let mut value_end = value_start;
+        while value_end < bytes.len() && bytes[value_end] != quote {
+            value_end += 1;
+        }
+        if value_end >= bytes.len() {
+            return None;
+        }
+        return Some(&tag[value_start..value_end]);
+    }
+    None
 }
 
 fn load_pull_request_checks(request: &PullRequest) -> anyhow::Result<Vec<PullRequestCheck>> {
@@ -940,7 +1209,16 @@ fn load_pull_requests(limit: usize) -> anyhow::Result<Vec<PullRequest>> {
             command.args(["--state", state]);
         }
         let output = command
-            .args(["--limit", &limit.to_string(), "--json", GH_FIELDS])
+            .args([
+                "--sort",
+                "created",
+                "--order",
+                "desc",
+                "--limit",
+                &limit.to_string(),
+                "--json",
+                GH_FIELDS,
+            ])
             .output()
             .map_err(gh_spawn_error)?;
         if !output.status.success() {
@@ -1046,8 +1324,8 @@ fn load_pull_requests_page(cursor: Option<&str>) -> anyhow::Result<(Vec<PullRequ
         Ok(Some(response.data.ok_or_else(|| anyhow::anyhow!("GitHub returned no pull-request page"))?.search))
     };
 
-    let author_page = fetch(format!("author:{login} is:pr"), author_cursor)?;
-    let owner_page = fetch(format!("user:{login} is:pr"), owner_cursor)?;
+    let author_page = fetch(format!("author:{login} is:pr sort:created-desc"), author_cursor)?;
+    let owner_page = fetch(format!("user:{login} is:pr sort:created-desc"), owner_cursor)?;
     let author_next = author_page
         .as_ref()
         .filter(|page| page.page_info.has_next_page)
@@ -1212,6 +1490,40 @@ impl Insulator {
         .detach();
     }
 
+    fn ensure_pull_request_media(&mut self, body: &str, cx: &mut Context<Self>) {
+        let cleaned = without_html_comments(body);
+        let mut markdown = MarkdownView::new();
+        markdown.set_text(&cleaned, false);
+        let urls = markdown
+            .image_urls()
+            .into_iter()
+            .filter(|url| {
+                !self.pull_request_media_paths.contains_key(url)
+                    && self.pull_request_media_loading.insert(url.clone())
+            })
+            .collect::<Vec<_>>();
+        if urls.is_empty() {
+            return;
+        }
+
+        let entity = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let requested = urls.clone();
+            let loaded = cx
+                .background_executor()
+                .spawn(async move { cache_pull_request_media(urls) })
+                .await;
+            let _ = entity.update(cx, |this, cx| {
+                for url in requested {
+                    this.pull_request_media_loading.remove(&url);
+                }
+                this.pull_request_media_paths.extend(loaded);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn ensure_pull_request_body(
         &mut self,
         request: PullRequest,
@@ -1238,6 +1550,7 @@ impl Insulator {
                 match result {
                     Ok(loaded) => {
                         this.pull_request_body_error.remove(&key);
+                        this.ensure_pull_request_media(&loaded.body, cx);
                         if let Some(entry) = this.pull_requests.iter_mut().find(|entry| {
                             entry.repository == key.0 && entry.number == key.1
                         }) {
@@ -1850,7 +2163,7 @@ impl Insulator {
                                     format!("pull-request-comment-{}-{index}", key.1),
                                     &palette,
                                     MarkdownMetrics::document(self.state.ui_font_size, self.state.code_font_size),
-                                    self.transcript_selection.clone(),
+                                    self.pull_request_detail_selection.clone(),
                                 )
                                 .with_math_enabled(self.state.render_math)
                                 .with_link_handler(self.markdown_link_handler.clone());
@@ -2842,9 +3155,11 @@ fn render_pull_request_row(
         .on_click(move |_, _, cx| {
             let _ = insulator.update(cx, |this, cx| {
                 this.pull_request_detail = Some(request.clone());
+                this.pull_request_detail_selection.clear();
                 this.pull_request_comment_input.update(cx, |input, cx| input.clear(cx));
                 this.pull_request_detail_tab = PullRequestDetailTab::Summary;
                 this.pull_request_detail_scroll_handle.set_offset(Point::default());
+                this.ensure_pull_request_media(&request.body, cx);
                 this.ensure_pull_request_body(request.clone(), cx);
                 this.ensure_pull_request_commits(request.clone(), cx);
                 this.ensure_pull_request_checks(request.clone(), cx);
@@ -2957,6 +3272,7 @@ impl Insulator {
     pub(super) fn render_pull_request_detail_panel(
         &mut self,
         width: f32,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let theme = Theme::current(cx);
@@ -2964,6 +3280,7 @@ impl Insulator {
             return div().id("pull-request-detail-empty").w(px(width)).h_full();
         };
         let close = cx.entity().downgrade();
+        let view_id = cx.entity().entity_id();
         let selected_tab = self.pull_request_detail_tab;
         let detail_entity = cx.entity().downgrade();
         let commit_key = (request.repository.clone(), request.number);
@@ -2977,6 +3294,8 @@ impl Insulator {
             request.url.clone()
         };
         let body = without_html_comments(&request.body);
+        let show_video_players = selected_tab == PullRequestDetailTab::Summary
+            && !self.is_pr_section_collapsed(&commit_key, "description");
         let loading_style = ShimmerStyle::new()
             .duration(Duration::from_secs(3))
             .highlight_color(cx.theme().primary)
@@ -3026,6 +3345,97 @@ impl Insulator {
             }
             let (_, view) = cache.as_mut().expect("markdown cache initialized");
             view.set_text(&body, false);
+            let video_urls = view.video_urls();
+
+            let stale_urls = self
+                .pull_request_video_views
+                .keys()
+                .filter(|url| !video_urls.contains(url))
+                .cloned()
+                .collect::<Vec<_>>();
+            for url in stale_urls {
+                if let Some(player) = self.pull_request_video_views.remove(&url) {
+                    player.update(cx, |player, cx| player.sync_native_state(false, false, cx));
+                }
+            }
+            let mut missing_video_urls = Vec::new();
+            for url in &video_urls {
+                if !self.pull_request_video_views.contains_key(url) {
+                    missing_video_urls.push(url.clone());
+                }
+            }
+            if !missing_video_urls.is_empty() {
+                // Native webview construction blocks, so it must not run
+                // inside render: defer entity creation past this frame and
+                // paint the link-card fallback until the players land.
+                let detail_scroll = self.pull_request_detail_scroll_handle.clone();
+                let detail_key = key.clone();
+                let entity = cx.entity().downgrade();
+                window.defer(cx, move |window, cx| {
+                    let _ = entity.update(cx, |this, cx| {
+                        // Discard deferred work if the panel closed.
+                        let Some(detail) = this.pull_request_detail.as_ref() else {
+                            return;
+                        };
+                        // Discard deferred work if selection moved to another PR.
+                        if detail.repository != detail_key.0 || detail.number != detail_key.1
+                        {
+                            return;
+                        }
+                        // Re-derive the live video set so a body load that
+                        // landed after render cannot resurrect removed URLs.
+                        let current_body = without_html_comments(&detail.body);
+                        let mut current_view = MarkdownView::new();
+                        current_view.set_text(&current_body, false);
+                        let current_urls = current_view.video_urls();
+                        let mut inserted = false;
+                        for url in &missing_video_urls {
+                            // Revalidate before each construction: a closed or
+                            // changed detail discards the remaining work.
+                            let Some(detail) = this.pull_request_detail.as_ref() else {
+                                return;
+                            };
+                            if detail.repository != detail_key.0
+                                || detail.number != detail_key.1
+                            {
+                                return;
+                            }
+                            if !current_urls.contains(url) {
+                                continue;
+                            }
+                            if this.pull_request_video_views.contains_key(url) {
+                                continue;
+                            }
+                            let player_url = url.clone();
+                            let scroll = detail_scroll.clone();
+                            let player = cx.new(|cx| {
+                                crate::browser::BrowserView::new_embedded_video(
+                                    &player_url,
+                                    scroll,
+                                    window,
+                                    cx,
+                                )
+                            });
+                            this.pull_request_video_views.insert(url.clone(), player);
+                            inserted = true;
+                        }
+                        if inserted {
+                            cx.notify();
+                        }
+                    });
+                });
+            }
+            for player in self.pull_request_video_views.values() {
+                player.update(cx, |player, cx| {
+                    player.sync_native_state(show_video_players, false, cx)
+                });
+            }
+            let players = self.pull_request_video_views.clone();
+            let image_paths = self.pull_request_media_paths.clone();
+            let pending_images = self.pull_request_media_loading.clone();
+            let image_loading_color = theme.text_secondary;
+            let image_loading_highlight = theme.accent;
+
             let palette = MarkdownPalette::from_theme(&theme);
             let markdown_context = MarkdownCtx::new(
                 format!(
@@ -3034,10 +3444,44 @@ impl Insulator {
                 ),
                 &palette,
                 MarkdownMetrics::document(self.state.ui_font_size, self.state.code_font_size),
-                self.transcript_selection.clone(),
+                self.pull_request_detail_selection.clone(),
             )
             .with_math_enabled(self.state.render_math)
-            .with_link_handler(self.markdown_link_handler.clone());
+            .with_link_handler(self.markdown_link_handler.clone())
+            .with_image_resolver(std::rc::Rc::new(move |url| image_paths.get(url).cloned()))
+            .with_image_placeholder(std::rc::Rc::new(move |url| {
+                pending_images.contains(url).then(|| {
+                    div()
+                        .w_full()
+                        .h(px(160.0))
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(12.0))
+                        .child(crate::app::components::dot_matrix_loader(
+                            image_loading_color,
+                            18.0,
+                        ))
+                        .child(
+                            ShimmerText::new("Loading image…")
+                                .with_shimmer_style(
+                                    ShimmerStyle::new()
+                                        .duration(Duration::from_secs(3))
+                                        .highlight_color(image_loading_highlight)
+                                        .spread(0.45)
+                                        .reverse(true)
+                                        .once(false),
+                                )
+                                .text_size(sp(12.5))
+                                .text_color(image_loading_color),
+                        )
+                        .into_any_element()
+                })
+            }))
+            .with_video_renderer(std::rc::Rc::new(move |url| {
+                players.get(url).map(|player| player.clone().into_any_element())
+            }));
             md::render::markdown(view, &markdown_context).unwrap_or_else(|| {
                 md::render::plain_text(
                     body,
@@ -3713,6 +4157,7 @@ impl Insulator {
                                     .on_click(move |_, _, cx| {
                                         let _ = close.update(cx, |this, cx| {
                                             this.pull_request_detail = None;
+                                            this.pull_request_detail_selection.clear();
                                             this.set_right_panel_visible(false, cx);
                                         });
                                     }),
@@ -3803,6 +4248,9 @@ impl Insulator {
                             .flex_1()
                             .min_h_0()
                             .relative()
+                            .child(md::render::frame_reset(
+                                self.pull_request_detail_selection.clone(),
+                            ))
                             .child(
                                 div()
                                     .id("pull-request-detail-scroll")
@@ -3817,7 +4265,44 @@ impl Insulator {
                             .child(scrollbar::vertical(
                                 &self.pull_request_detail_scroll_handle,
                                 &self.pull_request_detail_scrollbar,
-                            )),
+                            ))
+                            .child({
+                                let selection = self.pull_request_detail_selection.clone();
+                                let scroll = self.pull_request_detail_scroll_handle.clone();
+                                canvas(
+                                    |bounds, _, _| bounds,
+                                    move |bounds, _, window, cx| {
+                                        if selection.selection.borrow().is_dragging() {
+                                            if let Some((x, y)) = selection.last_drag_position.get() {
+                                                let position = point(px(x), px(y));
+                                                if scroll_pull_request_selection_at_edge(
+                                                    &scroll, bounds, position,
+                                                ) {
+                                                    md::render::update_selection_at_position(
+                                                        &selection, position,
+                                                    );
+                                                    crate::ui::motion::pulse_lease(view_id, cx);
+                                                }
+                                            }
+                                        }
+                                        md::render::install_selection_input_with_scroll(
+                                            window,
+                                            &selection,
+                                            move |_, _, cx| {
+                                                // ScrollHandle mutability can overlap GPUI's
+                                                // native mouse dispatch. Defer the mutation to
+                                                // the next paint, matching transcript autoscroll.
+                                                crate::ui::motion::pulse_lease(view_id, cx);
+                                                false
+                                            },
+                                        )
+                                    },
+                                )
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full()
+                            }),
                     )
                     .child(self.render_pull_request_sticky_comment_bar(
                         &commit_key,
@@ -3853,6 +4338,28 @@ impl Insulator {
 
 #[cfg(test)]
 mod tests {
+    use gpui::px;
+
+    #[test]
+    fn selection_autoscroll_moves_toward_each_edge_and_clamps() {
+        assert_eq!(
+            super::pull_request_selection_offset(px(-100.0), px(500.0), px(0.0), px(400.0), px(0.0)),
+            px(-80.0)
+        );
+        assert_eq!(
+            super::pull_request_selection_offset(px(-100.0), px(500.0), px(0.0), px(400.0), px(400.0)),
+            px(-120.0)
+        );
+        assert_eq!(
+            super::pull_request_selection_offset(px(0.0), px(500.0), px(0.0), px(400.0), px(0.0)),
+            px(0.0)
+        );
+        assert_eq!(
+            super::pull_request_selection_offset(px(-500.0), px(500.0), px(0.0), px(400.0), px(400.0)),
+            px(-500.0)
+        );
+    }
+
     #[test]
     fn gh_fields_include_the_list_data() {
         assert!(super::GH_FIELDS.contains("repository"));
@@ -3865,6 +4372,55 @@ mod tests {
             super::without_html_comments("<!-- generated -->\n## Summary\n<p>Done</p>"),
             "## Summary\nDone"
         );
+    }
+
+    #[test]
+    fn embedded_html_media_is_preserved_as_markdown() {
+        let body = super::without_html_comments(
+            "Look:\n<img src=\"https://example.com/shot.png\" alt=\"shot\">\n<video src='https://example.com/clip.mp4'></video>",
+        );
+        assert!(body.contains("![](https://example.com/shot.png)"), "{body}");
+        assert!(
+            body.contains("![insulator-video-marker](https://example.com/clip.mp4)"),
+            "{body}"
+        );
+        let source = super::without_html_comments(
+            "<video><source src=\"https://example.com/clip.webm\" type=\"video/webm\"></video>",
+        );
+        assert!(
+            source.contains("![insulator-video-marker](https://example.com/clip.webm)"),
+            "{source}"
+        );
+
+        let extensionless = super::without_html_comments(
+            "before <video><source src=\"https://example.com/assets/clip\"></video> after",
+        );
+        assert!(
+            extensionless.contains("![insulator-video-marker](https://example.com/assets/clip)"),
+            "{extensionless}"
+        );
+        assert!(extensionless.ends_with("after"), "{extensionless}");
+        assert_eq!(super::html_media_to_markdown("ordinary text"), "ordinary text");
+
+        let bare_video = super::without_html_comments(
+            "#### Video\n\nhttps://github.com/user-attachments/assets/clip-id",
+        );
+        assert!(bare_video.contains(
+            "![insulator-video-marker](https://github.com/user-attachments/assets/clip-id)"
+        ));
+    }
+
+    #[test]
+    fn html_tag_src_handles_both_quote_styles() {
+        assert_eq!(
+            super::html_tag_src("<img src=\"https://example.com/a.png\">"),
+            Some("https://example.com/a.png")
+        );
+        assert_eq!(
+            super::html_tag_src("<source src='https://example.com/b.mp4'>"),
+            Some("https://example.com/b.mp4")
+        );
+        assert_eq!(super::html_tag_src("<div>nope</div>"), None);
     }
 
     #[test]

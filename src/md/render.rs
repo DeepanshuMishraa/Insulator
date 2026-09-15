@@ -53,6 +53,7 @@ mod math_text;
 pub enum TextGeometry {
     Text(TextLayout),
     Math(math_text::Geometry),
+    Media { bounds: Bounds<Pixels>, text_len: usize },
 }
 
 impl TextGeometry {
@@ -60,6 +61,7 @@ impl TextGeometry {
         match self {
             Self::Text(layout) => layout.bounds(),
             Self::Math(layout) => layout.bounds(),
+            Self::Media { bounds, .. } => *bounds,
         }
     }
 
@@ -67,6 +69,11 @@ impl TextGeometry {
         match self {
             Self::Text(layout) => layout.index_for_position(position),
             Self::Math(layout) => layout.index_for_position(position),
+            Self::Media { bounds, text_len } => Ok(if position.y < bounds.center().y {
+                0
+            } else {
+                *text_len
+            }),
         }
     }
 
@@ -74,6 +81,7 @@ impl TextGeometry {
         match self {
             Self::Text(layout) => layout_missing(layout),
             Self::Math(layout) => layout.is_missing(),
+            Self::Media { .. } => false,
         }
     }
 }
@@ -633,6 +641,24 @@ impl MarkdownView {
 
     /// Display blocks in document order: the settled prefix, then the mended
     /// tail when one is active.
+    pub fn image_urls(&self) -> Vec<String> {
+        self.blocks()
+            .filter_map(|block| match block {
+                Block::Image { url, .. } if url.starts_with("https://") => Some(url.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn video_urls(&self) -> Vec<String> {
+        self.blocks()
+            .filter_map(|block| match block {
+                Block::Video { url } => Some(url.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn blocks(&self) -> impl Iterator<Item = &Block> + '_ {
         let all = &self.parser.tree().blocks;
         let settled = if self.tail.is_empty() {
@@ -659,6 +685,9 @@ pub struct Ctx<'a> {
     selection: TranscriptSelection,
     search: Option<SearchHighlights>,
     link_handler: Option<LinkHandler>,
+    image_resolver: Option<Rc<dyn Fn(&str) -> Option<std::path::PathBuf>>>,
+    image_placeholder: Option<Rc<dyn Fn(&str) -> Option<AnyElement>>>,
+    video_renderer: Option<Rc<dyn Fn(&str) -> Option<AnyElement>>>,
     /// Cross-frame flatten cache, when this render has one to consult.
     cache: Option<&'a MarkdownView>,
     next_ordinal: Cell<usize>,
@@ -685,6 +714,9 @@ impl<'a> Ctx<'a> {
             selection,
             search: None,
             link_handler: None,
+            image_resolver: None,
+            image_placeholder: None,
+            video_renderer: None,
             cache: None,
             next_ordinal: Cell::new(0),
             starts_block: Cell::new(true),
@@ -702,6 +734,30 @@ impl<'a> Ctx<'a> {
 
     pub fn with_link_handler(mut self, handler: LinkHandler) -> Self {
         self.link_handler = Some(handler);
+        self
+    }
+
+    pub fn with_image_resolver(
+        mut self,
+        resolver: Rc<dyn Fn(&str) -> Option<std::path::PathBuf>>,
+    ) -> Self {
+        self.image_resolver = Some(resolver);
+        self
+    }
+
+    pub fn with_image_placeholder(
+        mut self,
+        placeholder: Rc<dyn Fn(&str) -> Option<AnyElement>>,
+    ) -> Self {
+        self.image_placeholder = Some(placeholder);
+        self
+    }
+
+    pub fn with_video_renderer(
+        mut self,
+        renderer: Rc<dyn Fn(&str) -> Option<AnyElement>>,
+    ) -> Self {
+        self.video_renderer = Some(renderer);
         self
     }
 
@@ -742,6 +798,9 @@ impl<'a> Ctx<'a> {
             selection: self.selection.clone(),
             search: self.search.clone(),
             link_handler: self.link_handler.clone(),
+            image_resolver: self.image_resolver.clone(),
+            image_placeholder: self.image_placeholder.clone(),
+            video_renderer: self.video_renderer.clone(),
             cache: Some(view),
             next_ordinal: Cell::new(self.next_ordinal.get()),
             starts_block: Cell::new(self.starts_block.get()),
@@ -1064,6 +1123,7 @@ pub fn text_range_bounds(layout: &TextGeometry, range: &Range<usize>) -> Vec<Bou
     match layout {
         TextGeometry::Text(layout) => range_rects(layout, range, 0.0, 0.0),
         TextGeometry::Math(layout) => layout.range_rects(range),
+        TextGeometry::Media { bounds, .. } => (!range.is_empty()).then_some(*bounds).into_iter().collect(),
     }
 }
 
@@ -1117,6 +1177,51 @@ pub fn registry_point(
 /// registry scan instead of one dispatch per visible paragraph.
 pub fn install_selection_input(window: &mut Window, state: &TranscriptSelection) {
     install_selection_input_with_scroll(window, state, |_, _, _| false);
+}
+
+/// Extend the active selection to a window position using the latest painted
+/// registry. This is also called from autoscroll frames when the pointer is
+/// stationary at a viewport edge.
+pub fn update_selection_at_position(
+    state: &TranscriptSelection,
+    position: Point<Pixels>,
+) -> bool {
+    let registry = state.registry.borrow();
+    let anchor_info = {
+        let selection = state.selection.borrow();
+        selection
+            .anchor()
+            .cloned()
+            .and_then(|key| selection.drag_anchor(&key).map(|offset| (key, offset)))
+    };
+    let Some((anchor_key, anchor_offset)) = anchor_info else {
+        return false;
+    };
+    let Some(head) = registry_point(&registry, position) else {
+        return false;
+    };
+    let spans = match registry.position(&anchor_key) {
+        Some(anchor_index) => {
+            let direction = if head.0 > anchor_index
+                || (head.0 == anchor_index && head.1 >= anchor_offset)
+            {
+                crate::md::selection::DragDirection::Forward
+            } else {
+                crate::md::selection::DragDirection::Backward
+            };
+            state.selection.borrow_mut().set_direction(direction);
+            registry.resolve((anchor_index, anchor_offset), head)
+        }
+        None => {
+            let selection = state.selection.borrow();
+            let Some(direction) = selection.direction() else {
+                return false;
+            };
+            registry.resolve_offscreen(head, direction, selection.spans())
+        }
+    };
+    drop(registry);
+    state.selection.borrow_mut().set_spans(spans)
 }
 
 pub fn install_selection_input_with_scroll<F>(
@@ -1190,44 +1295,7 @@ pub fn install_selection_input_with_scroll<F>(
             if scrolled {
                 window.refresh();
             }
-            let registry = state.registry.borrow();
-            let anchor_info = {
-                let selection = state.selection.borrow();
-                selection
-                    .anchor()
-                    .cloned()
-                    .and_then(|key| selection.drag_anchor(&key).map(|offset| (key, offset)))
-            };
-            let Some((anchor_key, anchor_offset)) = anchor_info else {
-                return;
-            };
-            let Some(head) = registry_point(&registry, event.position) else {
-                return;
-            };
-            let anchor_pos = registry.position(&anchor_key);
-            let spans = match anchor_pos {
-                Some(anchor_index) => {
-                    let direction = if head.0 > anchor_index
-                        || (head.0 == anchor_index && head.1 >= anchor_offset)
-                    {
-                        crate::md::selection::DragDirection::Forward
-                    } else {
-                        crate::md::selection::DragDirection::Backward
-                    };
-                    state.selection.borrow_mut().set_direction(direction);
-                    registry.resolve((anchor_index, anchor_offset), head)
-                }
-                None => {
-                    let selection = state.selection.borrow();
-                    if let Some(direction) = selection.direction() {
-                        registry.resolve_offscreen(head, direction, selection.spans())
-                    } else {
-                        return;
-                    }
-                }
-            };
-            drop(registry);
-            if state.selection.borrow_mut().set_spans(spans) {
+            if update_selection_at_position(&state, event.position) {
                 window.refresh();
             }
         }
@@ -1314,10 +1382,10 @@ fn search_block(
             *ordinal += 1;
             search_text(code, current, regex, cap, matches)
         }
-        Block::Image { .. } => {
-            // The renderer consumes an ordinal for the image id, but its alt
-            // caption is not a selectable/shaped text element and therefore
-            // has no glyph geometry for a find highlight.
+        Block::Image { .. } | Block::Video { .. } => {
+            // The renderer consumes an ordinal for the image/video id, but
+            // its alt caption is not a selectable/shaped text element and
+            // therefore has no glyph geometry for a find highlight.
             *ordinal += 1;
             false
         }
@@ -1477,6 +1545,7 @@ fn render_block(block: &Block, ctx: &Ctx) -> AnyElement {
                 .into_any_element()
         }
         Block::Image { url, alt } => render_image(url, alt, ctx),
+        Block::Video { url } => render_video(url, ctx),
         Block::DisplayMath { latex } => {
             let key = ctx.next_key();
             let flat = ctx.flat(key.index, || {
@@ -1649,6 +1718,47 @@ fn checkbox(checked: bool, ctx: &Ctx) -> AnyElement {
         .into_any_element()
 }
 
+/// Register media as one atomic selection unit. Selecting across it copies its
+/// source URL, matching what a browser clipboard preserves for embedded media.
+fn selectable_media(content: AnyElement, url: &str, key: TextKey, ctx: &Ctx) -> AnyElement {
+    let text: Rc<str> = Rc::from(url);
+    let text_len = text.len();
+    let selection = ctx.selection.clone();
+    let selection_wash = ctx.palette.selection;
+    let block_break = ctx.take_block_break();
+    let underlay = canvas(|bounds, _, _| bounds, {
+        let key = key.clone();
+        move |bounds, _, window, _| {
+            if selection.selection.borrow().wash_range(&key).is_some() {
+                window.paint_quad(quad(
+                    bounds,
+                    px(6.0),
+                    selection_wash,
+                    px(0.0),
+                    gpui::transparent_black(),
+                    BorderStyle::default(),
+                ));
+            }
+            selection.registry.borrow_mut().push(RegisteredText {
+                key: key.clone(),
+                text: text.clone(),
+                block_break,
+                geometry: TextGeometry::Media { bounds, text_len },
+            });
+        }
+    })
+    .absolute()
+    .size_full();
+
+    div()
+        .relative()
+        .w_full()
+        .min_w_0()
+        .child(content)
+        .child(underlay)
+        .into_any_element()
+}
+
 /// An inline image. Data URLs decode in place; anything else is handed to GPUI
 /// to load. The alt text renders beneath as a caption when there is one, so a
 /// failed or slow load still says what it was.
@@ -1656,12 +1766,24 @@ fn render_image(url: &str, alt: &str, ctx: &Ctx) -> AnyElement {
     const MAX_HEIGHT: f32 = 320.0;
 
     let key = ctx.next_key();
+    if let Some(placeholder) = ctx
+        .image_placeholder
+        .as_ref()
+        .and_then(|render| render(url))
+    {
+        return selectable_media(placeholder, url, key, ctx);
+    }
     let id = SharedString::from(format!("image-{}-{}", key.row, key.index));
     let image = match decode_data_url(url) {
         Some(decoded) => img(decoded).id(id),
-        None => img(url.to_owned()).id(id),
+        None => match ctx.image_resolver.as_ref().and_then(|resolve| resolve(url)) {
+            Some(path) => img(path).id(id),
+            None => img(url.to_owned()).id(id),
+        },
     };
-    div()
+    let loading_color = ctx.palette.inset;
+    let fallback_color = ctx.palette.ghost;
+    let content = div()
         .w_full()
         .min_w_0()
         .flex()
@@ -1669,10 +1791,32 @@ fn render_image(url: &str, alt: &str, ctx: &Ctx) -> AnyElement {
         .gap(px(4.0))
         .child(
             image
+                .w_full()
                 .max_w(relative(1.0))
                 .max_h(px(MAX_HEIGHT))
                 .rounded(px(6.0))
-                .object_fit(gpui::ObjectFit::ScaleDown),
+                .object_fit(gpui::ObjectFit::ScaleDown)
+                .with_loading(move || {
+                    div()
+                        .w_full()
+                        .h(px(160.0))
+                        .rounded(px(6.0))
+                        .bg(loading_color)
+                        .into_any_element()
+                })
+                .with_fallback(move || {
+                    div()
+                        .w_full()
+                        .h(px(72.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.0))
+                        .bg(loading_color)
+                        .text_color(fallback_color)
+                        .child("Image failed to load")
+                        .into_any_element()
+                }),
         )
         .when(!alt.trim().is_empty(), |element| {
             element.child(
@@ -1683,9 +1827,109 @@ fn render_image(url: &str, alt: &str, ctx: &Ctx) -> AnyElement {
                     .child(SharedString::from(alt.to_owned())),
             )
         })
-        .into_any_element()
+        .into_any_element();
+    selectable_media(content, url, key, ctx)
 }
 
+/// An inline video. GPUI has no native video element, so this renders an
+/// inline player card — thumbnail treatment with a play affordance and the
+/// source URL — instead of a bare link line. Activating it opens the source
+/// URL (via the caller's link handler when one is set).
+fn render_video(url: &str, ctx: &Ctx) -> AnyElement {
+    let key = ctx.next_key();
+    if let Some(player) = ctx.video_renderer.as_ref().and_then(|render| render(url)) {
+        let content = div()
+            .id(SharedString::from(format!("video-{}-{}", key.row, key.index)))
+            .w_full()
+            .h(px(280.0))
+            .rounded(px(8.0))
+            .overflow_hidden()
+            .child(player)
+            .into_any_element();
+        return selectable_media(content, url, key, ctx);
+    }
+    let id = SharedString::from(format!("video-{}-{}", key.row, key.index));
+    let target = url.to_owned();
+    let keyboard_target = url.to_owned();
+    let handler = ctx.link_handler.clone();
+    let keyboard_handler = ctx.link_handler.clone();
+    let content = div()
+        .id(id)
+        .w_full()
+        .min_w_0()
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(ctx.palette.border)
+        .bg(ctx.palette.inset)
+        .overflow_hidden()
+        .cursor_pointer()
+        .tab_index(0)
+        .focus_visible(|style| style.border_color(ctx.palette.accent))
+        .tooltip(Tooltip::text(url.to_owned()))
+        .on_click(move |_, window, cx| {
+            if let Some(handler) = &handler {
+                // LinkHandler signature is (url, window, app).
+                handler(&target, window, cx);
+            } else {
+                cx.open_url(&target);
+            }
+        })
+        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                if let Some(handler) = &keyboard_handler {
+                    handler(&keyboard_target, window, cx);
+                } else {
+                    cx.open_url(&keyboard_target);
+                }
+                cx.stop_propagation();
+            }
+        })
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .px(px(12.0))
+                .py(px(10.0))
+                .child(crate::ui::icon(
+                    "icons/file-types/video.svg",
+                    22.0,
+                    ctx.palette.secondary,
+                ))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .child(
+                            div()
+                                .text_size(px((ctx.metrics.text_size - 1.0).max(12.5)))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(ctx.palette.text)
+                                .child("Video"),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .w_full()
+                                .truncate()
+                                .text_size(px((ctx.metrics.text_size - 2.0).max(12.0)))
+                                .text_color(ctx.palette.ghost)
+                                .child(SharedString::from(url.to_owned())),
+                        ),
+                )
+                .child(crate::ui::icon(
+                    "icons/external-link.svg",
+                    14.0,
+                    ctx.palette.secondary,
+                )),
+        )
+        .into_any_element();
+    selectable_media(content, url, key, ctx)
+}
 const CODE_COPY_FEEDBACK_DURATION: Duration = Duration::from_secs(3);
 type CodeCopyFeedback = Rc<RefCell<HashMap<usize, u64>>>;
 
@@ -2083,6 +2327,31 @@ mod tests {
     use super::*;
     use crate::md::parser;
     use gpui::TestAppContext;
+
+    #[test]
+    fn selected_media_copies_its_source_url() {
+        let url: Rc<str> = Rc::from("https://example.com/demo.gif");
+        let bounds = Bounds::new(point(px(10.0), px(20.0)), size(px(300.0), px(180.0)));
+        let mut registry = SelectionRegistry::default();
+        registry.push(RegisteredText {
+            key: TextKey::new("row", 0),
+            text: url.clone(),
+            block_break: true,
+            geometry: TextGeometry::Media {
+                bounds,
+                text_len: url.len(),
+            },
+        });
+
+        let mut selection = super::super::selection::Selection::default();
+        selection.set_spans(registry.resolve((0, 0), (0, url.len())));
+
+        assert_eq!(selection.selected_text().as_deref(), Some(url.as_ref()));
+        assert_eq!(
+            text_range_bounds(&registry.entries()[0].geometry, &(0..url.len())),
+            vec![bounds]
+        );
+    }
 
     fn palette() -> Palette {
         Palette::from_theme(&Theme::dark())

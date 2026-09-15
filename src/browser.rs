@@ -133,6 +133,10 @@ fn is_secure_url(url: &str) -> bool {
     url.starts_with("https://")
 }
 
+fn embedded_scroll_offset(current: f32, maximum: f32, delta_y: f32) -> f32 {
+    (current - delta_y).clamp(-maximum, 0.0)
+}
+
 /// The address bar hides `https://` the way Safari does; everything else —
 /// including `http://` — stays visible because it is information.
 fn display_url(url: &str) -> &str {
@@ -141,15 +145,15 @@ fn display_url(url: &str) -> &str {
 
 #[cfg(target_os = "macos")]
 mod host {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::ffi::c_void;
-    use std::ptr::null_mut;
+    use std::ptr::{NonNull, null_mut};
 
     use gpui::{Bounds, Pixels};
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
     use objc2::{AllocAnyThread, DefinedClass, define_class, msg_send};
-    use objc2_app_kit::{NSApplication, NSEventType, NSView, NSWindow};
+    use objc2_app_kit::{NSApplication, NSEvent, NSEventMask, NSEventType, NSView, NSWindow};
     use objc2_foundation::{
         MainThreadMarker, NSDictionary, NSKeyValueChangeKey, NSKeyValueObservingOptions,
         NSObjectNSKeyValueObserverRegistration, NSObjectProtocol, NSProcessInfo, NSString,
@@ -253,6 +257,7 @@ mod host {
         /// Watches the window's first responder; dropped (and unregistered)
         /// with the host.
         _responder_observer: Option<Retained<ResponderObserver>>,
+        wheel_monitor: RefCell<Option<Retained<AnyObject>>>,
     }
 
     impl WebviewHost {
@@ -268,7 +273,35 @@ mod host {
                 last_bounds: Cell::new(None),
                 visible: Cell::new(false),
                 _responder_observer: responder_observer,
+                wheel_monitor: RefCell::new(None),
             }
+        }
+
+        pub fn forward_scroll_wheel(&self, handler: Box<dyn Fn(f32)>) {
+            let wk = self.wk.clone();
+            let block = block2::RcBlock::new(move |event: NonNull<NSEvent>| {
+                let event = unsafe { event.as_ref() };
+                let point = wk.convertPoint_fromView(event.locationInWindow(), None);
+                let bounds = wk.bounds();
+                let inside = !wk.isHidden()
+                    && point.x >= bounds.origin.x
+                    && point.x <= bounds.origin.x + bounds.size.width
+                    && point.y >= bounds.origin.y
+                    && point.y <= bounds.origin.y + bounds.size.height;
+                if inside {
+                    handler(-event.scrollingDeltaY() as f32);
+                    null_mut()
+                } else {
+                    event as *const NSEvent as *mut NSEvent
+                }
+            });
+            let monitor = unsafe {
+                NSEvent::addLocalMonitorForEventsMatchingMask_handler(
+                    NSEventMask::ScrollWheel,
+                    &block,
+                )
+            };
+            *self.wheel_monitor.borrow_mut() = monitor;
         }
 
         pub fn wk(&self) -> &WKWebView {
@@ -324,6 +357,14 @@ mod host {
                     .downcast_ref::<NSView>()
                     .is_some_and(|responder| responder.isDescendantOf(view))
             })
+        }
+    }
+
+    impl Drop for WebviewHost {
+        fn drop(&mut self) {
+            if let Some(monitor) = self.wheel_monitor.get_mut().take() {
+                unsafe { NSEvent::removeMonitor(&monitor) };
+            }
         }
     }
 
@@ -1192,6 +1233,8 @@ pub struct BrowserView {
     /// used to pin the whole window — and every visible transcript row — at
     /// 120 Hz.
     progress_poll_armed: bool,
+    embedded: bool,
+    embedded_scroll: Option<gpui::ScrollHandle>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -1291,10 +1334,61 @@ impl BrowserView {
             snapshot_pending: false,
             snapshot_epoch: 0,
             progress_poll_armed: false,
+            embedded: false,
+            embedded_scroll: None,
             _subscriptions: vec![submit_subscription, focus_in_address, focus_out_surface],
         };
         this.build_webview(window, cx);
         this
+    }
+
+    pub fn new_embedded_video(
+        url: &str,
+        scroll: gpui::ScrollHandle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        use base64::Engine as _;
+
+        let mut this = Self::new(window, cx);
+        this.embedded = true;
+        this.embedded_scroll = Some(scroll);
+        #[cfg(target_os = "macos")]
+        if let Some(host) = &this.host {
+            let deferred = Deferred {
+                executor: cx.foreground_executor().clone(),
+                cx: cx.to_async(),
+                view: cx.entity().downgrade(),
+            };
+            host.forward_scroll_wheel(Box::new(move |delta| {
+                deferred.update(move |this, cx| this.scroll_embedded_parent(delta, cx));
+            }));
+        }
+        let escaped = url
+            .replace('&', "&amp;")
+            .replace('"', "&quot;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        let html = format!(
+            r#"<!doctype html><meta name="viewport" content="width=device-width"><style>html,body{{margin:0;width:100%;height:100%;overflow:hidden;background:#000}}video{{display:block;width:100%;height:100%;object-fit:contain}}</style><video controls playsinline preload="metadata" src="{escaped}"></video><script>addEventListener('wheel',event=>{{window.ipc.postMessage('video-wheel:'+event.deltaY);event.preventDefault()}},{{passive:false}})</script>"#
+        );
+        let encoded = base64::engine::general_purpose::STANDARD.encode(html);
+        this.navigate_to_url(format!("data:text/html;base64,{encoded}"), cx);
+        this
+    }
+
+    fn scroll_embedded_parent(&mut self, delta_y: f32, cx: &mut Context<Self>) {
+        let Some(scroll) = &self.embedded_scroll else {
+            return;
+        };
+        let mut offset = scroll.offset();
+        offset.y = px(embedded_scroll_offset(
+            f32::from(offset.y),
+            f32::from(scroll.max_offset().y),
+            delta_y,
+        ));
+        scroll.set_offset(offset);
+        cx.refresh_windows();
     }
 
     pub fn refresh_localized_text(&mut self, cx: &mut Context<Self>) {
@@ -1327,6 +1421,7 @@ impl BrowserView {
         let on_page_load = deferred.clone();
         let on_title = deferred.clone();
         let on_new_window = deferred.clone();
+        let on_ipc = deferred.clone();
 
         // The responder observer's decision needs the window (GPUI focus
         // moves), which `Deferred` cannot reach; go through the window handle.
@@ -1361,6 +1456,15 @@ impl BrowserView {
             .with_devtools(true)
             .with_user_agent(USER_AGENT)
             .with_navigation_handler(|_| true)
+            .with_ipc_handler(move |request| {
+                if let Some(delta) = request
+                    .body()
+                    .strip_prefix("video-wheel:")
+                    .and_then(|value| value.parse::<f32>().ok())
+                {
+                    on_ipc.update(move |this, cx| this.scroll_embedded_parent(delta, cx));
+                }
+            })
             .with_on_page_load_handler(move |event, url| {
                 let event = match event {
                     wry::PageLoadEvent::Started => PageLoad::Started,
@@ -2201,10 +2305,14 @@ impl BrowserView {
     fn forward_page_input(
         host: Rc<WebviewHost>,
         focus: FocusHandle,
+        parent_scroll: Option<gpui::ScrollHandle>,
         hitbox: gpui::Hitbox,
         window: &mut Window,
     ) {
-        use gpui::{DispatchPhase, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollWheelEvent};
+        use gpui::{
+            DispatchPhase, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollDelta,
+            ScrollWheelEvent,
+        };
 
         // The page's own cursor, applied the way every other GPUI element
         // applies one, so it survives GPUI reasserting its cursor per frame.
@@ -2266,8 +2374,25 @@ impl BrowserView {
             }
         });
 
-        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, _| {
-            if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
+        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble || !hitbox.should_handle_scroll(window) {
+                return;
+            }
+            if let Some(scroll) = &parent_scroll {
+                let delta_y = match event.delta {
+                    ScrollDelta::Pixels(delta) => -f32::from(delta.y),
+                    ScrollDelta::Lines(delta) => -delta.y * 20.0,
+                };
+                let mut offset = scroll.offset();
+                offset.y = px(embedded_scroll_offset(
+                    f32::from(offset.y),
+                    f32::from(scroll.max_offset().y),
+                    delta_y,
+                ));
+                scroll.set_offset(offset);
+                cx.stop_propagation();
+                cx.refresh_windows();
+            } else {
                 host.scroll(event.position, event.delta, event.modifiers);
             }
         });
@@ -2286,6 +2411,8 @@ impl BrowserView {
         let input = self.host.clone();
         #[cfg(target_os = "windows")]
         let focus = self.focus_handle.clone();
+        #[cfg(target_os = "windows")]
+        let parent_scroll = self.embedded_scroll.clone();
         div()
             .flex_1()
             .min_h_0()
@@ -2306,7 +2433,13 @@ impl BrowserView {
                     move |_, _hitbox, _window, _| {
                         #[cfg(target_os = "windows")]
                         if let Some(host) = input {
-                            Self::forward_page_input(host, focus, _hitbox, _window);
+                            Self::forward_page_input(
+                                host,
+                                focus,
+                                parent_scroll,
+                                _hitbox,
+                                _window,
+                            );
                         }
                     },
                 )
@@ -2536,7 +2669,7 @@ impl Render for BrowserView {
             .min_h_0()
             .flex()
             .flex_col()
-            .child(self.render_toolbar(cx))
+            .when(!self.embedded, |element| element.child(self.render_toolbar(cx)))
             .child(body)
     }
 }
@@ -2588,6 +2721,14 @@ mod tests {
             Some(AddressTarget::Search("readme".into()))
         );
         assert_eq!(resolve_address("   "), None);
+    }
+
+    #[test]
+    fn embedded_video_wheel_scrolls_and_clamps_the_parent() {
+        assert_eq!(embedded_scroll_offset(0.0, 500.0, 80.0), -80.0);
+        assert_eq!(embedded_scroll_offset(-80.0, 500.0, -30.0), -50.0);
+        assert_eq!(embedded_scroll_offset(-480.0, 500.0, 80.0), -500.0);
+        assert_eq!(embedded_scroll_offset(-20.0, 500.0, -80.0), 0.0);
     }
 
     #[test]
