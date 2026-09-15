@@ -3369,10 +3369,40 @@ impl Insulator {
                 // inside render: defer entity creation past this frame and
                 // paint the link-card fallback until the players land.
                 let detail_scroll = self.pull_request_detail_scroll_handle.clone();
+                let detail_key = key.clone();
                 let entity = cx.entity().downgrade();
                 window.defer(cx, move |window, cx| {
                     let _ = entity.update(cx, |this, cx| {
+                        // Discard deferred work if the panel closed.
+                        let Some(detail) = this.pull_request_detail.as_ref() else {
+                            return;
+                        };
+                        // Discard deferred work if selection moved to another PR.
+                        if detail.repository != detail_key.0 || detail.number != detail_key.1
+                        {
+                            return;
+                        }
+                        // Re-derive the live video set so a body load that
+                        // landed after render cannot resurrect removed URLs.
+                        let current_body = without_html_comments(&detail.body);
+                        let mut current_view = MarkdownView::new();
+                        current_view.set_text(&current_body, false);
+                        let current_urls = current_view.video_urls();
+                        let mut inserted = false;
                         for url in &missing_video_urls {
+                            // Revalidate before each construction: a closed or
+                            // changed detail discards the remaining work.
+                            let Some(detail) = this.pull_request_detail.as_ref() else {
+                                return;
+                            };
+                            if detail.repository != detail_key.0
+                                || detail.number != detail_key.1
+                            {
+                                return;
+                            }
+                            if !current_urls.contains(url) {
+                                continue;
+                            }
                             if this.pull_request_video_views.contains_key(url) {
                                 continue;
                             }
@@ -3387,8 +3417,11 @@ impl Insulator {
                                 )
                             });
                             this.pull_request_video_views.insert(url.clone(), player);
+                            inserted = true;
                         }
-                        cx.notify();
+                        if inserted {
+                            cx.notify();
+                        }
                     });
                 });
             }
