@@ -71,13 +71,56 @@ pub struct ListItem {
     pub blocks: Vec<Block>,
 }
 
-/// One piece of inline content. Images interrupt a run of text rather than
-/// styling it, so they cannot be an [`InlineStyle`] flag.
+/// One piece of inline content. Images and videos interrupt a run of text
+/// rather than styling it, so they cannot be an [`InlineStyle`] flag.
 #[derive(Clone, Debug, PartialEq)]
 enum InlinePiece {
     Run(InlineRun),
     Image { url: String, alt: String },
+    Video { url: String },
     DisplayMath(String),
+}
+
+/// Returns true for URLs that point at a video rather than a still image.
+/// The check is extension-based on the path portion (query strings and
+/// fragments are ignored), so GitHub attachment URLs without an extension
+/// fall through to the image path and still render as a link.
+pub fn is_video_url(url: &str) -> bool {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let extension = path.rsplit('.').next().unwrap_or_default();
+    // Guard against hostnames without a path dot (e.g. `https://x/mp4` has
+    // no extension; `rsplit('.')` would return the whole path).
+    if !path.contains('.') {
+        return false;
+    }
+    // Only treat the segment after the final `/` as the extension source,
+    // so `https://example.com/v1.2/page` is not mistaken for a video.
+    let last_segment = path.rsplit('/').next().unwrap_or(path);
+    if !last_segment.contains('.') {
+        return false;
+    }
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "mp4" | "mov" | "webm" | "mkv" | "avi" | "m4v" | "ogv"
+    )
+}
+
+/// Returns true for URLs that point at a still image (extension-based, same
+/// path rules as [`is_video_url`]).
+pub fn is_image_url(url: &str) -> bool {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    if !path.contains('.') {
+        return false;
+    }
+    let last_segment = path.rsplit('/').next().unwrap_or(path);
+    if !last_segment.contains('.') {
+        return false;
+    }
+    let extension = last_segment.rsplit('.').next().unwrap_or_default();
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "svg" | "bmp" | "ico" | "tiff" | "tif"
+    )
 }
 
 /// A markdown block. Containers nest.
@@ -92,6 +135,9 @@ pub enum Block {
         url: String,
         alt: String,
     },
+    /// A standalone video. Rendered inline as a player affordance (GPUI has
+    /// no native video element); clicking opens the source URL.
+    Video { url: String },
     Heading {
         level: u8,
         runs: Vec<InlineRun>,
@@ -449,8 +495,8 @@ fn looks_like_bare_math(text: &str) -> bool {
         || text.starts_with("d / d")
 }
 
-/// Split inline pieces into blocks, so images become their own block and the
-/// text around them keeps its order.
+/// Split inline pieces into blocks, so images and videos become their own
+/// block and the text around them keeps its order.
 fn pieces_into_blocks(pieces: Vec<InlinePiece>) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut runs: Vec<InlineRun> = Vec::new();
@@ -464,6 +510,14 @@ fn pieces_into_blocks(pieces: Vec<InlinePiece>) -> Vec<Block> {
                     });
                 }
                 blocks.push(Block::Image { url, alt });
+            }
+            InlinePiece::Video { url } => {
+                if !runs.is_empty() {
+                    blocks.push(Block::Paragraph {
+                        runs: std::mem::take(&mut runs),
+                    });
+                }
+                blocks.push(Block::Video { url });
             }
             InlinePiece::DisplayMath(latex) => {
                 if !runs.is_empty() {
@@ -489,6 +543,7 @@ fn pieces_into_runs(pieces: Vec<InlinePiece>) -> Vec<InlineRun> {
             .map(|piece| match piece {
                 InlinePiece::Run(run) => run,
                 InlinePiece::Image { alt, .. } => InlineRun::plain(alt),
+                InlinePiece::Video { url } => InlineRun::plain(url),
                 InlinePiece::DisplayMath(text) => InlineRun {
                     text,
                     style: InlineStyle {
@@ -564,10 +619,12 @@ fn parse_inline_event(cursor: &mut Cursor, pieces: &mut Vec<InlinePiece>, style:
             } else {
                 alt
             };
-            pieces.push(InlinePiece::Image {
-                url: dest_url.to_string(),
-                alt,
-            });
+            let url = dest_url.to_string();
+            if is_video_url(&url) {
+                pieces.push(InlinePiece::Video { url });
+            } else {
+                pieces.push(InlinePiece::Image { url, alt });
+            }
         }
         Event::Start(tag) => {
             let mut nested = style.clone();
@@ -682,6 +739,31 @@ fn linkify_bare_urls(pieces: Vec<InlinePiece>) -> Vec<InlinePiece> {
 }
 
 fn push_linkified_run(run: InlineRun, pieces: &mut Vec<InlinePiece>) {
+    // A paragraph that is nothing but a bare media URL renders inline as
+    // media rather than as a clickable link line, so PR bodies pasting raw
+    // GIF/video/photo URLs show the content itself.
+    let trimmed = run.text.trim();
+    if !trimmed.is_empty()
+        && !trimmed.contains(char::is_whitespace)
+        && BARE_WEB_URL.is_match(trimmed)
+    {
+        let end = trimmed_bare_url_end(trimmed, 0, trimmed.len());
+        if end == trimmed.len() {
+            if is_video_url(trimmed) {
+                pieces.push(InlinePiece::Video {
+                    url: trimmed.to_owned(),
+                });
+                return;
+            }
+            if is_image_url(trimmed) {
+                pieces.push(InlinePiece::Image {
+                    url: trimmed.to_owned(),
+                    alt: String::new(),
+                });
+                return;
+            }
+        }
+    }
     let mut cursor = 0;
     for candidate in BARE_WEB_URL.find_iter(&run.text) {
         let end = trimmed_bare_url_end(&run.text, candidate.start(), candidate.end());
@@ -1192,6 +1274,34 @@ mod tests {
     fn a_standalone_image_is_one_block() {
         let tree = parse("![](data:image/png;base64,aGk=)");
         assert_eq!(tree.len(), 1);
+        assert!(matches!(tree.blocks[0].block, Block::Image { .. }));
+    }
+
+    #[test]
+    fn image_markdown_with_a_video_destination_becomes_a_video_block() {
+        let tree = parse("![](https://example.com/clip.mp4)");
+        assert_eq!(tree.len(), 1);
+        assert_eq!(
+            tree.blocks[0].block,
+            Block::Video {
+                url: "https://example.com/clip.mp4".into()
+            }
+        );
+    }
+
+    #[test]
+    fn standalone_bare_media_urls_render_as_media_blocks() {
+        let tree = parse("https://example.com/shot.gif");
+        assert_eq!(tree.len(), 1);
+        assert!(matches!(tree.blocks[0].block, Block::Image { .. }));
+        let tree = parse("https://example.com/clip.webm");
+        assert_eq!(tree.len(), 1);
+        assert!(matches!(tree.blocks[0].block, Block::Video { .. }));
+    }
+
+    #[test]
+    fn bare_media_urls_with_query_strings_still_render_as_media() {
+        let tree = parse("https://example.com/shot.png?x=1#frag");
         assert!(matches!(tree.blocks[0].block, Block::Image { .. }));
     }
 

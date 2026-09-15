@@ -1314,10 +1314,10 @@ fn search_block(
             *ordinal += 1;
             search_text(code, current, regex, cap, matches)
         }
-        Block::Image { .. } => {
-            // The renderer consumes an ordinal for the image id, but its alt
-            // caption is not a selectable/shaped text element and therefore
-            // has no glyph geometry for a find highlight.
+        Block::Image { .. } | Block::Video { .. } => {
+            // The renderer consumes an ordinal for the image/video id, but
+            // its alt caption is not a selectable/shaped text element and
+            // therefore has no glyph geometry for a find highlight.
             *ordinal += 1;
             false
         }
@@ -1477,6 +1477,7 @@ fn render_block(block: &Block, ctx: &Ctx) -> AnyElement {
                 .into_any_element()
         }
         Block::Image { url, alt } => render_image(url, alt, ctx),
+        Block::Video { url } => render_video(url, ctx),
         Block::DisplayMath { latex } => {
             let key = ctx.next_key();
             let flat = ctx.flat(key.index, || {
@@ -1686,6 +1687,92 @@ fn render_image(url: &str, alt: &str, ctx: &Ctx) -> AnyElement {
         .into_any_element()
 }
 
+/// An inline video. GPUI has no native video element, so this renders an
+/// inline player card — thumbnail treatment with a play affordance and the
+/// source URL — instead of a bare link line. Activating it opens the source
+/// URL (via the caller's link handler when one is set).
+fn render_video(url: &str, ctx: &Ctx) -> AnyElement {
+    let key = ctx.next_key();
+    let id = SharedString::from(format!("video-{}-{}", key.row, key.index));
+    let target = url.to_owned();
+    let keyboard_target = url.to_owned();
+    let handler = ctx.link_handler.clone();
+    let keyboard_handler = ctx.link_handler.clone();
+    div()
+        .id(id)
+        .w_full()
+        .min_w_0()
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(ctx.palette.border)
+        .bg(ctx.palette.inset)
+        .overflow_hidden()
+        .cursor_pointer()
+        .tab_index(0)
+        .tooltip(Tooltip::text(url.to_owned()))
+        .on_click(move |_, window, cx| {
+            if let Some(handler) = &handler {
+                // LinkHandler signature is (url, window, app).
+                handler(&target, window, cx);
+            } else {
+                cx.open_url(&target);
+            }
+        })
+        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                if let Some(handler) = &keyboard_handler {
+                    handler(&keyboard_target, window, cx);
+                } else {
+                    cx.open_url(&keyboard_target);
+                }
+                cx.stop_propagation();
+            }
+        })
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .px(px(12.0))
+                .py(px(10.0))
+                .child(crate::ui::icon(
+                    "icons/file-types/video.svg",
+                    22.0,
+                    ctx.palette.secondary,
+                ))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .child(
+                            div()
+                                .text_size(px((ctx.metrics.text_size - 1.0).max(12.5)))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(ctx.palette.text)
+                                .child("Video"),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .w_full()
+                                .truncate()
+                                .text_size(px((ctx.metrics.text_size - 2.0).max(12.0)))
+                                .text_color(ctx.palette.ghost)
+                                .child(SharedString::from(url.to_owned())),
+                        ),
+                )
+                .child(crate::ui::icon(
+                    "icons/external-link.svg",
+                    14.0,
+                    ctx.palette.secondary,
+                )),
+        )
+        .into_any_element()
+}
 const CODE_COPY_FEEDBACK_DURATION: Duration = Duration::from_secs(3);
 type CodeCopyFeedback = Rc<RefCell<HashMap<usize, u64>>>;
 

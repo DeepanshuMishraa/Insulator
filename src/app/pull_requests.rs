@@ -230,7 +230,8 @@ fn load_owned_repository_pull_requests(limit: usize) -> anyhow::Result<Vec<GhPul
     let owner = String::from_utf8_lossy(&login.stdout).trim().to_owned();
     let output = gh_command()
         .args([
-            "search", "prs", "--owner", &owner, "--state", "open", "--limit", &limit.to_string(), "--json",
+            "search", "prs", "--owner", &owner, "--state", "open", "--sort", "created", "--order",
+            "desc", "--limit", &limit.to_string(), "--json",
             GH_FIELDS,
         ])
         .env("GH_PROMPT_DISABLED", "1")
@@ -247,7 +248,8 @@ fn load_owned_repository_pull_requests(limit: usize) -> anyhow::Result<Vec<GhPul
     let mut requests: Vec<GhPullRequest> = serde_json::from_slice(&output.stdout)?;
     let closed = gh_command()
         .args([
-            "search", "prs", "--owner", &owner, "--state", "closed", "--limit", &limit.to_string(), "--json",
+            "search", "prs", "--owner", &owner, "--state", "closed", "--sort", "created", "--order",
+            "desc", "--limit", &limit.to_string(), "--json",
             GH_FIELDS,
         ])
         .env("GH_PROMPT_DISABLED", "1")
@@ -742,8 +744,17 @@ fn without_html_comments(body: &str) -> String {
     }
     result.push_str(rest);
 
-    let mut summary_cleaned = String::with_capacity(result.len());
-    let mut rest = result.as_str();
+    // Preserve embedded media before the generic tag strip below: GitHub PR
+    // bodies paste uploads as `<img src="…">`, `<video src="…">`, or
+    // `<video><source src="…"></video>`. The old code stripped every tag, so
+    // GIFs/videos/photos collapsed to a bare link line or vanished. Rewrite
+    // them to markdown image syntax first; the markdown parser renders image
+    // destinations inline and routes video destinations to an inline player
+    // card.
+    let with_media = html_media_to_markdown(&result);
+
+    let mut summary_cleaned = String::with_capacity(with_media.len());
+    let mut rest = with_media.as_str();
     while let Some(start) = rest.find("<summary>") {
         summary_cleaned.push_str(&rest[..start]);
         if let Some(end) = rest[start + 9..].find("</summary>") {
@@ -776,6 +787,97 @@ fn without_html_comments(body: &str) -> String {
     plain = plain.replace("</blockquote></details>", "");
     plain = plain.replace("</details>", "");
     plain.trim().to_owned()
+}
+
+/// Rewrite `<img>`, `<video>`, and `<source>` tags carrying a `src` into
+/// markdown image syntax so the markdown renderer displays them inline.
+/// Anything without a usable `src` is dropped (it carried no content).
+fn html_media_to_markdown(body: &str) -> String {
+    let mut output = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(start) = rest.find('<') {
+        let Some(end) = rest[start..].find('>') else {
+            output.push_str(rest);
+            break;
+        };
+        let tag = &rest[start..start + end + 1];
+        let tag_lower = tag.to_ascii_lowercase();
+        let is_media_tag = tag_lower.starts_with("<img")
+            || tag_lower.starts_with("<video")
+            || tag_lower.starts_with("<source");
+        if is_media_tag {
+            if let Some(src) = html_tag_src(tag) {
+                let src = src.trim();
+                if !src.is_empty() {
+                    output.push_str("\n\n![](");
+                    output.push_str(src);
+                    output.push_str(")\n\n");
+                }
+            }
+            rest = &rest[start + end + 1..];
+        } else {
+            output.push_str(&rest[..start + end + 1]);
+            rest = &rest[start + end + 1..];
+        }
+    }
+    output
+}
+
+/// Extract the `src` attribute value from a single HTML tag (double- or
+/// single-quoted). Returns `None` when absent or unterminated.
+fn html_tag_src(tag: &str) -> Option<&str> {
+    let bytes = tag.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        // Find a case-insensitive `src` word boundary.
+        let remaining = &tag[index..];
+        let Some(pos) = remaining
+            .to_ascii_lowercase()
+            .find("src")
+        else {
+            return None;
+        };
+        let key = index + pos;
+        let before_ok = key == 0
+            || !(bytes[key - 1].is_ascii_alphanumeric() || bytes[key - 1] == b'-');
+        let after = key + 3;
+        let after_ok = after >= bytes.len()
+            || !(bytes[after].is_ascii_alphanumeric() || bytes[after] == b'-');
+        index = after;
+        if !(before_ok && after_ok) {
+            continue;
+        }
+        let mut cursor = after;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() || bytes[cursor] != b'=' {
+            continue;
+        }
+        cursor += 1;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() {
+            return None;
+        }
+        let quote = bytes[cursor];
+        if quote != b'"' && quote != b'\'' {
+            // Unquoted attribute values are rare in pasted GitHub HTML; skip
+            // rather than guess a terminator.
+            continue;
+        }
+        let value_start = cursor + 1;
+        let mut value_end = value_start;
+        while value_end < bytes.len() && bytes[value_end] != quote {
+            value_end += 1;
+        }
+        if value_end >= bytes.len() {
+            return None;
+        }
+        return Some(&tag[value_start..value_end]);
+    }
+    None
 }
 
 fn load_pull_request_checks(request: &PullRequest) -> anyhow::Result<Vec<PullRequestCheck>> {
@@ -940,7 +1042,16 @@ fn load_pull_requests(limit: usize) -> anyhow::Result<Vec<PullRequest>> {
             command.args(["--state", state]);
         }
         let output = command
-            .args(["--limit", &limit.to_string(), "--json", GH_FIELDS])
+            .args([
+                "--sort",
+                "created",
+                "--order",
+                "desc",
+                "--limit",
+                &limit.to_string(),
+                "--json",
+                GH_FIELDS,
+            ])
             .output()
             .map_err(gh_spawn_error)?;
         if !output.status.success() {
@@ -1046,8 +1157,8 @@ fn load_pull_requests_page(cursor: Option<&str>) -> anyhow::Result<(Vec<PullRequ
         Ok(Some(response.data.ok_or_else(|| anyhow::anyhow!("GitHub returned no pull-request page"))?.search))
     };
 
-    let author_page = fetch(format!("author:{login} is:pr"), author_cursor)?;
-    let owner_page = fetch(format!("user:{login} is:pr"), owner_cursor)?;
+    let author_page = fetch(format!("author:{login} is:pr sort:created-desc"), author_cursor)?;
+    let owner_page = fetch(format!("user:{login} is:pr sort:created-desc"), owner_cursor)?;
     let author_next = author_page
         .as_ref()
         .filter(|page| page.page_info.has_next_page)
@@ -3865,6 +3976,32 @@ mod tests {
             super::without_html_comments("<!-- generated -->\n## Summary\n<p>Done</p>"),
             "## Summary\nDone"
         );
+    }
+
+    #[test]
+    fn embedded_html_media_is_preserved_as_markdown() {
+        let body = super::without_html_comments(
+            "Look:\n<img src=\"https://example.com/shot.png\" alt=\"shot\">\n<video src='https://example.com/clip.mp4'></video>",
+        );
+        assert!(body.contains("![](https://example.com/shot.png)"), "{body}");
+        assert!(body.contains("![](https://example.com/clip.mp4)"), "{body}");
+        let source = super::without_html_comments(
+            "<video><source src=\"https://example.com/clip.webm\" type=\"video/webm\"></video>",
+        );
+        assert!(source.contains("![](https://example.com/clip.webm)"), "{source}");
+    }
+
+    #[test]
+    fn html_tag_src_handles_both_quote_styles() {
+        assert_eq!(
+            super::html_tag_src("<img src=\"https://example.com/a.png\">"),
+            Some("https://example.com/a.png")
+        );
+        assert_eq!(
+            super::html_tag_src("<source src='https://example.com/b.mp4'>"),
+            Some("https://example.com/b.mp4")
+        );
+        assert_eq!(super::html_tag_src("<div>nope</div>"), None);
     }
 
     #[test]
