@@ -81,10 +81,11 @@ enum InlinePiece {
     DisplayMath(String),
 }
 
+const HTML_VIDEO_MARKER: &str = "insulator-video-marker";
+
 /// Returns true for URLs that point at a video rather than a still image.
-/// The check is extension-based on the path portion (query strings and
-/// fragments are ignored), so GitHub attachment URLs without an extension
-/// fall through to the image path and still render as a link.
+/// The check is extension-based on the path portion. Explicit HTML video
+/// markers are handled separately when the URL has no extension.
 pub fn is_video_url(url: &str) -> bool {
     let path = url.split(['?', '#']).next().unwrap_or(url);
     let extension = path.rsplit('.').next().unwrap_or_default();
@@ -542,7 +543,9 @@ fn pieces_into_runs(pieces: Vec<InlinePiece>) -> Vec<InlineRun> {
             .into_iter()
             .map(|piece| match piece {
                 InlinePiece::Run(run) => run,
-                InlinePiece::Image { alt, .. } => InlineRun::plain(alt),
+                InlinePiece::Image { url, alt } => {
+                    InlineRun::plain(if alt.is_empty() { url } else { alt })
+                }
                 InlinePiece::Video { url } => InlineRun::plain(url),
                 InlinePiece::DisplayMath(text) => InlineRun {
                     text,
@@ -620,7 +623,7 @@ fn parse_inline_event(cursor: &mut Cursor, pieces: &mut Vec<InlinePiece>, style:
                 alt
             };
             let url = dest_url.to_string();
-            if is_video_url(&url) {
+            if alt == HTML_VIDEO_MARKER || is_video_url(&url) {
                 pieces.push(InlinePiece::Video { url });
             } else {
                 pieces.push(InlinePiece::Image { url, alt });
@@ -1279,6 +1282,15 @@ mod tests {
 
     #[test]
     fn image_markdown_with_a_video_destination_becomes_a_video_block() {
+        let tree = parse("![insulator-video-marker](https://example.com/clip)");
+        assert_eq!(tree.len(), 1);
+        assert_eq!(
+            tree.blocks[0].block,
+            Block::Video {
+                url: "https://example.com/clip".into()
+            }
+        );
+
         let tree = parse("![](https://example.com/clip.mp4)");
         assert_eq!(tree.len(), 1);
         assert_eq!(
@@ -1314,6 +1326,21 @@ mod tests {
             panic!("expected a table");
         };
         assert_eq!(rows[0][0][0].text, "alt");
+    }
+
+    #[test]
+    fn bare_images_keep_their_url_in_flattened_contexts() {
+        let heading = parse("# https://example.com/shot.png");
+        let Block::Heading { runs, .. } = &heading.blocks[0].block else {
+            panic!("expected a heading");
+        };
+        assert_eq!(runs[0].text, "https://example.com/shot.png");
+
+        let table = parse("| a | b |\n|---|---|\n| https://example.com/shot.png | plain |\n");
+        let Block::Table { rows, .. } = &table.blocks[0].block else {
+            panic!("expected a table");
+        };
+        assert_eq!(rows[0][0][0].text, "https://example.com/shot.png");
     }
 
     #[test]

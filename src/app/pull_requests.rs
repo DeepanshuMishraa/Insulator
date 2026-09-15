@@ -793,15 +793,23 @@ fn without_html_comments(body: &str) -> String {
 /// markdown image syntax so the markdown renderer displays them inline.
 /// Anything without a usable `src` is dropped (it carried no content).
 fn html_media_to_markdown(body: &str) -> String {
+    const VIDEO_MARKER: &str = "insulator-video-marker";
     let mut output = String::with_capacity(body.len());
     let mut rest = body;
+    let mut inside_video = false;
     while let Some(start) = rest.find('<') {
+        output.push_str(&rest[..start]);
         let Some(end) = rest[start..].find('>') else {
-            output.push_str(rest);
-            break;
+            output.push_str(&rest[start..]);
+            return output;
         };
         let tag = &rest[start..start + end + 1];
         let tag_lower = tag.to_ascii_lowercase();
+        let is_video = tag_lower.starts_with("<video")
+            || (tag_lower.starts_with("<source")
+                && (inside_video
+                    || tag_lower.contains("type=\"video/")
+                    || tag_lower.contains("type='video/")));
         let is_media_tag = tag_lower.starts_with("<img")
             || tag_lower.starts_with("<video")
             || tag_lower.starts_with("<source");
@@ -809,17 +817,25 @@ fn html_media_to_markdown(body: &str) -> String {
             if let Some(src) = html_tag_src(tag) {
                 let src = src.trim();
                 if !src.is_empty() {
-                    output.push_str("\n\n![](");
+                    let alt = if is_video { VIDEO_MARKER } else { "" };
+                    output.push_str("\n\n![");
+                    output.push_str(alt);
+                    output.push_str("](");
                     output.push_str(src);
                     output.push_str(")\n\n");
                 }
             }
-            rest = &rest[start + end + 1..];
+            if tag_lower.starts_with("<video") && !tag_lower.starts_with("</video") {
+                inside_video = true;
+            } else if tag_lower.starts_with("</video") {
+                inside_video = false;
+            }
         } else {
-            output.push_str(&rest[..start + end + 1]);
-            rest = &rest[start + end + 1..];
+            output.push_str(tag);
         }
+        rest = &rest[start + end + 1..];
     }
+    output.push_str(rest);
     output
 }
 
@@ -3984,11 +4000,27 @@ mod tests {
             "Look:\n<img src=\"https://example.com/shot.png\" alt=\"shot\">\n<video src='https://example.com/clip.mp4'></video>",
         );
         assert!(body.contains("![](https://example.com/shot.png)"), "{body}");
-        assert!(body.contains("![](https://example.com/clip.mp4)"), "{body}");
+        assert!(
+            body.contains("![insulator-video-marker](https://example.com/clip.mp4)"),
+            "{body}"
+        );
         let source = super::without_html_comments(
             "<video><source src=\"https://example.com/clip.webm\" type=\"video/webm\"></video>",
         );
-        assert!(source.contains("![](https://example.com/clip.webm)"), "{source}");
+        assert!(
+            source.contains("![insulator-video-marker](https://example.com/clip.webm)"),
+            "{source}"
+        );
+
+        let extensionless = super::without_html_comments(
+            "before <video><source src=\"https://example.com/assets/clip\"></video> after",
+        );
+        assert!(
+            extensionless.contains("![insulator-video-marker](https://example.com/assets/clip)"),
+            "{extensionless}"
+        );
+        assert!(extensionless.ends_with("after"), "{extensionless}");
+        assert_eq!(super::html_media_to_markdown("ordinary text"), "ordinary text");
     }
 
     #[test]

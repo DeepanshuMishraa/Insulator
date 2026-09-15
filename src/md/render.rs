@@ -1709,6 +1709,7 @@ fn render_video(url: &str, ctx: &Ctx) -> AnyElement {
         .overflow_hidden()
         .cursor_pointer()
         .tab_index(0)
+        .focus_visible(|style| style.border_color(ctx.palette.accent))
         .tooltip(Tooltip::text(url.to_owned()))
         .on_click(move |_, window, cx| {
             if let Some(handler) = &handler {
