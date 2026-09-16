@@ -159,6 +159,8 @@ enum PaletteAction {
     CollapseSidebarGroups,
     ToggleSidebar,
     ToggleRightPanel,
+    StartSimStream,
+    StopSimStream,
     OpenSettings(SettingsPage),
     SelectTask(Uuid),
 }
@@ -817,6 +819,32 @@ impl Insulator {
                 next(),
             ),
         ]);
+        // iOS Simulator stream (T3 Code-style `serve-sim` into the browser).
+        // macOS Apple Silicon only; elsewhere the action toasts why.
+        commands.push(CommandPaletteItem::command(
+            PaletteSection::Commands,
+            if self.sim_stream_info.is_some() {
+                "Reopen Simulator Stream".to_owned()
+            } else {
+                "Start iOS Simulator Stream".to_owned()
+            },
+            "icons/laptop.svg",
+            None,
+            PaletteAction::StartSimStream,
+            "ios simulator stream serve-sim preview mobile iphone ipad browser",
+            next(),
+        ));
+        if self.sim_stream_info.is_some() {
+            commands.push(CommandPaletteItem::command(
+                PaletteSection::Commands,
+                "Stop Simulator Stream".to_owned(),
+                "icons/stop.svg",
+                None,
+                PaletteAction::StopSimStream,
+                "stop kill simulator stream serve-sim mobile",
+                next(),
+            ));
+        }
 
         for (page, label_key, icon, keywords) in [
             (
@@ -1607,6 +1635,14 @@ impl Insulator {
             PaletteAction::ToggleRightPanel => {
                 self.toggle_right_panel_action(&ToggleRightPanel, window, cx)
             }
+            PaletteAction::StartSimStream => {
+                if self.sim_stream_info.is_some() {
+                    self.reopen_sim_stream(window, cx);
+                } else {
+                    self.start_sim_stream(None, window, cx);
+                }
+            }
+            PaletteAction::StopSimStream => self.stop_sim_stream(cx),
             PaletteAction::OpenSettings(page) => {
                 self.open_settings_action(&OpenSettings, window, cx);
                 self.open_settings_page(page, cx);

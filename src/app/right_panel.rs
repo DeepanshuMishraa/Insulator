@@ -2026,6 +2026,7 @@ impl Insulator {
                 let browser_id = *self.right_panel_browser_id.get_or_insert_with(Uuid::new_v4);
                 self.right_panel_pending_browser_focus = Some(browser_id);
             }
+            RightPanelUpperTab::Simulator => {}
             RightPanelUpperTab::BackgroundWork { .. } => {}
         }
         cx.notify();
@@ -3009,6 +3010,7 @@ impl Insulator {
                 }
                 browser.into_any_element()
             }
+            RightPanelUpperTab::Simulator => self.render_sim_surface(window, cx),
             RightPanelUpperTab::BackgroundWork { key, .. } => self
                 .render_background_work_surface(&key, cx)
                 .into_any_element(),
@@ -3063,7 +3065,7 @@ impl Insulator {
             ))
     }
 
-    fn ensure_right_panel_browser(
+    pub(super) fn ensure_right_panel_browser(
         &mut self,
         browser_id: Uuid,
         window: &mut Window,
@@ -3083,7 +3085,7 @@ impl Insulator {
 
     /// Drop browser views whose tab no longer exists in any session.
     pub(super) fn retain_right_panel_browsers(&mut self) {
-        let retained_browser_ids = self
+        let mut retained_browser_ids = self
             .right_panel_surfaces
             .iter()
             .filter_map(RightPanelSurface::browser_id)
@@ -3094,6 +3096,11 @@ impl Insulator {
                     .filter_map(RightPanelSurface::browser_id)
             }))
             .collect::<HashSet<_>>();
+        // The Simulator tab owns a dedicated browser surface outside the
+        // surface lists; keep it while a stream is configured.
+        if let Some(sim_browser_id) = self.sim_browser_id {
+            retained_browser_ids.insert(sim_browser_id);
+        }
         self.right_panel_browsers
             .retain(|browser_id, _| retained_browser_ids.contains(browser_id));
     }
@@ -3133,9 +3140,12 @@ impl Insulator {
         let active_browser = if self.settings_page.is_none()
             && self.right_panel_visible
             && self.right_panel_slide.is_none()
-            && self.right_panel_upper_tab == RightPanelUpperTab::Browser
         {
-            self.right_panel_browser_id
+            match self.right_panel_upper_tab {
+                RightPanelUpperTab::Browser => self.right_panel_browser_id,
+                RightPanelUpperTab::Simulator => self.sim_browser_id,
+                _ => None,
+            }
         } else {
             None
         };
@@ -3226,12 +3236,15 @@ impl Insulator {
         let is_files = matches!(self.right_panel_upper_tab, RightPanelUpperTab::Files);
         let is_changes = matches!(self.right_panel_upper_tab, RightPanelUpperTab::Changes);
         let is_browser = matches!(self.right_panel_upper_tab, RightPanelUpperTab::Browser);
+        let is_simulator = matches!(
+            self.right_panel_upper_tab,
+            RightPanelUpperTab::Simulator
+        );
 
         let mut tabs = div()
             .id("right-panel-tabs")
             .h_full()
-            .min_w_0()
-            .flex_1()
+            .flex_none()
             .flex()
             .items_center()
             .gap(px(4.0));
@@ -3335,6 +3348,39 @@ impl Insulator {
                 })),
         );
 
+        tabs = tabs.child(
+            div()
+                .id("right-panel-tab-simulator")
+                .h(px(28.0))
+                .px(px(8.0))
+                .rounded(px(6.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .cursor_pointer()
+                .when(is_simulator, |el| el.bg(theme.overlay_strong))
+                .when(!is_simulator, |el| el.hover(|h| h.bg(theme.overlay)))
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(sp(12.5))
+                        .font_weight(if is_simulator {
+                            FontWeight::MEDIUM
+                        } else {
+                            FontWeight::NORMAL
+                        })
+                        .text_color(if is_simulator {
+                            theme.text
+                        } else {
+                            theme.text_secondary
+                        })
+                        .child("Simulator"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.select_right_panel_upper_tab(RightPanelUpperTab::Simulator, cx);
+                })),
+        );
+
         if let RightPanelUpperTab::BackgroundWork { title, .. } = &self.right_panel_upper_tab {
             let label = if title.is_empty() {
                 tr!("background.process")
@@ -3401,7 +3447,14 @@ impl Insulator {
                     .items_center()
                     .overflow_x_scroll()
                     .track_scroll(&self.right_panel_tabs_scroll_handle)
-                    .child(tabs),
+                    .on_scroll_wheel(cx.listener(|this, _, _, cx| {
+                        contain_horizontal_scroll(&this.right_panel_tabs_scroll_handle, cx);
+                    }))
+                    .child(tabs)
+                    .child(scrollbar::horizontal(
+                        &self.right_panel_tabs_scroll_handle,
+                        &self.right_panel_tabs_scrollbar,
+                    )),
             )
             .child(div().flex_none().child(self.render_right_panel_toggle(cx)));
 
