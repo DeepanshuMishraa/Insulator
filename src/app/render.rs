@@ -70,8 +70,16 @@ impl Insulator {
             )
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                 let delta = match event.keystroke.key.as_str() {
-                    "left" => Some(if target == PanelResizeTarget::Sidebar { -24.0 } else { 24.0 }),
-                    "right" => Some(if target == PanelResizeTarget::Sidebar { 24.0 } else { -24.0 }),
+                    "left" => Some(if target == PanelResizeTarget::Sidebar {
+                        -24.0
+                    } else {
+                        24.0
+                    }),
+                    "right" => Some(if target == PanelResizeTarget::Sidebar {
+                        24.0
+                    } else {
+                        -24.0
+                    }),
                     _ => None,
                 };
                 if let Some(delta) = delta {
@@ -92,15 +100,33 @@ impl Insulator {
         let (current, minimum, maximum, width) = match target {
             PanelResizeTarget::Sidebar => {
                 let maximum = SIDEBAR_MAX_WIDTH
-                    .min(f32::from(window.viewport_size().width) - MAIN_PANEL_MIN_WIDTH - right_panel_width)
+                    .min(
+                        f32::from(window.viewport_size().width)
+                            - MAIN_PANEL_MIN_WIDTH
+                            - right_panel_width,
+                    )
                     .max(SIDEBAR_MIN_WIDTH);
-                (self.sidebar_width, SIDEBAR_MIN_WIDTH, maximum, sidebar_width + delta)
+                (
+                    self.sidebar_width,
+                    SIDEBAR_MIN_WIDTH,
+                    maximum,
+                    sidebar_width + delta,
+                )
             }
             PanelResizeTarget::RightPanel => {
                 let maximum = RIGHT_PANEL_MAX_WIDTH
-                    .min(f32::from(window.viewport_size().width) - MAIN_PANEL_MIN_WIDTH - sidebar_width)
+                    .min(
+                        f32::from(window.viewport_size().width)
+                            - MAIN_PANEL_MIN_WIDTH
+                            - sidebar_width,
+                    )
                     .max(RIGHT_PANEL_MIN_WIDTH);
-                (self.right_panel_width, RIGHT_PANEL_MIN_WIDTH, maximum, right_panel_width + delta)
+                (
+                    self.right_panel_width,
+                    RIGHT_PANEL_MIN_WIDTH,
+                    maximum,
+                    right_panel_width + delta,
+                )
             }
             _ => return,
         };
@@ -411,6 +437,7 @@ impl Render for Insulator {
             .key_context("Insulator")
             .on_action(cx.listener(Self::close_window_or_right_panel_tab_action))
             .on_action(cx.listener(Self::new_session_action))
+            .on_action(cx.listener(Self::new_tab_action))
             .on_action(cx.listener(Self::new_project_action))
             .on_action(cx.listener(Self::open_settings_action))
             .on_action(cx.listener(Self::toggle_sidebar_action))
@@ -429,6 +456,11 @@ impl Render for Insulator {
             .on_action(cx.listener(Self::focus_composer_action))
             .on_action(cx.listener(Self::toggle_model_picker_action))
             .on_action(cx.listener(Self::toggle_usage_panel_action))
+            .on_action(cx.listener(Self::open_review_action))
+            .on_action(cx.listener(Self::toggle_pull_requests_action))
+            .on_action(cx.listener(Self::next_main_tab_action))
+            .on_action(cx.listener(Self::previous_main_tab_action))
+            .on_action(cx.listener(Self::close_active_tab_action))
             .on_action(cx.listener(Self::save_right_panel_file_action))
             .on_action(cx.listener(Self::cancel_turn_action))
             .on_action(cx.listener(Self::copy_selection_action))

@@ -11,9 +11,11 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use gpui::{
     Animation, AnimationExt, AnyElement, App, Bounds, ClipboardEntry, ClipboardItem, Context, Div,
     Entity, ExternalPaths, FocusHandle, Focusable, FontWeight, Hsla, IntoElement, KeyDownEvent,
+    KeystrokeEvent,
     ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, NavigationDirection, ObjectFit, PathPromptOptions, Pixels, Render, ScrollHandle,
-    SharedString, Stateful, StyleRefinement, TextRun, WeakEntity, Window, WindowBounds, canvas,
+    SharedString, Stateful, StyleRefinement, Subscription, TextRun, WeakEntity, Window,
+    WindowBounds, canvas,
     div, ease_out_quint, fill, font, img, linear_color_stop, linear_gradient, list, point,
     prelude::*, pulsating_between, px, rgb,
 };
@@ -69,12 +71,13 @@ use crate::ui::{
     toggle_switch,
 };
 use crate::{
-    CancelTaskSwitch, CancelTurn, CloseFind, CloseWindow, ConfirmTaskSwitch, CopySelection,
-    FindNext, FindPrevious, FocusComposer, NavigateBack, NavigateForward, NewProject, NewSession,
-    OpenFind, OpenFindReplace, OpenResumePicker, OpenSettings, ReplaceAllMatches, SaveFile,
-    SelectFirstTask, SelectLastTask, SwitchTaskBackward, SwitchTaskForward, ToggleCommandPalette,
-    ToggleFindCaseSensitive, ToggleFindRegex, ToggleFindWholeWord, ToggleFpsCounter,
-    ToggleModelPicker, ToggleRightPanel, ToggleSidebar, ToggleUsagePanel,
+    CancelTaskSwitch, CancelTurn, CloseActiveTab, CloseFind, CloseWindow, ConfirmTaskSwitch,
+    CopySelection, FindNext, FindPrevious, FocusComposer, NavigateBack, NavigateForward,
+    NewProject, NewSession, NewTab, NextMainTab, OpenFind, OpenFindReplace, OpenResumePicker, OpenReview,
+    OpenSettings, PreviousMainTab, ReplaceAllMatches, SaveFile, SelectFirstTask, SelectLastTask,
+    SwitchTaskBackward, SwitchTaskForward, ToggleCommandPalette, ToggleFindCaseSensitive,
+    ToggleFindRegex, ToggleFindWholeWord, ToggleFpsCounter, ToggleModelPicker, TogglePullRequests,
+    ToggleRightPanel, ToggleSidebar, ToggleUsagePanel,
 };
 use insulator_protocol::theme::WindowStyle;
 
@@ -232,12 +235,13 @@ enum BranchPickerAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsPage {
     General,
+    Appearance,
+    Keybindings,
     Providers,
     Skills,
     Usage,
     Daemon,
     ComputerUse,
-    Appearance,
 }
 
 impl SettingsPage {
@@ -1697,6 +1701,14 @@ pub struct Insulator {
     /// slides under it.
     settings_scroll: ScrollHandle,
     settings_scrollbar: Rc<ScrollbarState>,
+    /// Keybinding id currently capturing a replacement chord, if any.
+    /// While set, the settings page claims every keystroke for capture.
+    keybinding_capture: Option<String>,
+    keybinding_captures: RefCell<HashMap<String, FocusHandle>>,
+    /// Swallows keystrokes app-wide while a capture is armed, so pressing
+    /// the new shortcut neither fires its current action nor types anywhere.
+    /// `None` when no capture is armed.
+    keybinding_interceptor: Option<Subscription>,
     header_drag_armed: bool,
     toast: Option<ToastState>,
     toast_generation: u64,
@@ -1866,6 +1878,7 @@ mod drafts;
 mod file_search;
 mod goal_dialog;
 mod image_preview;
+mod keybindings;
 mod project_dialog;
 mod pull_requests;
 mod render;
@@ -3462,6 +3475,9 @@ impl Insulator {
                 skills_delete_arming: None,
                 settings_scroll: ScrollHandle::new(),
                 settings_scrollbar: ScrollbarState::new(),
+                keybinding_capture: None,
+                keybinding_captures: RefCell::new(HashMap::new()),
+                keybinding_interceptor: None,
                 header_drag_armed: false,
                 toast: startup_toast.map(|message| ToastState {
                     message,

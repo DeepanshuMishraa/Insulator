@@ -177,7 +177,7 @@ pub(super) struct CommandPaletteItem {
     label: String,
     detail: Option<String>,
     icon: PaletteIcon,
-    shortcut: Option<&'static str>,
+    shortcut: Option<SharedString>,
     action: PaletteAction,
     content_match: Option<crate::persistence::SessionMessageMatch>,
     search_text: String,
@@ -190,7 +190,7 @@ impl CommandPaletteItem {
         section: PaletteSection,
         label: String,
         icon: &'static str,
-        shortcut: Option<&'static str>,
+        shortcut: Option<SharedString>,
         action: PaletteAction,
         keywords: &'static str,
         order: usize,
@@ -678,6 +678,16 @@ impl Insulator {
         .detach();
     }
 
+    /// Shortcut label for a rebindable command: the effective chord, or
+    /// `None` when the user left it unbound.
+    fn palette_shortcut(&self, id: &str) -> Option<SharedString> {
+        let chord = keybindings::effective(&self.state.keybindings, id);
+        if chord.is_empty() {
+            return None;
+        }
+        Some(SharedString::from(keybindings::display(&chord)))
+    }
+
     fn command_palette_commands(&self, searching: bool) -> Vec<CommandPaletteItem> {
         let display_section = |suggested| {
             if searching {
@@ -697,7 +707,7 @@ impl Insulator {
                 display_section(PaletteSection::Suggested),
                 tr!("command_palette.new_task"),
                 "icons/pencil.svg",
-                Some(crate::platform::primary_shortcut("⌘N", "Ctrl+N")),
+                self.palette_shortcut("new_chat"),
                 PaletteAction::NewTask,
                 "new task session chat conversation start",
                 next(),
@@ -715,7 +725,7 @@ impl Insulator {
                 display_section(PaletteSection::Suggested),
                 tr!("command_palette.open_project"),
                 "icons/folder.svg",
-                Some(crate::platform::primary_shortcut("⌘O", "Ctrl+O")),
+                self.palette_shortcut("new_project"),
                 PaletteAction::OpenProject,
                 "open add folder project workspace repository repo",
                 next(),
@@ -730,7 +740,7 @@ impl Insulator {
                 display_section(PaletteSection::Suggested),
                 tr!("command_palette.choose_model"),
                 "icons/bot.svg",
-                Some(crate::platform::primary_shortcut("⌘/", "Ctrl+/")),
+                self.palette_shortcut("model_picker"),
                 PaletteAction::ChooseModel,
                 "choose change select model provider agent",
                 next(),
@@ -741,7 +751,7 @@ impl Insulator {
             PaletteSection::Commands,
             tr!("menu.focus_composer"),
             "icons/pencil.svg",
-            Some(crate::platform::primary_shortcut("⌘L", "Ctrl+L")),
+            self.palette_shortcut("focus_composer"),
             PaletteAction::FocusComposer,
             "focus composer prompt input message",
             next(),
@@ -764,7 +774,7 @@ impl Insulator {
                 PaletteSection::Commands,
                 tr!("menu.toggle_usage_panel"),
                 "icons/command.svg",
-                Some(crate::platform::primary_shortcut("⌘U", "Ctrl+U")),
+                self.palette_shortcut("usage_panel"),
                 PaletteAction::ToggleUsage,
                 "toggle usage limits rate quota panel",
                 next(),
@@ -788,7 +798,7 @@ impl Insulator {
                     "command_palette.show_sidebar"
                 }),
                 "icons/panel-left.svg",
-                Some(crate::platform::primary_shortcut("⌘B", "Ctrl+B")),
+                self.palette_shortcut("toggle_sidebar"),
                 PaletteAction::ToggleSidebar,
                 "toggle show hide left sidebar history tasks",
                 next(),
@@ -801,7 +811,7 @@ impl Insulator {
                     "command_palette.show_right_panel"
                 }),
                 "icons/panel-right.svg",
-                Some(crate::platform::primary_shortcut("⇧⌘B", "Ctrl+Shift+B")),
+                self.palette_shortcut("toggle_right_panel"),
                 PaletteAction::ToggleRightPanel,
                 "toggle show hide right panel files diff terminal browser",
                 next(),
@@ -820,6 +830,12 @@ impl Insulator {
                 "settings.appearance",
                 "icons/appearance.svg",
                 "settings preferences appearance theme language light dark",
+            ),
+            (
+                SettingsPage::Keybindings,
+                "settings.keybindings",
+                "icons/command.svg",
+                "settings preferences keybindings keyboard shortcuts hotkeys",
             ),
             (
                 SettingsPage::Providers,
@@ -860,7 +876,8 @@ impl Insulator {
                 crate::i18n::translate(label_key),
                 icon,
                 (page == SettingsPage::General)
-                    .then_some(crate::platform::primary_shortcut("⌘,", "Ctrl+,")),
+                    .then(|| self.palette_shortcut("open_settings"))
+                    .flatten(),
                 PaletteAction::OpenSettings(page),
                 keywords,
                 next(),
@@ -1857,7 +1874,7 @@ impl Insulator {
                     item.detail.clone()
                 };
                 let content_match = item.content_match.clone();
-                let shortcut = item.shortcut;
+                let shortcut = item.shortcut.clone();
                 results = results.child(
                     div()
                         .id(SharedString::from(format!("command-palette-row-{index}")))

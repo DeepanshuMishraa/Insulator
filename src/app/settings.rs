@@ -33,7 +33,7 @@ const SETTINGS_SEARCH_CONTEXT: &str = "SettingsSidebar > TextInput";
 
 /// The sidebar's rows in display order, each with the keyword haystack the
 /// search field filters against.
-const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 7] = [
+const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 8] = [
     (
         SettingsPage::General,
         "settings.general",
@@ -45,6 +45,12 @@ const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 7] = [
         "settings.appearance",
         "icons/appearance.svg",
         "settings.appearance_keywords",
+    ),
+    (
+        SettingsPage::Keybindings,
+        "settings.keybindings",
+        "icons/command.svg",
+        "settings.keybindings_keywords",
     ),
     (
         SettingsPage::Providers,
@@ -111,6 +117,7 @@ impl Insulator {
             .track_focus(&self.settings_focus)
             .on_action(|_: &CloseWindow, window, _| crate::platform::hide_window(window))
             .on_action(cx.listener(Self::new_session_action))
+            .on_action(cx.listener(Self::new_tab_action))
             .on_action(cx.listener(Self::new_project_action))
             .on_action(cx.listener(Self::open_settings_action))
             .on_action(cx.listener(Self::toggle_sidebar_action))
@@ -120,6 +127,11 @@ impl Insulator {
             .on_action(cx.listener(Self::navigate_back_action))
             .on_action(cx.listener(Self::navigate_forward_action))
             .on_action(cx.listener(Self::focus_composer_action))
+            .on_action(cx.listener(Self::open_review_action))
+            .on_action(cx.listener(Self::toggle_pull_requests_action))
+            .on_action(cx.listener(Self::next_main_tab_action))
+            .on_action(cx.listener(Self::previous_main_tab_action))
+            .on_action(cx.listener(Self::close_active_tab_action))
             .on_action(cx.listener(Self::cancel_turn_action))
             .capture_any_mouse_down(cx.listener(Self::navigation_mouse_down))
             .size_full()
@@ -225,6 +237,7 @@ impl Insulator {
                         .child(tr!("settings.back"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.settings_page = None;
+                            this.clear_keybinding_capture();
                             let focus_handle = this.composer_focus(cx);
                             window.focus(&focus_handle, cx);
                             cx.notify();
@@ -392,22 +405,24 @@ impl Insulator {
                     .text_color(theme.text)
                     .child(match page {
                         SettingsPage::General => tr!("settings.general"),
+                        SettingsPage::Appearance => tr!("settings.appearance"),
+                        SettingsPage::Keybindings => tr!("settings.keybindings"),
                         SettingsPage::Providers => tr!("settings.providers"),
                         SettingsPage::Skills => tr!("settings.skills"),
                         SettingsPage::Usage => tr!("settings.usage"),
                         SettingsPage::Daemon => tr!("settings.daemon"),
                         SettingsPage::ComputerUse => tr!("settings.computer_use"),
-                        SettingsPage::Appearance => tr!("settings.appearance"),
                     }),
             )
             .child(match page {
                 SettingsPage::General => self.render_general_settings(cx),
+                SettingsPage::Appearance => self.render_appearance_settings(cx),
+                SettingsPage::Keybindings => self.render_keybindings_settings(cx),
                 SettingsPage::Providers => self.render_providers_settings(cx),
                 SettingsPage::Skills => self.render_skills_settings(cx),
                 SettingsPage::Usage => self.render_usage_settings(cx),
                 SettingsPage::Daemon => self.render_daemon_settings(cx),
                 SettingsPage::ComputerUse => self.render_computer_use_settings(cx),
-                SettingsPage::Appearance => self.render_appearance_settings(cx),
             });
 
         div()
@@ -3738,6 +3753,403 @@ fn permission_status_row(
                 ),
         )
         .child(status)
+}
+
+impl Insulator {
+    /// Stable focus handle for a keybinding pill, created on first render.
+    fn keybinding_focus(&self, id: &str, cx: &mut App) -> FocusHandle {
+        if let Some(focus) = self.keybinding_captures.borrow().get(id) {
+            return focus.clone();
+        }
+        let focus = cx.focus_handle();
+        self.keybinding_captures
+            .borrow_mut()
+            .insert(id.to_owned(), focus.clone());
+        focus
+    }
+
+    fn start_keybinding_capture(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        // Bindings dispatch before element handlers, so the pill alone could
+        // never claim an already-bound chord. The interceptor runs first and
+        // swallows every keystroke while armed.
+        let id_owned = id.to_owned();
+        self.keybinding_interceptor = Some(cx.intercept_keystrokes(
+            move |event: &KeystrokeEvent, window: &mut Window, cx: &mut App| {
+                let id = id_owned.clone();
+                if let Some(Some(root)) = window.root::<Insulator>() {
+                    root.update(cx, |this, cx| {
+                        this.handle_capture_keystroke(&id, &event.keystroke, cx);
+                    });
+                }
+                cx.stop_propagation();
+            },
+        ));
+        let focus = self.keybinding_focus(id, cx);
+        self.keybinding_capture = Some(id.to_owned());
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    /// One swallowed keystroke while a capture is armed. Escape cancels,
+    /// bare Backspace/Delete clears, anything with a modifier (or a named
+    /// key) commits as the new chord. Plain typing stays armed.
+    fn handle_capture_keystroke(
+        &mut self,
+        id: &str,
+        keystroke: &gpui::Keystroke,
+        cx: &mut Context<Self>,
+    ) {
+        if self.keybinding_capture.as_deref() != Some(id) {
+            return;
+        }
+        if keystroke.key.as_str() == "escape" && !keystroke.modifiers.modified() {
+            self.cancel_keybinding_capture(cx);
+            return;
+        }
+        if matches!(keystroke.key.as_str(), "backspace" | "delete") && !keystroke.modifiers.modified()
+        {
+            self.commit_keybinding(id, "", cx);
+            return;
+        }
+        if let Some(chord) = keybindings::chord_from_keystroke(keystroke) {
+            self.commit_keybinding(id, &chord, cx);
+        }
+    }
+
+    pub(super) fn clear_keybinding_capture(&mut self) {
+        self.keybinding_capture = None;
+        self.keybinding_interceptor = None;
+    }
+
+    fn cancel_keybinding_capture(&mut self, cx: &mut Context<Self>) {
+        self.clear_keybinding_capture();
+        cx.notify();
+    }
+
+    /// Persist `chord` for `id` (`""` unbinds), apply it to the live keymap,
+    /// and leave capture mode. Defaults are not stored.
+    fn commit_keybinding(&mut self, id: &str, chord: &str, cx: &mut Context<Self>) {
+        let default = keybindings::def(id).and_then(|def| def.default);
+        if Some(chord) == default || (chord.is_empty() && default.is_none()) {
+            self.state.keybindings.remove(id);
+        } else {
+            self.state
+                .keybindings
+                .insert(id.to_owned(), chord.to_owned());
+        }
+        self.keybinding_capture = None;
+        self.keybinding_interceptor = None;
+        self.save();
+        crate::rebind_all_keys(cx, &self.state.keybindings);
+        cx.notify();
+    }
+
+    fn reset_keybinding(&mut self, id: &str, cx: &mut Context<Self>) {
+        if keybindings::def(id).is_none() {
+            return;
+        }
+        // Dropping the override restores the default. The live keymap is
+        // rebuilt wholesale so no stale chord survives the reset.
+        self.state.keybindings.remove(id);
+        self.clear_keybinding_capture();
+        self.save();
+        crate::rebind_all_keys(cx, &self.state.keybindings);
+        cx.notify();
+    }
+
+    fn reset_all_keybindings(&mut self, cx: &mut Context<Self>) {
+        self.state.keybindings.clear();
+        self.clear_keybinding_capture();
+        self.save();
+        crate::rebind_all_keys(cx, &self.state.keybindings);
+        cx.notify();
+    }
+
+    fn render_keybindings_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::current(cx);
+        let customized = self
+            .state
+            .keybindings
+            .keys()
+            .filter(|id| keybindings::def(id).is_some())
+            .count();
+        let mut content = div().flex().flex_col().gap(px(4.0)).child(
+            div()
+                .mt(px(15.0))
+                .w_full()
+                .px(px(20.0))
+                .py(px(12.0))
+                .rounded(px(13.0))
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.raised)
+                .flex()
+                .items_center()
+                .gap(px(24.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .child(
+                            div()
+                                .text_size(sp(13.5))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.text)
+                                .child(tr!("keybindings.title")),
+                        )
+                        .child(
+                            div()
+                                .text_size(sp(12.5))
+                                .text_color(theme.text_secondary)
+                                .child(tr!("keybindings.description")),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("keybindings-reset-all")
+                        .tab_index(0)
+                        .focus_visible(|style| style.border_color(theme.accent))
+                        .px(px(12.0))
+                        .h(px(28.0))
+                        .rounded(px(8.0))
+                        .border_1()
+                        .border_color(theme.border_strong)
+                        .flex()
+                        .items_center()
+                        .cursor_default()
+                        .text_size(sp(12.5))
+                        .text_color(theme.text_secondary)
+                        .hover(|element| element.bg(theme.overlay))
+                        .active(|element| element.bg(theme.overlay_strong))
+                        .when(customized == 0, |element| element.opacity(0.45))
+                        .child(tr!("keybindings.reset_all"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.reset_all_keybindings(cx);
+                        }))
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                            if !event.keystroke.modifiers.modified()
+                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                            {
+                                this.reset_all_keybindings(cx);
+                                cx.stop_propagation();
+                            }
+                        })),
+                ),
+        );
+
+        for category in keybindings::CATEGORIES {
+            let rows: Vec<&keybindings::KeybindingDef> = keybindings::ALL
+                .iter()
+                .filter(|def| def.category == *category)
+                .collect();
+            if rows.is_empty() {
+                continue;
+            }
+            let mut card = div()
+                .mt(px(15.0))
+                .w_full()
+                .px(px(20.0))
+                .py(px(8.0))
+                .rounded(px(13.0))
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.raised)
+                .flex()
+                .flex_col();
+            card = card.child(
+                div()
+                    .pt(px(6.0))
+                    .pb(px(4.0))
+                    .text_size(sp(12.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text_tertiary)
+                    .child((*category).to_owned()),
+            );
+            for def in rows {
+                card = card.child(self.render_keybinding_row(def, cx));
+            }
+            content = content.child(card);
+        }
+
+        // Fade the page in on mount. `with_animation` honors reduce-motion
+        // and resolves immediately, matching the toast's entrance.
+        content
+            .with_animation(
+                SharedString::from("keybindings-page-mount"),
+                Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()),
+                |element, delta| element.opacity(delta),
+            )
+            .into_any_element()
+    }
+
+    fn render_keybinding_row(
+        &self,
+        def: &'static keybindings::KeybindingDef,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let theme = Theme::current(cx);
+        let effective = keybindings::effective(&self.state.keybindings, def.id);
+        let capturing = self.keybinding_capture.as_deref() == Some(def.id);
+        let customized = keybindings::is_customized(&self.state.keybindings, def.id);
+        let conflicts = keybindings::conflicts(&self.state.keybindings, &effective, def.id);
+        let focus = self.keybinding_focus(def.id, cx);
+        let id = def.id;
+        let pill_label = if capturing {
+            tr!("keybindings.recording")
+        } else if effective.is_empty() {
+            tr!("keybindings.unbound")
+        } else {
+            keybindings::display(&effective)
+        };
+
+        div()
+            .py(px(8.0))
+            .flex()
+            .items_center()
+            .gap(px(16.0))
+            .border_t_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .text_size(sp(13.0))
+                            .text_color(theme.text)
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(def.label.to_owned())
+                            .when(customized, |element| {
+                                element.child(
+                                    div().w(px(6.0)).h(px(6.0)).rounded_full().bg(theme.accent),
+                                )
+                            }),
+                    )
+                    .when(!conflicts.is_empty(), |element| {
+                        element.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .text_size(sp(12.0))
+                                .text_color(theme.text_tertiary)
+                                .child(icon("icons/alert.svg", 12.0, theme.text_tertiary))
+                                .child(tr!(
+                                    "keybindings.conflict",
+                                    names = conflicts
+                                        .iter()
+                                        .map(|other| other.label)
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                )),
+                        )
+                    }),
+            )
+            .when(customized, |element| {
+                element.child(
+                    div()
+                        .id(SharedString::from(format!("keybinding-reset-{id}")))
+                        .tab_index(0)
+                        .focus_visible(|style| style.border_color(theme.accent))
+                        .px(px(8.0))
+                        .h(px(26.0))
+                        .rounded(px(7.0))
+                        .flex()
+                        .items_center()
+                        .cursor_default()
+                        .text_size(sp(12.0))
+                        .text_color(theme.text_tertiary)
+                        .hover(|element| element.bg(theme.overlay).text_color(theme.text_secondary))
+                        .child(tr!("keybindings.reset"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.reset_keybinding(id, cx);
+                        }))
+                        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                            if !event.keystroke.modifiers.modified()
+                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                            {
+                                this.reset_keybinding(id, cx);
+                                cx.stop_propagation();
+                            }
+                        })),
+                )
+            })
+            .child(
+                div()
+                    .id(SharedString::from(format!("keybinding-{id}")))
+                    .track_focus(&focus)
+                    .tab_index(0)
+                    .focus_visible(|style| style.border_color(theme.accent))
+                    .px(px(12.0))
+                    .h(px(28.0))
+                    .min_w(px(96.0))
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(if capturing {
+                        theme.accent
+                    } else {
+                        theme.border_strong
+                    })
+                    .bg(if capturing {
+                        theme.overlay
+                    } else {
+                        theme.inset
+                    })
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_default()
+                    .text_size(sp(12.5))
+                    .text_color(if effective.is_empty() && !capturing {
+                        theme.text_tertiary
+                    } else {
+                        theme.text
+                    })
+                    .child(pill_label)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.start_keybinding_capture(id, window, cx);
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                        // Bare Enter/Space arms capture like a mouse click.
+                        if this.keybinding_capture.as_deref() != Some(id) {
+                            if !event.keystroke.modifiers.modified()
+                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                            {
+                                this.start_keybinding_capture(id, window, cx);
+                                cx.stop_propagation();
+                            }
+                            return;
+                        }
+                        // Capture mode: Escape cancels, bare Backspace clears,
+                        // anything with a modifier (or a named key) commits.
+                        if event.keystroke.key.as_str() == "escape"
+                            && !event.keystroke.modifiers.modified()
+                        {
+                            this.cancel_keybinding_capture(cx);
+                            cx.stop_propagation();
+                            return;
+                        }
+                        if matches!(event.keystroke.key.as_str(), "backspace" | "delete")
+                            && !event.keystroke.modifiers.modified()
+                        {
+                            this.commit_keybinding(id, "", cx);
+                            cx.stop_propagation();
+                            return;
+                        }
+                        if let Some(chord) = keybindings::chord_from_keystroke(&event.keystroke) {
+                            this.commit_keybinding(id, &chord, cx);
+                            cx.stop_propagation();
+                        }
+                    })),
+            )
+    }
 }
 
 #[cfg(test)]

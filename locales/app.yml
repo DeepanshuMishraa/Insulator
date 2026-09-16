@@ -354,6 +354,24 @@ settings.theme_light:
   en: Light
 settings.theme_dark:
   en: Dark
+settings.keybindings:
+  en: Keybindings
+settings.keybindings_keywords:
+  en: keybindings keyboard shortcuts hotkeys customize reset
+keybindings.title:
+  en: Keyboard shortcuts
+keybindings.description:
+  en: Click a shortcut, then press the keys. Esc cancels, Backspace clears.
+keybindings.reset_all:
+  en: Reset all
+keybindings.reset:
+  en: Reset
+keybindings.recording:
+  en: Press shortcut…
+keybindings.unbound:
+  en: Not bound
+keybindings.conflict:
+  en: Also bound to %{names}
 
 input.do_anything:
   en: Ask to make changes, @mention files, run /commands

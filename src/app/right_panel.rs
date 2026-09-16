@@ -2171,7 +2171,6 @@ impl Insulator {
         cx.notify();
     }
 
-    #[allow(dead_code)]
     pub(super) fn cycle_main_tabs(&mut self, reverse: bool, cx: &mut Context<Self>) {
         if self.main_tabs.is_empty() {
             return;
@@ -2455,6 +2454,54 @@ impl Insulator {
         cx.notify();
     }
 
+    pub(super) fn open_review_action(
+        &mut self,
+        _: &OpenReview,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_main_review_tab(cx);
+    }
+
+    pub(super) fn next_main_tab_action(
+        &mut self,
+        _: &NextMainTab,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cycle_main_tabs(false, cx);
+    }
+
+    pub(super) fn previous_main_tab_action(
+        &mut self,
+        _: &PreviousMainTab,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cycle_main_tabs(true, cx);
+    }
+
+    pub(super) fn close_active_tab_action(
+        &mut self,
+        _: &CloseActiveTab,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_main_review_tab {
+            self.close_main_review_tab(cx);
+            return;
+        }
+        if let Some(path) = self.active_main_file_tab.clone() {
+            self.close_main_file_tab(&path, cx);
+            return;
+        }
+        if let Some(session_id) = self.state.selected_session
+            && self.main_tabs.contains(&MainTab::Chat(session_id))
+        {
+            self.close_main_chat_tab(session_id, cx);
+        }
+    }
+
     pub(super) fn close_right_panel_surface(&mut self, index: usize, cx: &mut Context<Self>) {
         if index >= self.right_panel_surfaces.len() {
             return;
@@ -2502,6 +2549,21 @@ impl Insulator {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The frontmost main tab goes first: ⌘W on a chat, file, or Review
+        // tab closes that tab the way tabbed apps do, instead of hiding the
+        // window while tabs are still open.
+        if self.main_tabs_open
+            && !self.main_tabs.is_empty()
+            && (self.active_main_review_tab
+                || self.active_main_file_tab.is_some()
+                || self
+                    .state
+                    .selected_session
+                    .is_some_and(|id| self.main_tabs.contains(&MainTab::Chat(id))))
+        {
+            self.close_active_tab_action(&CloseActiveTab, window, cx);
+            return;
+        }
         if let Some(active) = self.right_panel_active_surface {
             self.close_right_panel_surface(active, cx);
             if self.right_panel_surfaces.is_empty() {

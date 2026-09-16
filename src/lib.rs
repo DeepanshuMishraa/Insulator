@@ -65,6 +65,7 @@ actions!(
         About,
         CloseWindow,
         NewSession,
+        NewTab,
         NewProject,
         OpenSettings,
         CheckForUpdates,
@@ -84,6 +85,11 @@ actions!(
         FocusComposer,
         ToggleModelPicker,
         ToggleUsagePanel,
+        OpenReview,
+        TogglePullRequests,
+        NextMainTab,
+        PreviousMainTab,
+        CloseActiveTab,
         SaveFile,
         CancelTurn,
         CopySelection,
@@ -231,91 +237,13 @@ pub fn run() {
             });
             cx.on_action(|_: &About, _| crate::platform::show_about_panel());
 
-            cx.bind_keys([
-                // `secondary` is Command on macOS and Control elsewhere.
-                KeyBinding::new("secondary-q", Quit, None),
-                KeyBinding::new("secondary-w", CloseWindow, None),
-                KeyBinding::new("secondary-n", NewSession, None),
-                KeyBinding::new("secondary-o", NewProject, None),
-                KeyBinding::new("secondary-,", OpenSettings, None),
-                KeyBinding::new("secondary-b", ToggleSidebar, None),
-                KeyBinding::new("secondary-shift-b", ToggleRightPanel, None),
-                KeyBinding::new("secondary-k", ToggleCommandPalette, None),
-                KeyBinding::new("secondary-alt-shift-f", ToggleFpsCounter, None),
-                KeyBinding::new("secondary-[", NavigateBack, Some("Insulator")),
-                KeyBinding::new("ctrl-tab", SwitchTaskForward, None),
-                KeyBinding::new("ctrl-shift-tab", SwitchTaskBackward, None),
-                KeyBinding::new("secondary-shift-]", SwitchTaskForward, None),
-                KeyBinding::new("secondary-shift-[", SwitchTaskBackward, None),
-                KeyBinding::new("ctrl-escape", CancelTaskSwitch, Some("Insulator")),
-                KeyBinding::new("ctrl-shift-escape", CancelTaskSwitch, Some("Insulator")),
-                KeyBinding::new("down", SwitchTaskForward, Some("TaskSwitcher")),
-                KeyBinding::new("right", SwitchTaskForward, Some("TaskSwitcher")),
-                KeyBinding::new("up", SwitchTaskBackward, Some("TaskSwitcher")),
-                KeyBinding::new("left", SwitchTaskBackward, Some("TaskSwitcher")),
-                KeyBinding::new("home", SelectFirstTask, Some("TaskSwitcher")),
-                KeyBinding::new("end", SelectLastTask, Some("TaskSwitcher")),
-                KeyBinding::new("enter", ConfirmTaskSwitch, Some("TaskSwitcher")),
-                KeyBinding::new("escape", CancelTaskSwitch, Some("TaskSwitcher")),
-                KeyBinding::new("secondary-l", FocusComposer, None),
-                KeyBinding::new("secondary-/", ToggleModelPicker, None),
-                KeyBinding::new("secondary-u", ToggleUsagePanel, None),
-                KeyBinding::new("secondary-s", SaveFile, None),
-                KeyBinding::new("escape", CancelTurn, Some("Insulator")),
-                KeyBinding::new("secondary-c", CopySelection, Some("Insulator")),
-                // Find and replace in the right panel's file editor, on the
-                // conventional VS Code bindings. The primary shortcut + G cycles matches from
-                // the editor without moving focus to the bar.
-                KeyBinding::new("secondary-f", OpenFind, Some("Insulator")),
-                // The text input's macOS-style Ctrl-F caret binding is more
-                // specific than Insulator's root context. Reassert the platform
-                // primary shortcut for inputs inside this window so Ctrl-F
-                // remains find-in-page on Linux/Windows while Cmd-F keeps the
-                // native behavior on macOS.
-                KeyBinding::new("secondary-f", OpenFind, Some("Insulator > TextInput")),
-                KeyBinding::new("secondary-alt-f", OpenFindReplace, Some("Insulator")),
-                KeyBinding::new("secondary-g", FindNext, Some("Insulator")),
-                KeyBinding::new("secondary-shift-g", FindPrevious, Some("Insulator")),
-                // Scoped to the editor pane so Cmd-S reaches the file editor
-                // even when the focused TextInput consumes its key context.
-                KeyBinding::new("secondary-s", SaveFile, Some("FileEditorPane")),
-                KeyBinding::new("secondary-s", SaveFile, Some("FileEditorPane > TextInput")),
-                // Scoped to the editor pane: escape closes the bar there and
-                // falls through to CancelTurn anywhere else.
-                KeyBinding::new("escape", CloseFind, Some("FileEditorPane")),
-                KeyBinding::new("escape", CloseFind, Some("FindBar")),
-                KeyBinding::new(
-                    "secondary-alt-c",
-                    ToggleFindCaseSensitive,
-                    Some("FileEditorPane"),
-                ),
-                KeyBinding::new(
-                    "secondary-alt-w",
-                    ToggleFindWholeWord,
-                    Some("FileEditorPane"),
-                ),
-                KeyBinding::new("secondary-alt-r", ToggleFindRegex, Some("FileEditorPane")),
-                KeyBinding::new("shift-enter", FindPrevious, Some("FindBar")),
-                KeyBinding::new("secondary-alt-enter", ReplaceAllMatches, Some("FindBar")),
-                // Browser surface. Deeper than "Insulator", so while focus is on the
-                // page or its address bar the browser reads the platform's
-                // conventional navigation shortcuts; the same keys elsewhere
-                // keep their app meanings. The clipboard trio is rebound
-                // because GPUI's window view claims key equivalents before
-                // AppKit can walk the responder chain into the webview.
-                KeyBinding::new("secondary-l", FocusBrowserAddress, Some("Browser")),
-                KeyBinding::new("secondary-r", BrowserReload, Some("Browser")),
-                KeyBinding::new("secondary-shift-r", BrowserHardReload, Some("Browser")),
-                KeyBinding::new("secondary-[", BrowserBack, Some("Browser")),
-                KeyBinding::new("secondary-]", BrowserForward, Some("Browser")),
-                KeyBinding::new("escape", BrowserStop, Some("Browser")),
-                KeyBinding::new("secondary-alt-i", BrowserDevtools, Some("Browser")),
-                KeyBinding::new("secondary-c", WebviewCopy, Some("Browser")),
-                KeyBinding::new("secondary-x", WebviewCut, Some("Browser")),
-                KeyBinding::new("secondary-v", WebviewPaste, Some("Browser")),
-                KeyBinding::new("secondary-a", WebviewSelectAll, Some("Browser")),
-                KeyBinding::new("escape", BrowserAddressCancel, Some("BrowserAddress")),
-            ]);
+            // User-customized shortcuts persist in app settings. The main
+            // keymap is built from them so an override replaces its default
+            // (or unbinds it with "") instead of stacking beside it.
+            let key_overrides = crate::persistence::load_or_create_app_settings()
+                .map(|settings| settings.keybindings)
+                .unwrap_or_default();
+            bind_main_keys(cx, &key_overrides);
 
             cx.on_action(|_: &Quit, cx| cx.quit());
 
@@ -438,6 +366,231 @@ pub fn run() {
             // relaunched build has successfully opened its main window.
             crate::updater::signal_relaunch_ready();
         });
+}
+
+/// Build the window keymap, substituting user overrides from settings.
+/// An override replaces its default chord; `""` unbinds the action.
+fn bind_main_keys(cx: &mut App, overrides: &std::collections::HashMap<String, String>) {
+    /// Effective chord for `id`: override when present, else `default`.
+    /// `None` means unbound. A custom chord that fails to parse (hand-edited
+    /// garbage) falls back to the default instead of panicking the keymap.
+    fn eff(
+        overrides: &std::collections::HashMap<String, String>,
+        id: &str,
+        default: &str,
+    ) -> Option<String> {
+        match overrides.get(id) {
+            Some(custom) if custom.is_empty() => None,
+            Some(custom) if gpui::Keystroke::parse(custom).is_ok() => Some(custom.clone()),
+            Some(_) | None => Some(default.to_owned()),
+        }
+    }
+    let mut bindings: Vec<KeyBinding> = Vec::new();
+    // Fixed bindings (not customizable).
+    bindings.extend([
+        // `secondary` is Command on macOS and Control elsewhere.
+        KeyBinding::new("secondary-q", Quit, None),
+        KeyBinding::new("secondary-alt-shift-f", ToggleFpsCounter, None),
+        KeyBinding::new("ctrl-escape", CancelTaskSwitch, Some("Insulator")),
+        KeyBinding::new("ctrl-shift-escape", CancelTaskSwitch, Some("Insulator")),
+        KeyBinding::new("down", SwitchTaskForward, Some("TaskSwitcher")),
+        KeyBinding::new("right", SwitchTaskForward, Some("TaskSwitcher")),
+        KeyBinding::new("up", SwitchTaskBackward, Some("TaskSwitcher")),
+        KeyBinding::new("left", SwitchTaskBackward, Some("TaskSwitcher")),
+        KeyBinding::new("home", SelectFirstTask, Some("TaskSwitcher")),
+        KeyBinding::new("end", SelectLastTask, Some("TaskSwitcher")),
+        KeyBinding::new("enter", ConfirmTaskSwitch, Some("TaskSwitcher")),
+        KeyBinding::new("escape", CancelTaskSwitch, Some("TaskSwitcher")),
+        KeyBinding::new("escape", CancelTurn, Some("Insulator")),
+        KeyBinding::new("secondary-c", CopySelection, Some("Insulator")),
+        KeyBinding::new("secondary-alt-f", OpenFindReplace, Some("Insulator")),
+        KeyBinding::new("escape", CloseFind, Some("FileEditorPane")),
+        KeyBinding::new("escape", CloseFind, Some("FindBar")),
+        KeyBinding::new(
+            "secondary-alt-c",
+            ToggleFindCaseSensitive,
+            Some("FileEditorPane"),
+        ),
+        KeyBinding::new(
+            "secondary-alt-w",
+            ToggleFindWholeWord,
+            Some("FileEditorPane"),
+        ),
+        KeyBinding::new("secondary-alt-r", ToggleFindRegex, Some("FileEditorPane")),
+        KeyBinding::new("shift-enter", FindPrevious, Some("FindBar")),
+        KeyBinding::new("secondary-alt-enter", ReplaceAllMatches, Some("FindBar")),
+        // Browser surface. Deeper than "Insulator", so while focus is on the
+        // page or its address bar the browser reads the platform's
+        // conventional navigation shortcuts; the same keys elsewhere
+        // keep their app meanings. The clipboard trio is rebound
+        // because GPUI's window view claims key equivalents before
+        // AppKit can walk the responder chain into the webview.
+        KeyBinding::new("secondary-l", FocusBrowserAddress, Some("Browser")),
+        KeyBinding::new("secondary-r", BrowserReload, Some("Browser")),
+        KeyBinding::new("secondary-shift-r", BrowserHardReload, Some("Browser")),
+        KeyBinding::new("secondary-[", BrowserBack, Some("Browser")),
+        KeyBinding::new("secondary-]", BrowserForward, Some("Browser")),
+        KeyBinding::new("escape", BrowserStop, Some("Browser")),
+        KeyBinding::new("secondary-alt-i", BrowserDevtools, Some("Browser")),
+        KeyBinding::new("secondary-c", WebviewCopy, Some("Browser")),
+        KeyBinding::new("secondary-x", WebviewCut, Some("Browser")),
+        KeyBinding::new("secondary-v", WebviewPaste, Some("Browser")),
+        KeyBinding::new("secondary-a", WebviewSelectAll, Some("Browser")),
+        KeyBinding::new("escape", BrowserAddressCancel, Some("BrowserAddress")),
+    ]);
+    // Customizable single-chord actions.
+    macro_rules! single {
+        ($id:expr, $default:expr, $action:expr, $ctx:expr) => {
+            if let Some(chord) = eff(overrides, $id, $default) {
+                bindings.push(KeyBinding::new(chord.as_str(), $action, $ctx));
+            }
+        };
+    }
+    single!("close_tab", "secondary-w", CloseWindow, None);
+    single!("new_chat", "secondary-n", NewSession, None);
+    single!("new_tab", "secondary-t", NewTab, None);
+    single!("new_project", "secondary-o", NewProject, None);
+    single!("open_settings", "secondary-,", OpenSettings, None);
+    single!("toggle_sidebar", "secondary-b", ToggleSidebar, None);
+    single!(
+        "toggle_right_panel",
+        "secondary-shift-b",
+        ToggleRightPanel,
+        None
+    );
+    single!("command_palette", "secondary-k", ToggleCommandPalette, None);
+    single!("focus_composer", "secondary-l", FocusComposer, None);
+    single!("model_picker", "secondary-/", ToggleModelPicker, None);
+    single!("usage_panel", "secondary-u", ToggleUsagePanel, None);
+    single!(
+        "navigate_back",
+        "secondary-[",
+        NavigateBack,
+        Some("Insulator")
+    );
+    single!("open_review", "secondary-shift-e", OpenReview, None);
+    single!(
+        "pull_requests",
+        "secondary-shift-p",
+        TogglePullRequests,
+        None
+    );
+    single!(
+        "close_active_tab",
+        "secondary-shift-w",
+        CloseActiveTab,
+        None
+    );
+    // Navigate-forward and main-tab cycling ship unbound; they bind only
+    // when the user assigns a chord.
+    for (id, ctx) in [("navigate_forward", Some("Insulator"))] {
+        if let Some(custom) = overrides
+            .get(id)
+            .filter(|chord| !chord.is_empty() && gpui::Keystroke::parse(chord).is_ok())
+        {
+            bindings.push(KeyBinding::new(custom.as_str(), NavigateForward, ctx));
+        }
+    }
+    if let Some(custom) = overrides
+        .get("next_main_tab")
+        .filter(|chord| !chord.is_empty() && gpui::Keystroke::parse(chord).is_ok())
+    {
+        bindings.push(KeyBinding::new(custom.as_str(), NextMainTab, None));
+    }
+    if let Some(custom) = overrides
+        .get("prev_main_tab")
+        .filter(|chord| !chord.is_empty() && gpui::Keystroke::parse(chord).is_ok())
+    {
+        bindings.push(KeyBinding::new(custom.as_str(), PreviousMainTab, None));
+    }
+    // Multi-context / multi-chord actions: one override replaces every
+    // default chord so the old shortcut stops firing.
+    match eff(overrides, "save_file", "secondary-s") {
+        Some(chord) => {
+            for ctx in [
+                None,
+                Some("FileEditorPane"),
+                Some("FileEditorPane > TextInput"),
+            ] {
+                bindings.push(KeyBinding::new(chord.as_str(), SaveFile, ctx));
+            }
+        }
+        None => {}
+    }
+    match eff(overrides, "open_find", "secondary-f") {
+        Some(chord) => {
+            for ctx in [Some("Insulator"), Some("Insulator > TextInput")] {
+                bindings.push(KeyBinding::new(chord.as_str(), OpenFind, ctx));
+            }
+        }
+        None => {}
+    }
+    // The text input's macOS-style Ctrl-F caret binding is more
+    // specific than Insulator's root context; the two-context bind above
+    // already reasserts the platform primary shortcut for inputs inside
+    // this window, so no extra guard is needed here.
+    match eff(overrides, "find_next", "secondary-g") {
+        Some(chord) => bindings.push(KeyBinding::new(chord.as_str(), FindNext, Some("Insulator"))),
+        None => {}
+    }
+    match eff(overrides, "find_prev", "secondary-shift-g") {
+        Some(chord) => {
+            bindings.push(KeyBinding::new(
+                chord.as_str(),
+                FindPrevious,
+                Some("Insulator"),
+            ));
+        }
+        None => {}
+    }
+    // Task (tab) switching ships with two alternates; a custom chord
+    // replaces both.
+    match overrides.get("next_tab") {
+        Some(custom) if custom.is_empty() => {}
+        Some(custom) => bindings.push(KeyBinding::new(custom.as_str(), SwitchTaskForward, None)),
+        None => {
+            bindings.push(KeyBinding::new("ctrl-tab", SwitchTaskForward, None));
+            bindings.push(KeyBinding::new(
+                "secondary-shift-]",
+                SwitchTaskForward,
+                None,
+            ));
+        }
+    }
+    match overrides.get("prev_tab") {
+        Some(custom) if custom.is_empty() => {}
+        Some(custom) => bindings.push(KeyBinding::new(custom.as_str(), SwitchTaskBackward, None)),
+        None => {
+            bindings.push(KeyBinding::new("ctrl-shift-tab", SwitchTaskBackward, None));
+            bindings.push(KeyBinding::new(
+                "secondary-shift-[",
+                SwitchTaskBackward,
+                None,
+            ));
+        }
+    }
+    // Scoped to the editor pane: escape closes the bar there and
+    // falls through to CancelTurn anywhere else. (Fixed.)
+    cx.bind_keys(bindings);
+}
+
+/// Rebuild the whole keymap from the given overrides. Settings calls this
+/// after every keybinding change so the live keymap always equals a fresh
+/// startup keymap: no stale chords survive a rebind, an unbind, or a reset.
+pub fn rebind_all_keys(cx: &mut App, overrides: &std::collections::HashMap<String, String>) {
+    cx.clear_key_bindings();
+    crate::input::init(cx);
+    crate::ui::menu::init(cx);
+    crate::app::init_composer_autocomplete(cx);
+    crate::app::init_settings_keys(cx);
+    crate::app::init_command_palette(cx);
+    crate::app::init_commit_dialog_keys(cx);
+    crate::app::init_goal_dialog_keys(cx);
+    crate::app::init_image_preview_keys(cx);
+    crate::app::init_project_dialog_keys(cx);
+    crate::app::init_sidebar_keys(cx);
+    crate::app::init_skills_keys(cx);
+    bind_main_keys(cx, overrides);
 }
 
 /// Rebuild the native menu bar in the active locale. GPUI menus own their

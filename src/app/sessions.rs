@@ -370,6 +370,37 @@ impl Insulator {
             .workspace_path_for_session(&self.state.sessions[index])
             .map(std::path::Path::to_path_buf);
         let was_selected = self.state.selected_session == Some(session_id);
+        // A sidebar delete must also drop the tab. Otherwise the tab strip
+        // keeps rendering a chat that no longer exists.
+        let tab_index = self
+            .main_tabs
+            .iter()
+            .position(|tab| *tab == MainTab::Chat(session_id));
+        let was_active_tab = tab_index.is_some()
+            && !self.active_main_review_tab
+            && self.active_main_file_tab.is_none()
+            && was_selected;
+        if tab_index.is_some() {
+            self.main_tabs
+                .retain(|tab| *tab != MainTab::Chat(session_id));
+        }
+        let mut tab_takeover = false;
+        if was_active_tab && !self.main_tabs.is_empty() {
+            let next_index = tab_index
+                .unwrap_or(0)
+                .min(self.main_tabs.len().saturating_sub(1));
+            self.activate_main_tab_at_index(next_index, cx);
+            tab_takeover = true;
+        }
+        if self.main_tabs.is_empty() {
+            self.main_tabs_open = false;
+            // Only clear the file/review flags when no tab owns them anymore;
+            // an active file/review tab is untouched by a chat delete.
+            if was_active_tab {
+                self.active_main_file_tab = None;
+                self.active_main_review_tab = false;
+            }
+        }
         self.submission_preparations.remove(&session_id);
         self.goal_runtime_starts.remove(&session_id);
         self.pending_goal_operations.remove(&session_id);
@@ -423,7 +454,7 @@ impl Insulator {
         }
         self.invalidate_checkpoint_refs();
 
-        if was_selected {
+        if was_selected && !tab_takeover {
             self.state.selected_session = None;
             let next_session = self
                 .state
@@ -530,6 +561,31 @@ impl Insulator {
         Some(id)
     }
 
+    /// Open a new chat as a tab, mirroring the tab strip's "+" button.
+    pub(super) fn new_tab_action(
+        &mut self,
+        _: &NewTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings_page = None;
+        self.main_tabs_open = true;
+        self.active_main_file_tab = None;
+        self.active_main_review_tab = false;
+        if let Some(session_id) = self.create_new_chat_tab(cx) {
+            let tab = MainTab::Chat(session_id);
+            if !self.main_tabs.contains(&tab) {
+                self.main_tabs.push(tab);
+            }
+            let index = self.main_tabs.len().saturating_sub(1);
+            self.main_tabs_scroll_handle.scroll_to_item(index);
+        }
+        let focus_handle = self.composer_focus(cx);
+        window.focus(&focus_handle, cx);
+        self.save();
+        cx.notify();
+    }
+
     pub(super) fn new_session_action(
         &mut self,
         _: &NewSession,
@@ -575,6 +631,7 @@ impl Insulator {
     ) {
         self.settings_page = Some(SettingsPage::General);
         self.settings_scroll.set_offset(gpui::Point::default());
+        self.clear_keybinding_capture();
         // Sparkle owns this value and its consent prompt can flip it outside
         // the settings UI, so re-mirror it each time settings opens.
         self.automatic_updates_enabled = cx

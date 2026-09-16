@@ -932,6 +932,21 @@ impl Insulator {
         cx.notify();
     }
 
+    pub(super) fn toggle_pull_requests_action(
+        &mut self,
+        _: &TogglePullRequests,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.pull_requests_open {
+            self.pull_requests_open = false;
+            self.save();
+            cx.notify();
+        } else {
+            self.open_pull_requests(cx);
+        }
+    }
+
     fn render_sidebar_new_task(&self, cx: &mut Context<Self>) -> Div {
         let new_task = self
             .render_sidebar_action_row(

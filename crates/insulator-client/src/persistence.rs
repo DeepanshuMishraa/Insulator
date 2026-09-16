@@ -307,6 +307,10 @@ pub struct AppSettings {
     /// Show resource usage (CPU and memory) in the sidebar top bar.
     #[serde(default)]
     pub show_resource_usage: bool,
+    /// User-customized keyboard shortcuts, keyed by bindable action id.
+    /// Empty string (or missing) means unbound; missing means default.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub keybindings: HashMap<String, String>,
 }
 
 impl Default for AppSettings {
@@ -332,6 +336,7 @@ impl Default for AppSettings {
             daemon_exposure: DaemonExposureSettings::default(),
             open_in_app: None,
             show_resource_usage: false,
+            keybindings: HashMap::new(),
         }
     }
 }
@@ -516,6 +521,8 @@ pub struct PersistedState {
     pub open_in_app: Option<String>,
     #[serde(default)]
     pub show_resource_usage: bool,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub keybindings: HashMap<String, String>,
     #[serde(default = "default_sidebar_visibility")]
     pub sidebar_visible: bool,
     #[serde(default = "default_right_panel_visibility")]
@@ -613,6 +620,7 @@ impl PersistedState {
             daemon_exposure: DaemonExposureSettings::default(),
             open_in_app: None,
             show_resource_usage: false,
+            keybindings: HashMap::new(),
             sidebar_visible: true,
             right_panel_visible: false,
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
@@ -755,6 +763,7 @@ impl PersistedState {
             daemon_exposure: self.daemon_exposure.clone(),
             open_in_app: self.open_in_app.clone(),
             show_resource_usage: self.show_resource_usage,
+            keybindings: self.keybindings.clone(),
         }
     }
 
@@ -819,6 +828,7 @@ impl PersistedState {
         self.daemon_exposure = settings.daemon_exposure;
         self.open_in_app = settings.open_in_app;
         self.show_resource_usage = settings.show_resource_usage;
+        self.keybindings = settings.keybindings;
     }
 
     fn apply_app_state(&mut self, app_state: AppState) {
