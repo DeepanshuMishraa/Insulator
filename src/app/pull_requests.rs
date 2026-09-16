@@ -448,6 +448,10 @@ pub(super) fn load_cached_pull_requests() -> Vec<PullRequest> {
     for entry in &mut entries {
         entry.body_loaded |= !entry.body.is_empty();
     }
+    // Caches written by older builds may be in a different order (or none at
+    // all). Sort here so the first paint after an upgrade is already
+    // newest-first instead of waiting for the background refresh to land.
+    sort_pull_requests(&mut entries);
     entries
 }
 
@@ -1344,10 +1348,13 @@ fn load_pull_requests_page(cursor: Option<&str>) -> anyhow::Result<(Vec<PullRequ
                 title: request.title,
                 author: request.author.login.clone(),
                 author_avatar_url: request.author.avatar_url.clone(),
-                author_avatar_path: cache_github_avatar(
-                    &request.author.login,
-                    &request.author.avatar_url,
-                ),
+                // Avatars resolve in the background via
+                // `ensure_pull_request_avatars`: downloading up to fifty
+                // images serially here would stall the whole list behind
+                // the slowest `curl`, and a failed download must not
+                // leave the row without an avatar (see the initials
+                // fallback in the detail panel).
+                author_avatar_path: None,
                 body: request.body.unwrap_or_default(),
                 body_loaded: false,
                 repository: request.repository.name_with_owner,
@@ -1368,13 +1375,29 @@ fn load_pull_requests_page(cursor: Option<&str>) -> anyhow::Result<(Vec<PullRequ
     Ok((entries, next_cursor))
 }
 
-fn sort_pull_requests(entries: &mut [PullRequest]) {
+pub(super) fn sort_pull_requests(entries: &mut [PullRequest]) {
     entries.sort_by(|left, right| {
         right
             .created_at
             .cmp(&left.created_at)
             .then_with(|| right.updated_at.cmp(&left.updated_at))
     });
+}
+
+/// Merge freshly fetched entries into the current list: the fetch carries
+/// the latest titles, states, and timestamps while the existing rows may
+/// carry loaded details (bodies, diffs, avatars) the fetch does not. The
+/// fresh entry wins for identity fields; details survive via
+/// `preserve_cached_details` before this runs. The result is de-duplicated
+/// by repository and number and always newest-first.
+pub(super) fn merge_pull_requests(entries: Vec<PullRequest>) -> Vec<PullRequest> {
+    let mut unique = HashMap::new();
+    for entry in entries {
+        unique.insert((entry.repository.clone(), entry.number), entry);
+    }
+    let mut merged = unique.into_values().collect::<Vec<_>>();
+    sort_pull_requests(&mut merged);
+    merged
 }
 
 impl Insulator {
@@ -1397,18 +1420,21 @@ impl Insulator {
         }
         self.pull_requests_refreshing = true;
         self.pull_requests_loading = self.pull_requests.is_empty();
-        if force {
-            self.pull_requests_cursor = None;
-            self.pull_requests_has_more = true;
-        }
+        // Both a manual refresh and reopening the section fetch the first
+        // page: the stored cursor belongs to `ensure_more_pull_requests`
+        // pagination, and reusing it here once replaced the whole list with
+        // a deep (old) page — the "random old PRs on top" report. A reopen
+        // (`force == false`) merges the fresh first page into the current
+        // rows so nothing already on screen disappears; a manual refresh
+        // replaces with the fresh baseline and pagination rebuilds from it.
+        self.pull_requests_cursor = None;
+        self.pull_requests_has_more = true;
         let entity = cx.entity().downgrade();
         let cached = self.pull_requests.clone();
-        let cursor = self.pull_requests_cursor.clone();
         cx.spawn(async move |_, cx| {
             let lookup = cx.background_executor().spawn(async move {
-                let (mut entries, next_cursor) = load_pull_requests_page(cursor.as_deref())?;
+                let (mut entries, next_cursor) = load_pull_requests_page(None)?;
                 preserve_cached_details(&mut entries, &cached);
-                save_cached_pull_requests(&entries);
                 Ok::<_, anyhow::Error>((entries, next_cursor))
             });
             let result = futures_lite::future::race(lookup, async {
@@ -1422,11 +1448,24 @@ impl Insulator {
                 this.pull_requests_loading = false;
                 this.pull_requests_refreshing = false;
                 match result {
-                    Ok((entries, next_cursor)) => {
-                        this.pull_requests = entries;
+                    Ok((mut entries, next_cursor)) => {
+                        // Details may have landed while the lookup was in
+                        // flight; preserve from the live rows, not just the
+                        // pre-fetch snapshot, so they survive the merge.
+                        preserve_cached_details(&mut entries, &this.pull_requests);
+                        if force {
+                            sort_pull_requests(&mut entries);
+                            this.pull_requests = entries;
+                        } else {
+                            let mut merged = std::mem::take(&mut this.pull_requests);
+                            merged.extend(entries);
+                            this.pull_requests = merge_pull_requests(merged);
+                        }
                         this.pull_requests_cursor = next_cursor;
                         this.pull_requests_has_more = this.pull_requests_cursor.is_some();
+                        save_cached_pull_requests(&this.pull_requests);
                         this.pull_requests_error = None;
+                        this.ensure_pull_request_avatars(cx);
                     }
                     Err(error) => this.pull_requests_error = Some(error.to_string()),
                 }
@@ -1448,33 +1487,32 @@ impl Insulator {
         self.pull_requests_page_error = None;
         cx.notify();
         let cursor = self.pull_requests_cursor.clone();
-        let cached = self.pull_requests.clone();
         let entity = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
                     let (entries, next_cursor) = load_pull_requests_page(cursor.as_deref())?;
-                    Ok::<_, anyhow::Error>((entries, next_cursor, cached))
+                    Ok::<_, anyhow::Error>((entries, next_cursor))
                 })
                 .await;
             let _ = entity.update(cx, |this, cx| {
                 this.pull_requests_loading_more = false;
                 match result {
-                    Ok((mut entries, next_cursor, cached)) => {
-                        preserve_cached_details(&mut entries, &cached);
+                    Ok((mut entries, next_cursor)) => {
+                        // Preserve from the live rows: details may have
+                        // landed after the fetch started, and a pre-fetch
+                        // snapshot would drop them when the fresh page wins
+                        // the merge below.
+                        preserve_cached_details(&mut entries, &this.pull_requests);
                         let mut merged = std::mem::take(&mut this.pull_requests);
                         merged.extend(entries);
-                        let mut unique = HashMap::new();
-                        for entry in merged {
-                            unique.insert((entry.repository.clone(), entry.number), entry);
-                        }
-                        this.pull_requests = unique.into_values().collect();
-                        sort_pull_requests(&mut this.pull_requests);
+                        this.pull_requests = merge_pull_requests(merged);
                         this.pull_requests_cursor = next_cursor;
                         this.pull_requests_has_more = this.pull_requests_cursor.is_some();
                         save_cached_pull_requests(&this.pull_requests);
                         this.pull_requests_error = None;
+                        this.ensure_pull_request_avatars(cx);
                     }
                     Err(error) => {
                         this.pull_requests_page_error = Some(error.to_string());
@@ -1519,6 +1557,82 @@ impl Insulator {
                 }
                 this.pull_request_media_paths.extend(loaded);
                 cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Download author avatars for rows that still lack a cached file, off
+    /// the UI thread. Rows render an initials fallback until the file
+    /// lands, then refresh in place — a slow or failed download never
+    /// blocks the list and never leaves a blank avatar.
+    pub(super) fn ensure_pull_request_avatars(&mut self, cx: &mut Context<Self>) {
+        let missing = self
+            .pull_requests
+            .iter()
+            .filter(|entry| !entry.author.is_empty() && !entry.author_avatar_url.is_empty())
+            .filter(|entry| {
+                entry
+                    .author_avatar_path
+                    .as_deref()
+                    .is_none_or(|path| !std::path::Path::new(path).is_file())
+            })
+            .map(|entry| (entry.author.clone(), entry.author_avatar_url.clone()))
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .filter(|(login, _)| !self.pull_request_avatar_loading.contains(login))
+            .take(50)
+            .collect::<Vec<_>>();
+        for (login, _) in &missing {
+            self.pull_request_avatar_loading.insert(login.clone());
+        }
+        if missing.is_empty() {
+            return;
+        }
+        let entity = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let loaded = cx
+                .background_executor()
+                .spawn(async move {
+                    missing
+                        .into_iter()
+                        .filter_map(|(login, url)| {
+                            cache_github_avatar(&login, &url)
+                                .map(|path| (login.clone(), path))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            let _ = entity.update(cx, |this, cx| {
+                for (login, _) in &loaded {
+                    this.pull_request_avatar_loading.remove(login);
+                }
+                if loaded.is_empty() {
+                    return;
+                }
+                let paths = loaded.into_iter().collect::<HashMap<_, _>>();
+                let mut touched = false;
+                for entry in &mut this.pull_requests {
+                    if let Some(path) = paths.get(&entry.author)
+                        && entry
+                            .author_avatar_path
+                            .as_deref()
+                            .is_none_or(|current| current != path)
+                    {
+                        entry.author_avatar_path = Some(path.clone());
+                        touched = true;
+                    }
+                }
+                if let Some(detail) = this.pull_request_detail.as_mut()
+                    && let Some(path) = paths.get(&detail.author)
+                {
+                    detail.author_avatar_path = Some(path.clone());
+                    touched = true;
+                }
+                if touched {
+                    save_cached_pull_requests(&this.pull_requests);
+                    cx.notify();
+                }
             });
         })
         .detach();
@@ -3530,12 +3644,16 @@ impl Insulator {
                             .items_center()
                             .gap(px(8.0))
                             .text_size(sp(12.5))
-                            .child(if let Some(path) = request.author_avatar_path.as_deref() {
+                            .child(if let Some(path) = request
+                                .author_avatar_path
+                                .as_deref()
+                                .filter(|path| std::path::Path::new(path).is_file())
+                            {
                                 img(std::path::PathBuf::from(path))
                                     .size(px(18.0))
                                     .rounded_full()
                                     .into_any_element()
-                            } else if request.author_avatar_url.is_empty() {
+                            } else if request.author.is_empty() {
                                 div()
                                     .size(px(18.0))
                                     .rounded(px(9.0))
@@ -3546,9 +3664,30 @@ impl Insulator {
                                     .child(icon("icons/bot.svg", 11.0, rgb(0xffffff).into()))
                                     .into_any_element()
                             } else {
-                                img(request.author_avatar_url.clone())
+                                // The cached file is still downloading (or the
+                                // download failed): show the author's initial
+                                // rather than a remote URL `img`, which never
+                                // resolves, or nothing at all.
+                                let initial = request
+                                    .author
+                                    .chars()
+                                    .next()
+                                    .map(|first| first.to_uppercase().to_string())
+                                    .unwrap_or_else(|| "?".to_owned());
+                                div()
                                     .size(px(18.0))
                                     .rounded_full()
+                                    .bg(rgb(0x388bfd))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        div()
+                                            .text_size(sp(10.0))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(rgb(0xffffff))
+                                            .child(SharedString::from(initial)),
+                                    )
                                     .into_any_element()
                             })
                             .child(
@@ -4364,6 +4503,85 @@ mod tests {
     fn gh_fields_include_the_list_data() {
         assert!(super::GH_FIELDS.contains("repository"));
         assert!(super::GH_FIELDS.contains("updatedAt"));
+    }
+
+    fn pull_request_for_sort(
+        repository: &str,
+        number: u64,
+        created_at: &str,
+        updated_at: &str,
+    ) -> super::PullRequest {
+        super::PullRequest {
+            number,
+            title: format!("PR {number}"),
+            repository: repository.to_owned(),
+            state: "open".to_owned(),
+            updated_at: updated_at.to_owned(),
+            created_at: created_at.to_owned(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn pull_requests_sort_newest_first_by_created_then_updated() {
+        let mut entries = vec![
+            pull_request_for_sort(
+                "owner/repo",
+                1,
+                "2026-01-01T00:00:00Z",
+                "2026-09-01T00:00:00Z",
+            ),
+            pull_request_for_sort(
+                "owner/repo",
+                2,
+                "2026-07-01T00:00:00Z",
+                "2026-07-02T00:00:00Z",
+            ),
+            pull_request_for_sort(
+                "owner/repo",
+                3,
+                "2026-07-01T00:00:00Z",
+                "2026-08-01T00:00:00Z",
+            ),
+        ];
+        super::sort_pull_requests(&mut entries);
+        let order = entries
+            .iter()
+            .map(|entry| entry.number)
+            .collect::<Vec<_>>();
+        // Newest `created_at` first; ties break by newest `updated_at`.
+        // A cache saved in `updated_at` order (or none) must not survive.
+        assert_eq!(order, vec![3, 2, 1]);
+    }
+
+    #[test]
+    fn pull_request_merge_dedupes_and_keeps_newest_first() {
+        let merged = super::merge_pull_requests(vec![
+            pull_request_for_sort(
+                "owner/repo",
+                1,
+                "2026-06-01T00:00:00Z",
+                "2026-06-01T00:00:00Z",
+            ),
+            pull_request_for_sort(
+                "owner/repo",
+                2,
+                "2026-09-10T00:00:00Z",
+                "2026-09-10T00:00:00Z",
+            ),
+            // Stale duplicate of #2 from an older page: one row survives.
+            pull_request_for_sort(
+                "owner/repo",
+                2,
+                "2026-09-10T00:00:00Z",
+                "2026-09-01T00:00:00Z",
+            ),
+        ]);
+        let order = merged
+            .iter()
+            .map(|entry| entry.number)
+            .collect::<Vec<_>>();
+        assert_eq!(order, vec![2, 1]);
     }
 
     #[test]

@@ -774,6 +774,44 @@ impl Insulator {
         cx.notify();
     }
 
+    /// Stop every live provider-side work item the user can stop (subagents,
+    /// background commands, monitors). Stop on the composer must cut off
+    /// everything the turn is still driving, not just the foreground turn:
+    /// settling the foreground registry alone left detached work running
+    /// while the transcript already read "stopped".
+    pub(super) fn stop_all_live_background_work(&mut self, session_id: Uuid) {
+        let Some(driver) = self
+            .runtimes
+            .get(&session_id)
+            .map(|runtime| runtime.driver.clone())
+        else {
+            return;
+        };
+        let stops = self
+            .background_work
+            .get(&session_id)
+            .map(|registry| {
+                registry
+                    .items
+                    .values()
+                    .filter(|item| item.status.is_stoppable() && item.can_stop)
+                    .filter_map(|item| {
+                        item.control_id
+                            .clone()
+                            .map(|control_id| (item.key.clone(), control_id))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for (key, control_id) in stops {
+            self.handle_background_work_event(
+                session_id,
+                BackgroundWorkEvent::StopRequested(key.clone()),
+            );
+            driver.stop_background_work(key, control_id);
+        }
+    }
+
     pub(super) fn delete_background_work(
         &mut self,
         session_id: Uuid,

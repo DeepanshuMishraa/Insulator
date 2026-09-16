@@ -1444,14 +1444,21 @@ impl Insulator {
         // objective after this stop and begin pursuing it; the user asked to
         // stop, so they leave with the turn.
         self.pending_goal_operations.remove(&session_id);
+        // Stop cuts off everything the turn is still driving: the provider
+        // turn itself, its Computer Use descendants, queued steers, and any
+        // live provider-side background work. Marking the transcript
+        // "stopped" while the provider kept running behind it was the
+        // reported bug — each of these needs its own explicit stop.
+        if self.runtimes.contains_key(&session_id) {
+            self.stop_all_live_background_work(session_id);
+        }
         let mut runtime = self.runtimes.remove(&session_id);
         if let Some(runtime) = runtime.as_ref() {
             runtime.driver.cancel();
-            if retain_runtime {
-                // A detached process keeps Codex's app-server resident, but
-                // Computer Use descendants still belong to the cancelled turn.
-                runtime.driver.cancel_computer_use();
-            }
+            // Computer Use descendants belong to the cancelled turn no
+            // matter which provider is running; previously they were only
+            // stopped when the runtime was retained.
+            runtime.driver.cancel_computer_use();
         }
         // Do not leave already-received text in the smoothing queue: once the
         // message is marked complete, a later delta would otherwise create a
@@ -1487,6 +1494,10 @@ impl Insulator {
             runtime.pending_permission = None;
             runtime.pending_user_input = None;
             runtime.pending_computer_approval = None;
+            // A steer accepted after the stop would inject a new user
+            // message into the settled session; the user asked to stop,
+            // not to continue.
+            runtime.pending_steers.clear();
             runtime.computer_use_previews.clear();
         }
         if has_active_turn {

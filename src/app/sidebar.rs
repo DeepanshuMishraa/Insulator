@@ -922,6 +922,11 @@ impl Insulator {
             item_ix: 0,
             offset_in_item: px(0.0),
         });
+        // The in-memory rows may predate the newest-first sort (caches from
+        // older builds) or hold avatar paths whose files are gone; repair
+        // both before the first paint so the section never opens stale.
+        pull_requests::sort_pull_requests(&mut self.pull_requests);
+        self.ensure_pull_request_avatars(cx);
         self.ensure_pull_requests(false, cx);
         self.save();
         cx.notify();

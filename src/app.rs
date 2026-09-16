@@ -1645,6 +1645,9 @@ pub struct Insulator {
     pull_request_video_views: HashMap<String, Entity<BrowserView>>,
     pull_request_media_paths: HashMap<String, PathBuf>,
     pull_request_media_loading: HashSet<String>,
+    /// Author logins with an avatar download currently in flight, so
+    /// repeated renders while the list is visible do not spawn duplicates.
+    pull_request_avatar_loading: HashSet<String>,
     /// A Browser surface was just opened; the next right panel render moves
     /// focus into its address bar.
     right_panel_pending_browser_focus: Option<Uuid>,
@@ -3438,6 +3441,7 @@ impl Insulator {
                 pull_request_video_views: HashMap::new(),
                 pull_request_media_paths: HashMap::new(),
                 pull_request_media_loading: HashSet::new(),
+                pull_request_avatar_loading: HashSet::new(),
                 right_panel_pending_browser_focus: None,
                 scene_overlay_enabled,
                 settings_page: None,
