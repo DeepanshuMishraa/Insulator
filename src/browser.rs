@@ -1772,6 +1772,16 @@ impl BrowserView {
         cx.notify();
     }
 
+    /// Kiosk mode for the Simulator tab: hide the address/toolbar chrome so
+    /// only the page (the serve-sim stream) shows. Idempotent; the Browser
+    /// tab's surface never calls this.
+    pub fn set_chromeless(&mut self, cx: &mut Context<Self>) {
+        if !self.embedded {
+            self.embedded = true;
+            cx.notify();
+        }
+    }
+
     fn restore_address(&mut self, cx: &mut Context<Self>) {
         self.address_dirty = false;
         self.echo_page_url(cx);
@@ -2000,6 +2010,19 @@ impl BrowserView {
             self.refresh_navigation_state();
             _cx.notify();
         }
+    }
+
+    /// Run page script fire-and-forget. The Simulator tab uses this to strip
+    /// serve-sim chrome and match the page background to the app theme.
+    /// Injection is idempotent; macOS-only in practice, no-op elsewhere so
+    /// callers need no platform cfg.
+    pub(crate) fn evaluate_page_script(&self, script: &str) {
+        #[cfg(target_os = "macos")]
+        if let Some(host) = &self.host {
+            let _ = host.webview.evaluate_script(script);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = script;
     }
 
     fn toggle_devtools(&mut self) {

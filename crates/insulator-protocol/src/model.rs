@@ -705,6 +705,13 @@ impl SessionStatus {
 }
 
 /// User-assigned task status for organizing chats in the sidebar and project workflows.
+///
+/// Lifecycle: a new chat starts as `InProgress`, moves to `Done` when its turn
+/// finishes, and returns to `InReview` when the same chat is continued.
+///
+/// `Backlog` and `Canceled` are retained for possible future use but are
+/// currently hidden from the UI (excluded from `MENU_ORDER`/`GROUP_ORDER` and
+/// migrated away on load). We might need them in the future but not now.
 #[derive(
     Clone, Copy, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, TS,
 )]
@@ -712,27 +719,27 @@ impl SessionStatus {
 pub enum ChatStatus {
     #[default]
     InProgress,
+    // Dead code for now (hidden from the UI): kept because we might need it
+    // in the future but not now.
     Backlog,
     InReview,
     Done,
+    // Dead code for now (hidden from the UI): kept because we might need it
+    // in the future but not now.
     Canceled,
 }
 
 impl ChatStatus {
-    pub const MENU_ORDER: [ChatStatus; 5] = [
-        ChatStatus::Backlog,
+    pub const MENU_ORDER: [ChatStatus; 3] = [
         ChatStatus::InProgress,
         ChatStatus::InReview,
         ChatStatus::Done,
-        ChatStatus::Canceled,
     ];
 
-    pub const GROUP_ORDER: [ChatStatus; 5] = [
+    pub const GROUP_ORDER: [ChatStatus; 3] = [
         ChatStatus::Done,
         ChatStatus::InReview,
         ChatStatus::InProgress,
-        ChatStatus::Backlog,
-        ChatStatus::Canceled,
     ];
 
     pub fn label(self) -> &'static str {
@@ -1288,7 +1295,42 @@ impl AgentSession {
         !self.status.is_busy()
     }
 
+    /// Brings a loaded session's status into the visible lifecycle.
+    /// Idempotent; safe to run on skeletons (no turns yet) and after
+    /// hydration (turns present). Returns whether anything changed so callers
+    /// can persist the migration instead of recomputing it on every load.
+    pub fn migrate_chat_status(&mut self) -> bool {
+        let before = self.chat_status;
+        // `Backlog` and `Canceled` are hidden from the UI but kept in the
+        // enum for possible future use. Map persisted values into the visible
+        // set so existing chats stay grouped instead of disappearing. We
+        // might need them in the future but not now.
+        match self.chat_status {
+            ChatStatus::Backlog | ChatStatus::Canceled => {
+                self.chat_status = ChatStatus::InProgress;
+            }
+            _ => {}
+        }
+        // Existing chats follow the same lifecycle: a finished chat rests in
+        // `Done` until it is continued again. This only fires once turns are
+        // loaded, so on skeletons it is a no-op until hydration.
+        if self.chat_status == ChatStatus::InProgress
+            && self
+                .turns
+                .iter()
+                .any(|turn| turn.status == TurnStatus::Completed)
+            && !self
+                .turns
+                .iter()
+                .any(|turn| turn.status == TurnStatus::Running)
+        {
+            self.chat_status = ChatStatus::Done;
+        }
+        self.chat_status != before
+    }
+
     pub fn migrate_legacy_state(&mut self) {
+        self.migrate_chat_status();
         if self.provider_cursor.is_none()
             && let Some(id) = self.provider_session_id.take()
         {
@@ -1415,6 +1457,9 @@ impl AgentSession {
     ) -> Uuid {
         let id = Uuid::new_v4();
         let now = unix_time();
+        // A brand-new chat starts in progress; continuing the same chat goes
+        // back to in review.
+        let continued = !self.turns.is_empty();
         self.turns.push(AgentTurn {
             id,
             turn_count: self.turns.len() + 1,
@@ -1430,7 +1475,11 @@ impl AgentSession {
                 .with_presentation(display_content, attachments),
         );
         self.last_reply_at = Some(now);
-        self.chat_status = ChatStatus::InProgress;
+        self.chat_status = if continued {
+            ChatStatus::InReview
+        } else {
+            ChatStatus::InProgress
+        };
         id
     }
 
@@ -1443,6 +1492,7 @@ impl AgentSession {
     pub fn begin_provider_turn(&mut self) -> Uuid {
         let id = Uuid::new_v4();
         let now = unix_time();
+        let continued = !self.turns.is_empty();
         self.turns.push(AgentTurn {
             id,
             turn_count: self.turns.len() + 1,
@@ -1455,7 +1505,11 @@ impl AgentSession {
         });
         self.last_reply_at = Some(now);
         self.updated_at = now;
-        self.chat_status = ChatStatus::InProgress;
+        self.chat_status = if continued {
+            ChatStatus::InReview
+        } else {
+            ChatStatus::InProgress
+        };
         id
     }
 
@@ -1477,6 +1531,14 @@ impl AgentSession {
         message_id: Uuid,
     ) -> bool {
         let now = unix_time();
+        // Mirror the begin-turn lifecycle: a first turn starts in progress,
+        // continuing the same chat goes back to in review.
+        let continued = !self.turns.is_empty();
+        let continued_status = if continued {
+            ChatStatus::InReview
+        } else {
+            ChatStatus::InProgress
+        };
         if let Some(active) = self.active_turn_id() {
             let has_prompt = self.messages.iter().any(|candidate| {
                 candidate.turn_id == Some(active) && candidate.role == MessageRole::User
@@ -1488,7 +1550,7 @@ impl AgentSession {
             prompt.id = message_id;
             self.messages.push(prompt);
             self.updated_at = now;
-            self.chat_status = ChatStatus::InProgress;
+            self.chat_status = continued_status;
             return true;
         }
         self.turns.push(AgentTurn {
@@ -1507,7 +1569,7 @@ impl AgentSession {
         self.status = SessionStatus::Connecting;
         self.last_reply_at = Some(now);
         self.updated_at = now;
-        self.chat_status = ChatStatus::InProgress;
+        self.chat_status = continued_status;
         true
     }
 
@@ -1555,6 +1617,22 @@ impl AgentSession {
         if self.messages.is_empty() {
             self.auto_title = None;
         }
+        // The unwound turn never started, so its lifecycle assignment goes
+        // with it: a follow-up whose preparation failed must not strand the
+        // chat in `InReview`. A completed chat rests back in `Done`; a chat
+        // with no completed turns keeps the `InProgress` the begin path
+        // assigned.
+        if !self
+            .turns
+            .iter()
+            .any(|turn| turn.status == TurnStatus::Running)
+            && self
+                .turns
+                .iter()
+                .any(|turn| turn.status == TurnStatus::Completed)
+        {
+            self.chat_status = ChatStatus::Done;
+        }
     }
 
     pub fn mark_active_turn_provider_started(&mut self) {
@@ -1595,6 +1673,12 @@ impl AgentSession {
         turn.completed_at = Some(completed_at);
         let result = (turn.id, turn.turn_count);
         self.last_reply_at = Some(completed_at);
+        // A finished chat rests in done until the same chat is continued
+        // again (which moves it back to in review). Failed or interrupted
+        // turns leave the working status untouched.
+        if status == TurnStatus::Completed {
+            self.chat_status = ChatStatus::Done;
+        }
         Some(result)
     }
 
@@ -3649,6 +3733,67 @@ mod tests {
         assert_eq!(message.content, "compare this @/tmp/reference.png");
         assert_eq!(message.visible_content(), "compare this");
         assert_eq!(message.attachments, vec![attachment]);
+    }
+
+    #[test]
+    fn chat_status_migration_remaps_hidden_and_promotes_finished() {
+        let project = Project::from_path(PathBuf::from("/tmp/insulator"));
+        // Hidden statuses remap into the visible set and report the change
+        // so the migration persists instead of recomputing every load.
+        for hidden in [ChatStatus::Backlog, ChatStatus::Canceled] {
+            let mut session = AgentSession::new(project.id, ProviderKind::Codex);
+            session.chat_status = hidden;
+            assert!(session.migrate_chat_status());
+            assert_eq!(session.chat_status, ChatStatus::InProgress);
+            assert!(!session.migrate_chat_status(), "migration is idempotent");
+        }
+        // Skeletons carry no turns: nothing to derive, nothing changes.
+        let mut fresh = AgentSession::new(project.id, ProviderKind::Codex);
+        assert!(!fresh.migrate_chat_status());
+        assert_eq!(fresh.chat_status, ChatStatus::InProgress);
+        // A finished chat stuck in progress promotes once turns load.
+        let mut stuck = AgentSession::new(project.id, ProviderKind::Codex);
+        stuck.begin_turn("Do it");
+        stuck.finish_active_turn(TurnStatus::Completed);
+        stuck.chat_status = ChatStatus::InProgress;
+        assert!(stuck.migrate_chat_status());
+        assert_eq!(stuck.chat_status, ChatStatus::Done);
+        // A running turn blocks promotion; review is left alone.
+        let mut busy = AgentSession::new(project.id, ProviderKind::Codex);
+        busy.begin_turn("First");
+        busy.finish_active_turn(TurnStatus::Completed);
+        busy.chat_status = ChatStatus::InProgress;
+        busy.begin_turn("Second");
+        assert!(!busy.migrate_chat_status());
+        assert_eq!(busy.chat_status, ChatStatus::InReview);
+    }
+
+    #[test]
+    fn unwinding_a_failed_follow_up_restores_done() {
+        let project = Project::from_path(PathBuf::from("/tmp/insulator"));
+        let mut session = AgentSession::new(project.id, ProviderKind::Codex);
+        session.begin_turn("Do it");
+        session.finish_active_turn(TurnStatus::Completed);
+        assert_eq!(session.chat_status, ChatStatus::Done);
+        // Continuing moves back to review...
+        let follow_up = session.begin_turn("One more thing");
+        assert_eq!(session.chat_status, ChatStatus::InReview);
+        // ...and a failed preparation unwinds the unstarted turn plus its
+        // status assignment, resting the chat back in done.
+        session.unwind_unstarted_turn(follow_up);
+        assert_eq!(session.chat_status, ChatStatus::Done);
+        assert!(session.active_turn_id().is_none());
+    }
+
+    #[test]
+    fn unwinding_a_failed_first_turn_keeps_in_progress() {
+        let project = Project::from_path(PathBuf::from("/tmp/insulator"));
+        let mut session = AgentSession::new(project.id, ProviderKind::Codex);
+        let first = session.begin_turn("Do it");
+        assert_eq!(session.chat_status, ChatStatus::InProgress);
+        session.unwind_unstarted_turn(first);
+        assert_eq!(session.chat_status, ChatStatus::InProgress);
+        assert!(session.turns.is_empty());
     }
 
     #[test]

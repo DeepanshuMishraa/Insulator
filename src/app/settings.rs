@@ -3363,6 +3363,7 @@ impl Insulator {
             self.state.background_image_path.as_deref(),
         );
         self.save();
+        self.sync_sim_appearance(cx);
         cx.notify();
     }
 
@@ -3391,6 +3392,7 @@ impl Insulator {
             self.state.background_image_path.as_deref(),
         );
         self.save();
+        self.sync_sim_appearance(cx);
         cx.notify();
     }
 

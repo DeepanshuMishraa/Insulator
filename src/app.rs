@@ -281,6 +281,7 @@ pub(crate) enum RightPanelUpperTab {
     Files,
     Changes,
     Browser,
+    Simulator,
     BackgroundWork {
         key: crate::model::BackgroundWorkKey,
         title: String,
@@ -575,7 +576,6 @@ struct PendingCheckpointCapture {
 /// preparation window from a connecting provider that can already be stopped.
 struct PreparedSubmission {
     workspace: SessionWorkspace,
-    checkpoint_warning: Option<String>,
     /// `None` reuses an already-live runtime. `Some` contains the result of a
     /// provider process start performed on the background executor.
     driver: Option<anyhow::Result<PreparedDriver>>,
@@ -1590,10 +1590,14 @@ pub struct Insulator {
     pub(crate) right_panel_active_terminal_index: usize,
     pub(crate) right_panel_terminal_tabs_scroll_handle: ScrollHandle,
     pub(crate) right_panel_browser_id: Option<Uuid>,
+    /// Dedicated browser surface for the iOS Simulator stream, so the stream
+    /// lives under the Simulator tab and never clobbers the Browser tab.
+    sim_browser_id: Option<Uuid>,
     right_panel_session_states: HashMap<Uuid, RightPanelSessionState>,
     right_panel_surfaces: Vec<RightPanelSurface>,
     right_panel_active_surface: Option<usize>,
     right_panel_tabs_scroll_handle: ScrollHandle,
+    right_panel_tabs_scrollbar: Rc<ScrollbarState>,
     right_panel_files_scroll_handle: ScrollHandle,
     right_panel_files_scrollbar: Rc<ScrollbarState>,
     right_panel_diff_filter: Entity<TextInput>,
@@ -1655,6 +1659,33 @@ pub struct Insulator {
     /// A Browser surface was just opened; the next right panel render moves
     /// focus into its address bar.
     right_panel_pending_browser_focus: Option<Uuid>,
+    /// Owned iOS Simulator stream (`serve-sim --detach` for one explicit
+    /// UDID). Frames read only this; subprocess I/O lands via
+    /// `background_executor` in `app/sim_stream.rs`.
+    sim_stream_info: Option<crate::sim_stream::SimStreamInfo>,
+    sim_stream_error: Option<String>,
+    sim_stream_loading: bool,
+    /// Stop was pressed and cleanup is still landing: the stream view is
+    /// already gone, the tab shows the stopping loader until it lands.
+    sim_stopping: bool,
+    /// Start/stop/reopen epoch. Bumped on every invocation so a slow start
+    /// that lands after a Stop is dropped instead of resurrecting the view.
+    sim_stream_generation: u64,
+    /// App dark-polarity last applied to the live simulator. `None` means
+    /// unknown (fresh start failed, or reattached after restart) — the next
+    /// sync applies unconditionally.
+    sim_applied_dark: Option<bool>,
+    /// Page surface hex last painted into the stream view. Tracked
+    /// separately from polarity so same-polarity custom-theme switches
+    /// still repaint the kiosk CSS.
+    sim_applied_surface: Option<String>,
+    /// Bumped per appearance sync; a stale completion is discarded so two
+    /// rapid theme flips cannot leave the stream on the older polarity.
+    sim_appearance_generation: u64,
+    /// Cached `simctl` device list; `None` means no scan has landed yet.
+    sim_devices: Option<Vec<crate::sim_stream::SimDevice>>,
+    sim_devices_generation: u64,
+    sim_devices_loading: bool,
     /// GPUI is compositing deferred draws on a plane above native views, so
     /// menus render over the live webview and no snapshot occlusion is needed.
     /// When the overlay could not be enabled, the browser falls back to
@@ -1888,6 +1919,7 @@ mod runtime;
 mod sessions;
 mod settings;
 mod sidebar;
+mod sim_stream;
 mod skills_page;
 mod streaming;
 mod task_switcher;
@@ -2694,6 +2726,9 @@ impl Insulator {
                         window,
                         cx,
                     );
+                    // System flips bypass the settings setters, so mirror the
+                    // new polarity onto the live simulator here.
+                    this.sync_sim_appearance(cx);
                     cx.notify();
                 }
             })
@@ -3404,6 +3439,7 @@ impl Insulator {
                     .collect(),
                 right_panel_active_terminal_index: 0,
                 right_panel_terminal_tabs_scroll_handle: ScrollHandle::new(),
+                sim_browser_id: None,
                 right_panel_browser_id: initial_right_panel_surfaces.iter().find_map(|surface| {
                     match surface {
                         RightPanelSurface::Browser(id) => Some(*id),
@@ -3414,6 +3450,7 @@ impl Insulator {
                 right_panel_surfaces: initial_right_panel_surfaces,
                 right_panel_active_surface: initial_right_panel_active_surface,
                 right_panel_tabs_scroll_handle: ScrollHandle::new(),
+                right_panel_tabs_scrollbar: ScrollbarState::new(),
                 right_panel_files_scroll_handle: ScrollHandle::new(),
                 right_panel_files_scrollbar: ScrollbarState::new(),
                 right_panel_diff_filter,
@@ -3456,6 +3493,17 @@ impl Insulator {
                 pull_request_media_loading: HashSet::new(),
                 pull_request_avatar_loading: HashSet::new(),
                 right_panel_pending_browser_focus: None,
+                sim_stream_info: None,
+                sim_stream_error: None,
+                sim_stream_loading: false,
+                sim_stopping: false,
+                sim_stream_generation: 0,
+                sim_applied_dark: None,
+                sim_applied_surface: None,
+                sim_appearance_generation: 0,
+                sim_devices: None,
+                sim_devices_generation: 0,
+                sim_devices_loading: false,
                 scene_overlay_enabled,
                 settings_page: None,
                 skills_catalog: None,

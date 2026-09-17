@@ -57,6 +57,9 @@ command_palette.show_sidebar: サイドバーを表示
 command_palette.hide_sidebar: サイドバーを隠す
 command_palette.show_right_panel: 右パネルを表示
 command_palette.hide_right_panel: 右パネルを隠す
+command_palette.start_sim_stream: iOS シミュレータストリームを開始
+command_palette.reopen_sim_stream: シミュレータストリームを再度開く
+command_palette.stop_sim_stream: シミュレータストリームを停止
 command_palette.current: 現在
 command_palette.you: あなた
 command_palette.agent: エージェント
@@ -657,7 +660,6 @@ errors.save_projectless_migration: "プロジェクトなしタスクの移行�
 errors.move_projectless_task: "以前のルート直下のプロジェクトなしタスクを ~/.insulator/projects 内に移動できませんでした：%{error}"
 errors.remote_host_path: このパスはデーモンホスト上にあるため、デスクトップアプリでは開けません
 errors.change_branch: "ブランチを変更できませんでした：%{error}"
-errors.capture_pre_turn_checkpoint: "ターン開始前のチェックポイントを取得できませんでした：%{error}"
 errors.capture_turn_checkpoint: "ターンのチェックポイントを取得できませんでした：%{error}"
 errors.save_local_state: "ローカルの状態を保存できませんでした：%{error}"
 errors.task_project_not_found: タスクのプロジェクトが見つかりませんでした

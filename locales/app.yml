@@ -112,6 +112,12 @@ command_palette.show_right_panel:
   en: Show right panel
 command_palette.hide_right_panel:
   en: Hide right panel
+command_palette.start_sim_stream:
+  en: Start iOS Simulator Stream
+command_palette.reopen_sim_stream:
+  en: Reopen Simulator Stream
+command_palette.stop_sim_stream:
+  en: Stop Simulator Stream
 command_palette.current:
   en: Current
 command_palette.you:
@@ -1361,8 +1367,6 @@ errors.remote_host_path:
   en: This path belongs to the daemon host and cannot be opened by the desktop
 errors.change_branch:
   en: "Could not change branch: %{error}"
-errors.capture_pre_turn_checkpoint:
-  en: "Could not capture the pre-turn checkpoint: %{error}"
 errors.capture_turn_checkpoint:
   en: "Could not capture the turn checkpoint: %{error}"
 errors.save_local_state:

@@ -611,6 +611,7 @@ impl PersistedState {
                 session.turns.len(),
                 session.last_reply_at,
                 session.provider_cursor.is_some(),
+                session.chat_status,
             );
             session.migrate_legacy_state();
             session.backfill_last_reply_at();
@@ -621,6 +622,7 @@ impl PersistedState {
                         session.turns.len(),
                         session.last_reply_at,
                         session.provider_cursor.is_some(),
+                        session.chat_status,
                     )
             {
                 self.dirty_sessions.insert(session.id);
@@ -1316,6 +1318,12 @@ impl StateStore {
             .filter_map(message_from_row)
             .collect();
 
+        // Startup loads only list columns, so the load-time migration runs on
+        // skeletons whose turns are empty. Now that the turns are here, run
+        // the status migration against the real turn data so a finished chat
+        // promotes to `Done` (and hidden statuses remap) instead of waiting
+        // for the next turn to fix it.
+        session.migrate_chat_status();
         session.detail_loaded = true;
         Ok(())
     }
@@ -3422,6 +3430,65 @@ mod tests {
         assert_eq!(titles.first().map(String::as_str), Some("Newer"));
         assert_eq!(titles.len(), 2);
 
+        fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn status_migration_marks_remapped_sessions_dirty() {
+        let directory = temporary_directory();
+        let store = store_in(&directory);
+        let mut state = PersistedState::fresh(PathBuf::from("/tmp/project"));
+        let session_id = state.sessions[0].id;
+        // Only started sessions are stored; open a turn so the row exists,
+        // then force the legacy hidden status on top of it.
+        state.sessions[0].begin_turn("Stored");
+        state.sessions[0].chat_status = ChatStatus::Backlog;
+        state.mark_session_dirty(session_id);
+        store.save(&mut state).unwrap();
+
+        let restored = store_in(&directory).load().unwrap();
+        let session = restored
+            .sessions
+            .iter()
+            .find(|s| s.id == session_id)
+            .unwrap();
+        assert_eq!(session.chat_status, ChatStatus::InProgress);
+        assert!(
+            restored.dirty_sessions.contains(&session_id),
+            "remapped status must persist on the next save"
+        );
+        fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn hydrated_finished_chat_promotes_to_done() {
+        let directory = temporary_directory();
+        let store = store_in(&directory);
+        let mut state = PersistedState::fresh(PathBuf::from("/tmp/project"));
+        let session_id = state.sessions[0].id;
+        state.sessions[0].begin_turn("Stored");
+        state.sessions[0].finish_active_turn(crate::model::TurnStatus::Completed);
+        // Simulate the legacy stuck state: finished work left InProgress.
+        state.sessions[0].chat_status = ChatStatus::InProgress;
+        state.mark_session_dirty(session_id);
+        store.save(&mut state).unwrap();
+
+        // Skeletons carry no turns, so the load-time migration cannot derive
+        // the finished state yet.
+        let mut restored = store_in(&directory).load().unwrap();
+        let skeleton = restored
+            .sessions
+            .iter()
+            .find(|s| s.id == session_id)
+            .unwrap();
+        assert_eq!(skeleton.chat_status, ChatStatus::InProgress);
+        assert!(!skeleton.detail_loaded);
+
+        // Once hydration loads the turns, the status migrates to Done.
+        let session = restored.session_mut(session_id).unwrap();
+        store.hydrate(session).unwrap();
+        assert!(session.detail_loaded);
+        assert_eq!(session.chat_status, ChatStatus::Done);
         fs::remove_dir_all(directory).ok();
     }
 
