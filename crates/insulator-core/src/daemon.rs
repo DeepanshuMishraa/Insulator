@@ -471,8 +471,19 @@ impl Backend for InsulatorBackend {
                     .iter_mut()
                     .find(|session| session.id == session_id)
                 {
+                    let before = session.chat_status;
                     self.task_store.hydrate(session)?;
-                    Some(session.clone())
+                    // Hydration loads the turns skeletons skip, which may
+                    // promote the status (finished chat to `Done`). Persist
+                    // it so the migration sticks instead of recomputing on
+                    // every load.
+                    let changed = session.chat_status != before;
+                    let hydrated = session.clone();
+                    if changed {
+                        state.mark_session_dirty(session_id);
+                        self.task_store.save(&mut state)?;
+                    }
+                    Some(hydrated)
                 } else {
                     None
                 };

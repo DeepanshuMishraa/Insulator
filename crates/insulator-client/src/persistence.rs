@@ -949,6 +949,7 @@ impl PersistedState {
                 session.turns.len(),
                 session.last_reply_at,
                 session.provider_cursor.is_some(),
+                session.chat_status,
             );
             session.migrate_legacy_state();
             session.backfill_last_reply_at();
@@ -958,6 +959,7 @@ impl PersistedState {
                         session.turns.len(),
                         session.last_reply_at,
                         session.provider_cursor.is_some(),
+                        session.chat_status,
                     )
             {
                 self.dirty_sessions.insert(session.id);

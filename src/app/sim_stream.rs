@@ -406,7 +406,7 @@ impl Insulator {
                 let alive = cx
                     .background_executor()
                     .spawn(async move {
-                        sim_stream::list_streams_blocking(None).unwrap_or_default()
+                        sim_stream::list_streams_for_cleanup_blocking().unwrap_or_default()
                     })
                     .await;
                 if !alive.is_empty() {

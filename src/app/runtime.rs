@@ -352,17 +352,18 @@ fn prepare_submission(
 
     // Every turn gets its own immutable starting snapshot. Reusing the prior
     // response's ending ref would attribute branch switches or terminal edits
-    // made between turns to the next response.
-    let checkpoint_warning = workspace_ack(
+    // made between turns to the next response. This stays best-effort and
+    // intentionally never surfaces a toast: a persistent environment
+    // condition (e.g. gitignored paths) would otherwise nag on every single
+    // turn for something the user cannot act on mid-flow.
+    let _ = workspace_ack(
         &workspace_client,
         insulator_client::WorkspaceOperation::CaptureTurnStart {
             cwd: project_path.to_path_buf(),
             session_id,
             turn_count,
         },
-    )
-    .err()
-    .map(|error| tr!("errors.capture_pre_turn_checkpoint", error = error));
+    );
 
     // Process startup can synchronously resolve executables, bind sockets,
     // and spawn children. It belongs behind the same animated preparation
@@ -374,7 +375,6 @@ fn prepare_submission(
 
     Ok(PreparedSubmission {
         workspace,
-        checkpoint_warning,
         driver,
     })
 }
@@ -3097,7 +3097,6 @@ impl Insulator {
         };
         let PreparedSubmission {
             workspace,
-            checkpoint_warning: _,
             driver,
         } = prepared;
         if !self
@@ -3635,7 +3634,6 @@ impl Insulator {
         };
         let PreparedSubmission {
             workspace,
-            checkpoint_warning,
             driver: prepared_driver,
         } = prepared;
         // The turn began at accept time; it must still be the untouched one
@@ -3696,11 +3694,9 @@ impl Insulator {
             runtime.last_active_at = Instant::now();
         }
         // The transcript already shows the turn — the prompt message, its
-        // anchor, and the working indicator all landed at accept time. Only
-        // preparation's own output surfaces here.
-        if selected && let Some(warning) = checkpoint_warning {
-            self.show_toast(warning);
-        }
+        // anchor, and the working indicator all landed at accept time.
+        // (Pre-turn checkpoint capture stays silent by design; see
+        // `prepare_submission`.)
         let provider = self
             .state
             .sessions

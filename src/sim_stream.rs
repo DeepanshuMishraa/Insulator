@@ -315,6 +315,12 @@ pub fn parse_detach_output(stdout: &str) -> Result<SimStreamInfo, SimStreamError
 
 /// Parse `serve-sim --list -q [udid]` stdout: one object or an array.
 /// An empty array means no stream for that device.
+///
+/// Strict URL validation applies: a record that fails it aborts the whole
+/// list. Navigation paths (reopen/reuse) use this so a compromised helper
+/// can never reach the webview; cleanup paths use
+/// [`parse_list_output_for_cleanup`] instead so one bad record cannot shield
+/// the rest from Stop.
 pub fn parse_list_output(stdout: &str) -> Result<Vec<SimStreamInfo>, SimStreamError> {
     let trimmed = stdout.trim();
     if trimmed.is_empty() {
@@ -333,6 +339,45 @@ pub fn parse_list_output(stdout: &str) -> Result<Vec<SimStreamInfo>, SimStreamEr
         return Ok(Vec::new());
     }
     Ok(vec![to_info(single)?])
+}
+
+/// Lenient `--list` record for cleanup paths: URL validation is skipped so a
+/// record with an off-loopback or malformed URL stays killable by device and
+/// PID. Only the device gate remains — without it there is nothing to kill.
+/// URLs pass through raw and must never be navigated to; navigation always
+/// goes through strict [`to_info`] validation.
+fn to_cleanup_info(parsed: ServeSimInfo) -> Option<SimStreamInfo> {
+    if parsed.device.is_empty() {
+        return None;
+    }
+    Some(SimStreamInfo {
+        device: parsed.device,
+        url: parsed.url,
+        stream_url: parsed.stream_url,
+        ws_url: parsed.ws_url,
+        port: parsed.port,
+        pid: parsed.pid,
+    })
+}
+
+/// Lenient `--list` parse for `stop_all_blocking`: per-record URL problems
+/// yield a killable record instead of aborting the list, while transport
+/// (JSON) failures still error so a failed query never reads as "nothing
+/// running".
+fn parse_list_output_for_cleanup(stdout: &str) -> Result<Vec<SimStreamInfo>, SimStreamError> {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    if let Ok(list) = serde_json::from_str::<Vec<ServeSimInfo>>(trimmed) {
+        return Ok(list.into_iter().filter_map(to_cleanup_info).collect());
+    }
+    let single: ServeSimInfo =
+        serde_json::from_str(trimmed).map_err(|error| SimStreamError::ParseFailed {
+            tool: "serve-sim",
+            detail: error.to_string(),
+        })?;
+    Ok(to_cleanup_info(single).into_iter().collect())
 }
 
 fn command_failed(tool: &'static str, output: &std::process::Output) -> SimStreamError {
@@ -446,6 +491,15 @@ pub fn list_streams_blocking(udid: Option<&str>) -> Result<Vec<SimStreamInfo>, S
     parse_list_output(&run("serve-sim", command)?)
 }
 
+/// Same query with the lenient cleanup parse: records with off-loopback or
+/// malformed URLs stay killable by device and PID instead of aborting the
+/// list. For Stop paths only — never navigate to these URLs.
+pub fn list_streams_for_cleanup_blocking() -> Result<Vec<SimStreamInfo>, SimStreamError> {
+    let mut command = Command::new("npx");
+    command.args(["--yes", SERVE_SIM_PACKAGE, "--list", "-q"]);
+    parse_list_output_for_cleanup(&run("serve-sim", command)?)
+}
+
 /// `npx --yes serve-sim@0.1.45 --kill <udid>`; scoped to the owned stream.
 pub fn kill_blocking(udid: &str) -> Result<(), SimStreamError> {
     validate_udid(udid)?;
@@ -556,7 +610,7 @@ pub fn stop_all_blocking() -> Result<(), SimStreamError> {
     };
 
     // Graceful pass.
-    match list_streams_blocking(None) {
+    match list_streams_for_cleanup_blocking() {
         Ok(streams) => {
             for stream in streams {
                 if let Err(error) = kill_blocking(&stream.device) {
@@ -586,7 +640,7 @@ pub fn stop_all_blocking() -> Result<(), SimStreamError> {
         // treat it as unverified (keep polling) and preserve the error so
         // Stop cannot report success while helpers/sims are unaccounted for.
         let mut unverified = false;
-        let streams: Vec<SimStreamInfo> = match list_streams_blocking(None) {
+        let streams: Vec<SimStreamInfo> = match list_streams_for_cleanup_blocking() {
             Ok(streams) => streams,
             Err(error) => {
                 note(error);
@@ -622,7 +676,7 @@ pub fn stop_all_blocking() -> Result<(), SimStreamError> {
         }
         if Instant::now() >= deadline {
             let mut unverified = false;
-            let streams: Vec<SimStreamInfo> = match list_streams_blocking(None) {
+            let streams: Vec<SimStreamInfo> = match list_streams_for_cleanup_blocking() {
                 Ok(streams) => streams,
                 Err(error) => {
                     note(error);
@@ -846,6 +900,37 @@ mod tests {
         for json in cases {
             assert!(parse_detach_output(json).is_err(), "accepted: {json}");
         }
+    }
+
+    #[test]
+    fn list_output_strict_aborts_but_cleanup_keeps_killable_record() {
+        let json = r#"[{"url":"http://192.168.1.5:3100","device":"31406148-6A0B-49E1-9CFA-4EDAB4D95F9A","port":3100,"pid":4321}]"#;
+        // Strict: the off-loopback URL must abort the list so navigation
+        // paths never store it.
+        assert!(parse_list_output(json).is_err());
+        // Cleanup: the same record stays killable by device and PID.
+        let streams = parse_list_output_for_cleanup(json).expect("cleanup parse");
+        assert_eq!(streams.len(), 1);
+        assert_eq!(
+            streams[0].device,
+            "31406148-6A0B-49E1-9CFA-4EDAB4D95F9A"
+        );
+        assert_eq!(streams[0].pid, Some(4321));
+    }
+
+    #[test]
+    fn list_output_cleanup_still_errors_on_transport_failure() {
+        // Malformed JSON is a failed query, not an empty list: callers must
+        // keep treating it as unverified.
+        assert!(parse_list_output_for_cleanup("not json").is_err());
+        assert!(parse_list_output_for_cleanup("").expect("empty").is_empty());
+        assert!(parse_list_output_for_cleanup("[]")
+            .expect("array")
+            .is_empty());
+        // Idle `{"running":false,...}` has no device to kill.
+        assert!(parse_list_output_for_cleanup(r#"{"running":false}"#)
+            .expect("idle")
+            .is_empty());
     }
 
     #[test]

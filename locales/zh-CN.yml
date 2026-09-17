@@ -625,7 +625,6 @@ errors.save_projectless_migration: "无法保存无项目任务的迁移结果�
 errors.move_projectless_task: "无法将旧的根目录无项目任务移至 ~/.insulator/projects：%{error}"
 errors.remote_host_path: 此路径属于守护进程主机，无法在桌面应用中打开
 errors.change_branch: "无法切换分支：%{error}"
-errors.capture_pre_turn_checkpoint: "无法创建任务开始前的检查点：%{error}"
 errors.capture_turn_checkpoint: "无法创建本轮任务的检查点：%{error}"
 errors.save_local_state: "无法保存本地状态：%{error}"
 errors.task_project_not_found: 找不到该任务所属的项目

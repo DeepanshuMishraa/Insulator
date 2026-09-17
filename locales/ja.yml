@@ -660,7 +660,6 @@ errors.save_projectless_migration: "プロジェクトなしタスクの移行�
 errors.move_projectless_task: "以前のルート直下のプロジェクトなしタスクを ~/.insulator/projects 内に移動できませんでした：%{error}"
 errors.remote_host_path: このパスはデーモンホスト上にあるため、デスクトップアプリでは開けません
 errors.change_branch: "ブランチを変更できませんでした：%{error}"
-errors.capture_pre_turn_checkpoint: "ターン開始前のチェックポイントを取得できませんでした：%{error}"
 errors.capture_turn_checkpoint: "ターンのチェックポイントを取得できませんでした：%{error}"
 errors.save_local_state: "ローカルの状態を保存できませんでした：%{error}"
 errors.task_project_not_found: タスクのプロジェクトが見つかりませんでした

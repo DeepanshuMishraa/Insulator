@@ -576,7 +576,6 @@ struct PendingCheckpointCapture {
 /// preparation window from a connecting provider that can already be stopped.
 struct PreparedSubmission {
     workspace: SessionWorkspace,
-    checkpoint_warning: Option<String>,
     /// `None` reuses an already-live runtime. `Some` contains the result of a
     /// provider process start performed on the background executor.
     driver: Option<anyhow::Result<PreparedDriver>>,

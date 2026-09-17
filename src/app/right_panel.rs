@@ -1963,6 +1963,14 @@ impl Insulator {
         self.right_panel_pending_browser_focus =
             if self.right_panel_upper_tab == RightPanelUpperTab::Browser {
                 self.right_panel_browser_id
+            } else if self.right_panel_upper_tab == RightPanelUpperTab::Simulator {
+                // Mirror the Browser arm: the Simulator tab has no surface in
+                // `active_right_panel_surface()` (it returns `None` there so
+                // find/replace never touches the hidden editor), so without
+                // this the fallback below would clear the pending sim focus
+                // that selecting the tab just queued — e.g. on every session
+                // switch via `restore_right_panel_state()`.
+                self.sim_browser_id
             } else {
                 self.active_right_panel_surface()
                     .and_then(RightPanelSurface::browser_id)
