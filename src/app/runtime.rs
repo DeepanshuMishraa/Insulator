@@ -3516,7 +3516,9 @@ impl Insulator {
                 submission.attachments.clone(),
             );
             session.status = SessionStatus::Connecting;
-            session.chat_status = ChatStatus::InProgress;
+            // `begin_turn_with_presentation` already moved `chat_status` to
+            // in progress for a new chat or back to in review for a continued
+            // chat; do not override it here.
             session.updated_at = unix_time();
             selected.then_some(TranscriptAnchor {
                 session_id,

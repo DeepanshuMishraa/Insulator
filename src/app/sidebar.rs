@@ -4244,11 +4244,9 @@ mod tests {
         assert_eq!(
             ChatStatus::MENU_ORDER,
             [
-                ChatStatus::Backlog,
                 ChatStatus::InProgress,
                 ChatStatus::InReview,
                 ChatStatus::Done,
-                ChatStatus::Canceled,
             ]
         );
         assert_eq!(
@@ -4257,8 +4255,6 @@ mod tests {
                 ChatStatus::Done,
                 ChatStatus::InReview,
                 ChatStatus::InProgress,
-                ChatStatus::Backlog,
-                ChatStatus::Canceled,
             ]
         );
         assert_eq!(ChatStatus::InProgress.label(), "In progress");
@@ -4298,10 +4294,6 @@ mod tests {
                 SidebarRow::GroupSpacer,
                 SidebarRow::Header(SidebarGroup::Status(ChatStatus::InProgress)),
                 SidebarRow::Session(session_1),
-                SidebarRow::GroupSpacer,
-                SidebarRow::Header(SidebarGroup::Status(ChatStatus::Backlog)),
-                SidebarRow::GroupSpacer,
-                SidebarRow::Header(SidebarGroup::Status(ChatStatus::Canceled)),
                 SidebarRow::GroupSpacer,
             ]
         );
