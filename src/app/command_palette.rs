@@ -823,11 +823,11 @@ impl Insulator {
         // macOS Apple Silicon only; elsewhere the action toasts why.
         commands.push(CommandPaletteItem::command(
             PaletteSection::Commands,
-            if self.sim_stream_info.is_some() {
-                "Reopen Simulator Stream".to_owned()
+            tr!(if self.sim_stream_info.is_some() {
+                "command_palette.reopen_sim_stream"
             } else {
-                "Start iOS Simulator Stream".to_owned()
-            },
+                "command_palette.start_sim_stream"
+            }),
             "icons/laptop.svg",
             None,
             PaletteAction::StartSimStream,
@@ -837,7 +837,7 @@ impl Insulator {
         if self.sim_stream_info.is_some() {
             commands.push(CommandPaletteItem::command(
                 PaletteSection::Commands,
-                "Stop Simulator Stream".to_owned(),
+                tr!("command_palette.stop_sim_stream"),
                 "icons/stop.svg",
                 None,
                 PaletteAction::StopSimStream,

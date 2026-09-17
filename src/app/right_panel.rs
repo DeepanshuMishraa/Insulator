@@ -1899,6 +1899,7 @@ impl Insulator {
         match &self.right_panel_upper_tab {
             RightPanelUpperTab::Files => Some(&RightPanelSurface::Files),
             RightPanelUpperTab::Changes => Some(&RightPanelSurface::Diff),
+            RightPanelUpperTab::Simulator => None,
             _ => self
                 .right_panel_active_surface
                 .and_then(|index| self.right_panel_surfaces.get(index)),
@@ -2026,7 +2027,10 @@ impl Insulator {
                 let browser_id = *self.right_panel_browser_id.get_or_insert_with(Uuid::new_v4);
                 self.right_panel_pending_browser_focus = Some(browser_id);
             }
-            RightPanelUpperTab::Simulator => {}
+            RightPanelUpperTab::Simulator => {
+                let sim_id = *self.sim_browser_id.get_or_insert_with(Uuid::new_v4);
+                self.right_panel_pending_browser_focus = Some(sim_id);
+            }
             RightPanelUpperTab::BackgroundWork { .. } => {}
         }
         cx.notify();

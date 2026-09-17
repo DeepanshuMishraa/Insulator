@@ -253,6 +253,17 @@ fn to_info(parsed: ServeSimInfo) -> Result<SimStreamInfo, SimStreamError> {
             detail: "missing device or url".to_owned(),
         });
     }
+    // The preview navigates to `url`, and the page exposes a token-gated
+    // shell-execution route — so a compromised/mismatched helper must not be
+    // able to redirect the webview off loopback. Reject anything that is not
+    // `http` on `SERVE_SIM_HOST` before storing.
+    validate_serve_url(&parsed.url, "http")?;
+    if !parsed.stream_url.is_empty() {
+        validate_serve_url(&parsed.stream_url, "http")?;
+    }
+    if !parsed.ws_url.is_empty() {
+        validate_serve_url(&parsed.ws_url, "ws")?;
+    }
     Ok(SimStreamInfo {
         device: parsed.device,
         url: parsed.url,
@@ -261,6 +272,34 @@ fn to_info(parsed: ServeSimInfo) -> Result<SimStreamInfo, SimStreamError> {
         port: parsed.port,
         pid: parsed.pid,
     })
+}
+
+/// Reject helper URLs that are not on the loopback preview host: the
+/// Simulator tab navigates to `url`, so anything off-host (or non-HTTP(S)/WS)
+/// would hand the token-gated shell route to an untrusted origin.
+fn validate_serve_url(raw: &str, scheme: &str) -> Result<(), SimStreamError> {
+    let invalid = || SimStreamError::ParseFailed {
+        tool: "serve-sim",
+        detail: "unexpected serve-sim url".to_owned(),
+    };
+    let parsed = url::Url::parse(raw).map_err(|_| invalid())?;
+    if parsed.scheme() != scheme {
+        return Err(invalid());
+    }
+    if parsed.host_str() != Some(SERVE_SIM_HOST) {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+/// `String::truncate` panics when the cut falls inside a multibyte char;
+/// floor to the char boundary first so long non-ASCII output cannot crash a
+/// sim operation (and skip its normal error cleanup).
+fn truncate_to_char_boundary(detail: &mut String, max_len: usize) {
+    if detail.len() > max_len {
+        let end = detail.floor_char_boundary(max_len);
+        detail.truncate(end);
+    }
 }
 
 /// Parse `serve-sim --detach -q <udid>` stdout: one JSON object.
@@ -309,9 +348,7 @@ fn command_failed(tool: &'static str, output: &std::process::Output) -> SimStrea
             .unwrap_or_else(|| "failed".to_owned());
     }
     // Cap stderr passthrough so a long simctl dump cannot flood the toast.
-    if detail.len() > 300 {
-        detail.truncate(300);
-    }
+    truncate_to_char_boundary(&mut detail, 300);
     SimStreamError::CommandFailed { tool, detail }
 }
 
@@ -336,6 +373,10 @@ pub fn list_devices_blocking() -> Result<Vec<SimDevice>, SimStreamError> {
 }
 
 /// `xcrun simctl boot <udid>`; already-booted is success.
+///
+/// `simctl` reports that as `Unable to boot device in current state: Booted`
+/// (not "already booted"), so match the state suffix — the old substring
+/// guards never fired and every already-booted start surfaced as a failure.
 pub fn boot_device_blocking(udid: &str) -> Result<(), SimStreamError> {
     validate_udid(udid)?;
     let mut command = Command::new("xcrun");
@@ -343,13 +384,32 @@ pub fn boot_device_blocking(udid: &str) -> Result<(), SimStreamError> {
     match run("simctl", command) {
         Ok(_) => Ok(()),
         Err(SimStreamError::CommandFailed { detail, .. })
-            if detail.contains("already booted")
-                || detail.contains("Invalid device state") =>
+            if is_already_booted(&detail) =>
         {
             Ok(())
         }
         Err(error) => Err(error),
     }
+}
+
+/// Real `simctl` failure text names the current state
+/// (`... in current state: Booted`), while older Xcode prints
+/// "already booted" — accept either, case-insensitively. The bare
+/// "Invalid device state" substring is deliberately not matched: it also
+/// fires for states that are genuine failures.
+fn is_already_booted(detail: &str) -> bool {
+    let lower = detail.to_ascii_lowercase();
+    lower.contains("already booted") || lower.contains("current state: booted")
+}
+
+/// Mirror of [`is_already_booted`] for shutdown:
+/// `Unable to shutdown device in current state: Shutdown`.
+fn is_already_shutdown(detail: &str) -> bool {
+    let lower = detail.to_ascii_lowercase();
+    // "already shut" covers "already shutdown" / "already shut down".
+    lower.contains("already shut")
+        || lower.contains("current state: shutdown")
+        || lower.contains("current state: shut down")
 }
 
 /// `npx --yes serve-sim@0.1.45 --detach -q <udid>`; prints the helper URL.
@@ -402,8 +462,7 @@ pub fn shutdown_device_blocking(udid: &str) -> Result<(), SimStreamError> {
     match run("simctl", command) {
         Ok(_) => Ok(()),
         Err(SimStreamError::CommandFailed { detail, .. })
-            if detail.contains("already shutdown")
-                || detail.contains("Invalid device state") =>
+            if is_already_shutdown(&detail) =>
         {
             Ok(())
         }
@@ -523,11 +582,27 @@ pub fn stop_all_blocking() -> Result<(), SimStreamError> {
     // the first poll is expected to still see devices.
     let deadline = Instant::now() + Duration::from_secs(8);
     loop {
-        let streams = list_streams_blocking(None).unwrap_or_default();
-        let booted: Vec<SimDevice> = list_devices_blocking()
-            .map(|devices| devices.into_iter().filter(|d| d.is_booted()).collect())
-            .unwrap_or_default();
-        if streams.is_empty() && booted.is_empty() {
+        // A failed verification query must not read as "nothing running":
+        // treat it as unverified (keep polling) and preserve the error so
+        // Stop cannot report success while helpers/sims are unaccounted for.
+        let mut unverified = false;
+        let streams: Vec<SimStreamInfo> = match list_streams_blocking(None) {
+            Ok(streams) => streams,
+            Err(error) => {
+                note(error);
+                unverified = true;
+                Vec::new()
+            }
+        };
+        let booted: Vec<SimDevice> = match list_devices_blocking() {
+            Ok(devices) => devices.into_iter().filter(|d| d.is_booted()).collect(),
+            Err(error) => {
+                note(error);
+                unverified = true;
+                Vec::new()
+            }
+        };
+        if !unverified && streams.is_empty() && booted.is_empty() {
             break;
         }
         for stream in &streams {
@@ -546,10 +621,29 @@ pub fn stop_all_blocking() -> Result<(), SimStreamError> {
             }
         }
         if Instant::now() >= deadline {
-            let streams = list_streams_blocking(None).unwrap_or_default();
-            let booted: Vec<SimDevice> = list_devices_blocking()
-                .map(|devices| devices.into_iter().filter(|d| d.is_booted()).collect())
-                .unwrap_or_default();
+            let mut unverified = false;
+            let streams: Vec<SimStreamInfo> = match list_streams_blocking(None) {
+                Ok(streams) => streams,
+                Err(error) => {
+                    note(error);
+                    unverified = true;
+                    Vec::new()
+                }
+            };
+            let booted: Vec<SimDevice> = match list_devices_blocking() {
+                Ok(devices) => devices.into_iter().filter(|d| d.is_booted()).collect(),
+                Err(error) => {
+                    note(error);
+                    unverified = true;
+                    Vec::new()
+                }
+            };
+            if unverified && streams.is_empty() && booted.is_empty() {
+                return Err(first_error.clone().unwrap_or(SimStreamError::CommandFailed {
+                    tool: "serve-sim",
+                    detail: "could not verify Stop; retry Stop".to_owned(),
+                }));
+            }
             if let Some(detail) = describe_remaining(&streams, &booted) {
                 return Err(SimStreamError::CommandFailed {
                     tool: "serve-sim",
@@ -596,9 +690,7 @@ fn describe_remaining(streams: &[SimStreamInfo], booted: &[SimDevice]) -> Option
     }
     let mut detail = parts.join("; ");
     detail.push_str("; retry Stop or run `npx serve-sim --kill`");
-    if detail.len() > 300 {
-        detail.truncate(300);
-    }
+    truncate_to_char_boundary(&mut detail, 300);
     Some(detail)
 }
 
@@ -738,6 +830,62 @@ mod tests {
         }
     }
 
+    #[test]
+    fn detach_output_rejects_off_loopback_urls() {
+        let cases = [
+            // Non-loopback host: must not be stored — the preview page
+            // exposes a shell-execution route.
+            r#"{"url":"http://192.168.1.5:3100","device":"31406148-6A0B-49E1-9CFA-4EDAB4D95F9A"}"#,
+            r#"{"url":"http://example.com:3100","device":"31406148-6A0B-49E1-9CFA-4EDAB4D95F9A"}"#,
+            // Non-HTTP scheme.
+            r#"{"url":"file:///tmp/evil.html","device":"31406148-6A0B-49E1-9CFA-4EDAB4D95F9A"}"#,
+            r#"{"url":"https://127.0.0.1:3100","device":"31406148-6A0B-49E1-9CFA-4EDAB4D95F9A"}"#,
+            // Wrong-scheme companion URL.
+            r#"{"url":"http://127.0.0.1:3100","streamUrl":"http://127.0.0.1:3100/x","wsUrl":"http://127.0.0.1:3100/ws","device":"31406148-6A0B-49E1-9CFA-4EDAB4D95F9A"}"#,
+        ];
+        for json in cases {
+            assert!(parse_detach_output(json).is_err(), "accepted: {json}");
+        }
+    }
+
+    #[test]
+    fn truncation_stops_at_char_boundary() {
+        let mut detail = "é".repeat(400);
+        truncate_to_char_boundary(&mut detail, 300);
+        assert!(detail.len() <= 300);
+        assert!(detail.is_char_boundary(detail.len()));
+        assert!(!detail.is_empty());
+        let mut short = String::from("ok");
+        truncate_to_char_boundary(&mut short, 300);
+        assert_eq!(short, "ok");
+    }
+
+    #[test]
+    fn stop_remainder_with_non_ascii_name_does_not_panic() {
+        let streams = vec![test_stream("D1")];
+        let booted = vec![test_device(&"é".repeat(400))];
+        let detail = describe_remaining(&streams, &booted).expect("remainder");
+        assert!(detail.len() <= 400);
+        assert!(detail.is_char_boundary(detail.len()));
+    }
+
+    #[test]
+    fn boot_guard_matches_real_simctl_state_suffix() {
+        assert!(is_already_booted(
+            "Unable to boot device in current state: Booted"
+        ));
+        assert!(is_already_booted("Already booted"));
+        assert!(!is_already_booted(
+            "Unable to boot device in current state: Shutdown"
+        ));
+        assert!(!is_already_booted("Invalid device state"));
+        assert!(is_already_shutdown(
+            "Unable to shutdown device in current state: Shutdown"
+        ));
+        assert!(!is_already_shutdown(
+            "Unable to shutdown device in current state: Booted"
+        ));
+    }
     #[test]
     fn stop_remainder_reports_what_survived() {
         assert!(describe_remaining(&[], &[]).is_none());

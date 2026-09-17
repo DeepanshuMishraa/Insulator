@@ -99,6 +99,7 @@ impl Insulator {
         // Optimistic: `--theme` applies this polarity at start; a failure
         // clears it below so the next sync retries.
         self.sim_applied_dark = Some(dark);
+        self.sim_applied_surface = Some(Self::sim_page_background(cx));
         let theme = if dark { SimTheme::Dark } else { SimTheme::Light };
         let generation = self.sim_stream_generation.wrapping_add(1);
         self.sim_stream_generation = generation;
@@ -106,7 +107,15 @@ impl Insulator {
         let window_handle = window.window_handle();
         let entity = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
-            let result = cx
+            // Phase 1: resolve the UDID, reuse a live helper for it, or boot
+            // it. The helper itself starts in phase 2, after a generation
+            // gate, so a Stop that lands mid-boot cannot be undone by a
+            // stale start spawning a helper afterwards.
+            enum Phase1 {
+                Existing(sim_stream::SimStreamInfo),
+                Boot(String, SimTheme),
+            }
+            let phase1 = cx
                 .background_executor()
                 .spawn(async move {
                     let udid = match udid {
@@ -126,45 +135,119 @@ impl Insulator {
                     // spawning a second helper on another port.
                     if let Ok(streams) = sim_stream::list_streams_blocking(Some(&udid)) {
                         if let Some(existing) = streams.into_iter().next() {
-                            return Ok(existing);
+                            return Ok::<Phase1, String>(Phase1::Existing(existing));
                         }
                     }
-                    // Booting an already-booted device is a no-op.
-                    let _ = sim_stream::boot_device_blocking(&udid);
-                    sim_stream::start_detached_blocking(&udid, theme).map_err(|e| e.to_string())
+                    // Booting an already-booted device is a no-op; any other
+                    // boot failure must surface now, not as a later stream
+                    // failure after the helper starts anyway.
+                    sim_stream::boot_device_blocking(&udid).map_err(|e| e.to_string())?;
+                    Ok(Phase1::Boot(udid, theme))
                 })
                 .await;
-            let _ = entity.update(cx, |this, cx| {
-                // A Stop that landed while this start was in flight wins:
-                // drop the stale result instead of resurrecting the view.
-                if this.sim_stream_generation != generation {
-                    return;
-                }
-                this.sim_stream_loading = false;
-                match &result {
-                    Ok(info) => {
-                        this.sim_stream_info = Some(info.clone());
-                        this.sim_stream_error = None;
+            enum Next {
+                Open(String),
+                Boot(String, SimTheme),
+            }
+            let next = entity
+                .update(cx, |this, cx| {
+                    // A Stop that landed while phase 1 was in flight wins:
+                    // drop the stale result instead of resurrecting the view
+                    // (and, for the boot path, instead of spawning a helper).
+                    if this.sim_stream_generation != generation {
+                        return None;
                     }
-                    Err(message) => {
-                        this.sim_stream_error = Some(message.clone());
-                        this.sim_applied_dark = None;
-                        this.show_toast(message.clone());
+                    match phase1 {
+                        Err(message) => {
+                            this.sim_stream_loading = false;
+                            this.sim_stream_error = Some(message.clone());
+                            this.sim_applied_dark = None;
+                            this.sim_applied_surface = None;
+                            this.show_toast(message);
+                            cx.notify();
+                            None
+                        }
+                        Ok(Phase1::Existing(info)) => {
+                            this.sim_stream_loading = false;
+                            this.sim_stream_info = Some(info.clone());
+                            this.sim_stream_error = None;
+                            // Reused helper: appearance unknown (it may have
+                            // outlived app state), so reset and sync rather
+                            // than trusting the optimistic flag above.
+                            this.sim_applied_dark = None;
+                            this.sim_applied_surface = None;
+                            this.sync_sim_appearance(cx);
+                            cx.notify();
+                            Some(Next::Open(info.url))
+                        }
+                        Ok(Phase1::Boot(udid, theme)) => Some(Next::Boot(udid, theme)),
                     }
+                })
+                .unwrap_or(None);
+            match next {
+                None => {}
+                Some(Next::Open(url)) => {
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        let _ = entity.update(cx, |this, cx| {
+                            if this.sim_stream_generation != generation {
+                                return;
+                            }
+                            this.open_sim_stream_url(url.clone(), window, cx);
+                        });
+                    });
                 }
-                cx.notify();
-            });
-            if let Ok(info) = result {
-                let url = info.url.clone();
-                let _ = window_handle.update(cx, |_, window, cx| {
+                Some(Next::Boot(udid, theme)) => {
+                    // Phase 2: spawn the helper. A Stop landing during this
+                    // spawn is caught by Stop's bounded re-verify poll, which
+                    // outlasts a detach.
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            sim_stream::start_detached_blocking(&udid, theme)
+                                .map_err(|e| e.to_string())
+                        })
+                        .await;
                     let _ = entity.update(cx, |this, cx| {
-                        // Stale start (Stop won the race): never re-open.
+                        // A Stop that landed while this start was in flight
+                        // wins: drop the stale result instead of
+                        // resurrecting the view.
                         if this.sim_stream_generation != generation {
                             return;
                         }
-                        this.open_sim_stream_url(url.clone(), window, cx);
+                        this.sim_stream_loading = false;
+                        match &result {
+                            Ok(info) => {
+                                this.sim_stream_info = Some(info.clone());
+                                this.sim_stream_error = None;
+                                // Fresh helper started with `--theme`, but
+                                // reset and sync anyway so a polarity change
+                                // that landed mid-start still converges.
+                                this.sim_applied_dark = None;
+                                this.sim_applied_surface = None;
+                                this.sync_sim_appearance(cx);
+                            }
+                            Err(message) => {
+                                this.sim_stream_error = Some(message.clone());
+                                this.sim_applied_dark = None;
+                                this.sim_applied_surface = None;
+                                this.show_toast(message.clone());
+                            }
+                        }
+                        cx.notify();
                     });
-                });
+                    if let Ok(info) = result {
+                        let url = info.url.clone();
+                        let _ = window_handle.update(cx, |_, window, cx| {
+                            let _ = entity.update(cx, |this, cx| {
+                                // Stale start (Stop won the race): never re-open.
+                                if this.sim_stream_generation != generation {
+                                    return;
+                                }
+                                this.open_sim_stream_url(url.clone(), window, cx);
+                            });
+                        });
+                    }
+                }
             }
         })
         .detach();
@@ -185,13 +268,25 @@ impl Insulator {
         self.right_panel_upper_tab = RightPanelUpperTab::Simulator;
         let generation = self.sim_stream_generation.wrapping_add(1);
         self.sim_stream_generation = generation;
+        // Scope the re-attach to the owned device: listing every helper and
+        // taking the first could silently hand the tab to another device's
+        // stream. Only when nothing is owned do we consider any stream.
+        let owned_udid = self
+            .sim_stream_info
+            .as_ref()
+            .map(|info| info.device.clone());
         cx.notify();
         let window_handle = window.window_handle();
         let entity = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { sim_stream::list_streams_blocking(None) })
+                .spawn(async move {
+                    if let Some(udid) = owned_udid.as_deref() {
+                        return sim_stream::list_streams_blocking(Some(udid));
+                    }
+                    sim_stream::list_streams_blocking(None)
+                })
                 .await;
             let url = entity
                 .update(cx, |this, cx| {
@@ -208,15 +303,28 @@ impl Insulator {
                                 // Reattached after restart: appearance unknown,
                                 // so sync it to the app theme unconditionally.
                                 this.sim_applied_dark = None;
+                                this.sim_applied_surface = None;
                                 this.sync_sim_appearance(cx);
                                 Some(info.url)
                             } else {
+                                // The helper is gone: drop the cached stream so
+                                // the tab falls back to the start screen
+                                // instead of a stale live view that Start /
+                                // Reopen can never clear.
+                                this.sim_stream_info = None;
+                                this.sim_applied_dark = None;
+                                this.sim_applied_surface = None;
                                 this.show_toast("no running simulator stream".to_owned());
                                 None
                             }
                         }
                         Err(error) => {
                             let message = error.to_string();
+                            // Unverifiable counts as gone: holding the stale
+                            // live view leaves no path back to Start.
+                            this.sim_stream_info = None;
+                            this.sim_applied_dark = None;
+                            this.sim_applied_surface = None;
                             this.sim_stream_error = Some(message.clone());
                             this.show_toast(message);
                             None
@@ -271,22 +379,48 @@ impl Insulator {
         self.sim_stream_info = None;
         self.sim_stopping = true;
         self.sim_applied_dark = None;
-        // Park the webview on a blank page now so the dead preview can't
-        // linger or flash if it renders another frame before cleanup lands.
-        if let Some(browser_id) = self.sim_browser_id
-            && let Some(browser) = self.right_panel_browsers.get(&browser_id)
+        self.sim_applied_surface = None;
+        // Release the dedicated webview now: the stream is gone, and the
+        // retain pass would otherwise keep the hidden native view (with its
+        // dead page) alive until quit.
+        if let Some(browser_id) = self.sim_browser_id.take()
+            && let Some(browser) = self.right_panel_browsers.remove(&browser_id)
         {
-            browser.update(cx, |view, cx| {
-                view.navigate_to_url("about:blank".to_owned(), cx);
-            });
+            if self.right_panel_pending_browser_focus == Some(browser_id) {
+                self.right_panel_pending_browser_focus = None;
+            }
+            drop(browser);
         }
         cx.notify();
         let entity = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
-            let result = cx
+            let mut result = cx
                 .background_executor()
                 .spawn(async move { sim_stream::stop_all_blocking() })
                 .await;
+            // A start that was already past its generation gate may still
+            // spawn a helper while the first pass polls: re-list once, and
+            // re-clean while this Stop is still current. The generation
+            // check keeps a fresh Start's helper from ever being reaped.
+            if result.is_ok() {
+                let alive = cx
+                    .background_executor()
+                    .spawn(async move {
+                        sim_stream::list_streams_blocking(None).unwrap_or_default()
+                    })
+                    .await;
+                if !alive.is_empty() {
+                    let current = entity
+                        .update(cx, |this, _| this.sim_stream_generation == generation)
+                        .unwrap_or(false);
+                    if current {
+                        result = cx
+                            .background_executor()
+                            .spawn(async move { sim_stream::stop_all_blocking() })
+                            .await;
+                    }
+                }
+            }
             let _ = entity.update(cx, |this, cx| {
                 // A fresh Start supersedes this cleanup; leave its state alone.
                 if this.sim_stream_generation != generation {
@@ -357,16 +491,34 @@ impl Insulator {
 
     /// Mirror the app's light/dark polarity onto the live simulator without
     /// restarting the stream (`simctl ui appearance` is instant; the helper
-    /// keeps streaming). No-op when no stream is live or polarity unchanged.
+    /// keeps streaming). No-op when no stream is live or nothing changed.
+    /// Same-polarity custom-theme switches still repaint the kiosk CSS; only
+    /// a polarity flip shells out to `simctl`.
     pub(super) fn sync_sim_appearance(&mut self, cx: &mut Context<Self>) {
         let Some(info) = self.sim_stream_info.clone() else {
             return;
         };
         let dark = Theme::current(cx).is_dark;
-        if self.sim_applied_dark == Some(dark) {
+        let bg = Self::sim_page_background(cx);
+        if self.sim_applied_dark == Some(dark)
+            && self.sim_applied_surface.as_deref() == Some(bg.as_str())
+        {
             return;
         }
+        let polarity_changed = self.sim_applied_dark != Some(dark);
         self.sim_applied_dark = Some(dark);
+        self.sim_applied_surface = Some(bg.clone());
+        if !polarity_changed {
+            // Same polarity, new surface: the simulator needs no flip, just
+            // repaint the page chrome on the new background.
+            self.inject_sim_chrome(bg, dark, cx);
+            cx.notify();
+            return;
+        }
+        // Serialize rapid flips: a stale completion is discarded so two
+        // quick theme changes cannot leave the stream on the older polarity.
+        let generation = self.sim_appearance_generation.wrapping_add(1);
+        self.sim_appearance_generation = generation;
         cx.notify();
         let entity = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
@@ -375,14 +527,21 @@ impl Insulator {
                 .spawn(async move { sim_stream::set_appearance_blocking(&info.device, dark) })
                 .await;
             let _ = entity.update(cx, |this, cx| {
+                if this.sim_appearance_generation != generation {
+                    return;
+                }
                 if let Err(error) = result {
-                    // Revert the optimistic flag so the next sync retries.
+                    // Revert the optimistic flags so the next sync retries.
                     this.sim_applied_dark = None;
+                    this.sim_applied_surface = None;
                     this.show_toast(error.to_string());
                 } else {
                     // Theme flips replace the page chrome asynchronously;
-                    // re-strip on the new surface background.
+                    // re-strip on the current surface background.
                     let bg = Self::sim_page_background(cx);
+                    let dark = Theme::current(cx).is_dark;
+                    this.sim_applied_dark = Some(dark);
+                    this.sim_applied_surface = Some(bg.clone());
                     this.inject_sim_chrome(bg, dark, cx);
                 }
                 cx.notify();

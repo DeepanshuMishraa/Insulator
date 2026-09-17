@@ -1676,6 +1676,13 @@ pub struct Insulator {
     /// unknown (fresh start failed, or reattached after restart) — the next
     /// sync applies unconditionally.
     sim_applied_dark: Option<bool>,
+    /// Page surface hex last painted into the stream view. Tracked
+    /// separately from polarity so same-polarity custom-theme switches
+    /// still repaint the kiosk CSS.
+    sim_applied_surface: Option<String>,
+    /// Bumped per appearance sync; a stale completion is discarded so two
+    /// rapid theme flips cannot leave the stream on the older polarity.
+    sim_appearance_generation: u64,
     /// Cached `simctl` device list; `None` means no scan has landed yet.
     sim_devices: Option<Vec<crate::sim_stream::SimDevice>>,
     sim_devices_generation: u64,
@@ -2720,6 +2727,9 @@ impl Insulator {
                         window,
                         cx,
                     );
+                    // System flips bypass the settings setters, so mirror the
+                    // new polarity onto the live simulator here.
+                    this.sync_sim_appearance(cx);
                     cx.notify();
                 }
             })
@@ -3490,6 +3500,8 @@ impl Insulator {
                 sim_stopping: false,
                 sim_stream_generation: 0,
                 sim_applied_dark: None,
+                sim_applied_surface: None,
+                sim_appearance_generation: 0,
                 sim_devices: None,
                 sim_devices_generation: 0,
                 sim_devices_loading: false,

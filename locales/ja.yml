@@ -57,6 +57,9 @@ command_palette.show_sidebar: サイドバーを表示
 command_palette.hide_sidebar: サイドバーを隠す
 command_palette.show_right_panel: 右パネルを表示
 command_palette.hide_right_panel: 右パネルを隠す
+command_palette.start_sim_stream: iOS シミュレータストリームを開始
+command_palette.reopen_sim_stream: シミュレータストリームを再度開く
+command_palette.stop_sim_stream: シミュレータストリームを停止
 command_palette.current: 現在
 command_palette.you: あなた
 command_palette.agent: エージェント

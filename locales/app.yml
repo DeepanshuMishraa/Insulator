@@ -112,6 +112,12 @@ command_palette.show_right_panel:
   en: Show right panel
 command_palette.hide_right_panel:
   en: Hide right panel
+command_palette.start_sim_stream:
+  en: Start iOS Simulator Stream
+command_palette.reopen_sim_stream:
+  en: Reopen Simulator Stream
+command_palette.stop_sim_stream:
+  en: Stop Simulator Stream
 command_palette.current:
   en: Current
 command_palette.you:
