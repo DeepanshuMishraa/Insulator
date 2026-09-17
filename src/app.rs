@@ -1669,6 +1669,9 @@ pub struct Insulator {
     /// Stop was pressed and cleanup is still landing: the stream view is
     /// already gone, the tab shows the stopping loader until it lands.
     sim_stopping: bool,
+    /// Start/stop/reopen epoch. Bumped on every invocation so a slow start
+    /// that lands after a Stop is dropped instead of resurrecting the view.
+    sim_stream_generation: u64,
     /// App dark-polarity last applied to the live simulator. `None` means
     /// unknown (fresh start failed, or reattached after restart) — the next
     /// sync applies unconditionally.
@@ -3485,6 +3488,7 @@ impl Insulator {
                 sim_stream_error: None,
                 sim_stream_loading: false,
                 sim_stopping: false,
+                sim_stream_generation: 0,
                 sim_applied_dark: None,
                 sim_devices: None,
                 sim_devices_generation: 0,

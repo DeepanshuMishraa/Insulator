@@ -1772,6 +1772,16 @@ impl BrowserView {
         cx.notify();
     }
 
+    /// Kiosk mode for the Simulator tab: hide the address/toolbar chrome so
+    /// only the page (the serve-sim stream) shows. Idempotent; the Browser
+    /// tab's surface never calls this.
+    pub fn set_chromeless(&mut self, cx: &mut Context<Self>) {
+        if !self.embedded {
+            self.embedded = true;
+            cx.notify();
+        }
+    }
+
     fn restore_address(&mut self, cx: &mut Context<Self>) {
         self.address_dirty = false;
         self.echo_page_url(cx);

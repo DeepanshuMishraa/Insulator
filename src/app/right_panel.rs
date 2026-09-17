@@ -3143,7 +3143,13 @@ impl Insulator {
         {
             match self.right_panel_upper_tab {
                 RightPanelUpperTab::Browser => self.right_panel_browser_id,
-                RightPanelUpperTab::Simulator => self.sim_browser_id,
+                // The native view paints above the GPUI scene: while stopping,
+                // starting, or back at the start screen there is no stream, so
+                // the webview must stay down or its (blank/stale) page would
+                // cover the loader and start copy.
+                RightPanelUpperTab::Simulator => self
+                    .sim_browser_id
+                    .filter(|_| self.sim_stream_info.is_some()),
                 _ => None,
             }
         } else {

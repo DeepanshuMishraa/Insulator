@@ -11,6 +11,7 @@
 
 use std::fmt;
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 /// Pinned `serve-sim` release, matching T3 Code's
 /// `.agents/skills/ios-simulator-browser/SKILL.md`.
@@ -425,43 +426,68 @@ pub fn set_appearance_blocking(udid: &str, dark: bool) -> Result<(), SimStreamEr
     run("simctl", command).map(|_| ())
 }
 
-/// Page background for the stripped stream, by app polarity. The serve-sim
-/// preview is hardcoded dark with no theme switch, so we paint the
-/// letterbox ourselves to match the app.
+/// Page background for the stripped stream: the app's own surface, by
+/// polarity. The serve-sim preview is hardcoded dark with no theme switch,
+/// so we paint the letterbox ourselves to match the surrounding panel
+/// (`Theme::dark().surface` / `Theme::light().surface`).
 pub fn kiosk_page_background(dark: bool) -> &'static str {
-    if dark { "#000000" } else { "#ffffff" }
+    if dark { "#1A1A1A" } else { "#F6F5F6" }
 }
 
-/// Script that reduces the serve-sim preview to just the simulator:
-/// hides the brand link, the device pill, and the bottom toolbar (home,
-/// screenshot, …) by walking each chrome node up to the highest ancestor
-/// that does not contain the stream element. Never touches the stream's own
-/// ancestors, so video and the input overlay keep working. Idempotent —
-/// safe to re-run after React re-renders or theme flips.
+/// Script that reduces the serve-sim preview to just the simulator stream.
+///
+/// The old version searched for a `video`/mjpeg node and walked chrome nodes
+/// up by hand — but the default H.264 path renders into a `canvas`, so the
+/// lookup missed and nothing was ever stripped (top device pill, bottom
+/// home/screenshot toolbar, side rails, brand link all survived React
+/// re-renders). This version injects one idempotent `!important` stylesheet
+/// instead, so it applies unconditionally — before the stream loads, across
+/// re-renders and theme flips — and hides every chrome selector serve-sim
+/// renders: all `[data-simulator-toolbar]` bars, the device sidebar toggle +
+/// brand link, the right tools rail, side panels, and resize separators. The
+/// stream itself (`SimulatorView`, canvas/img/video) is never selected, so
+/// video and the input overlay keep working.
 pub fn kiosk_script(dark: bool) -> String {
-    let bg = kiosk_page_background(dark);
-    format!(
-        r#"(()=>{{try{{
-const BG='{bg}';
-const ID='insulator-sim-kiosk';
-const old=document.getElementById(ID);if(old)old.remove();
-const st=document.createElement('style');st.id=ID;
-st.textContent='html,body{{background:'+BG+'!important;}}';
-document.head.appendChild(st);
-if(document.body)document.body.style.background=BG;
-const stream=document.querySelector('video')||document.querySelector('img[src*="mjpeg"],img[src*="stream"]');
-if(!stream)return false;
-const hasStream=(n)=>!!n&&(n===stream||n.contains(stream));
-const strip=(root)=>{{let n=root;while(n&&n!==document.body){{const p=n.parentElement;if(!p||hasStream(p))break;n=p;}}if(n&&n!==document.body)n.style.display='none';}};
-document.querySelectorAll('a[href*="serve-sim"],button[title="Home"],button[title="Screenshot"],button[aria-label="Screenshot"]').forEach(strip);
-const nodes=document.querySelectorAll('span,div,p');
-for(const el of nodes){{if(el.childElementCount===0&&el.textContent&&el.textContent.trim().toLowerCase()==='live'){{strip(el);break;}}}}
-return true;}}catch(e){{return false;}}}})()"#,
-    )
+    kiosk_script_with_background(kiosk_page_background(dark), dark)
 }
-/// booted simulator, best-effort. This is what the Stop button promises —
-/// it must work even when the app restarted and lost its owned-stream state,
-/// so it deliberately scopes wider than the single owned UDID.
+
+/// Same as [`kiosk_script`], but paints the letterbox with an explicit
+/// background (the active app theme's surface hex) instead of the
+/// polarity default, so the page tracks custom themes too.
+pub fn kiosk_script_with_background(bg: &str, dark: bool) -> String {
+    const TEMPLATE: &str = r#"(()=>{try{
+const BG='{BG}';
+const SCHEME='{SCHEME}';
+const ID='insulator-sim-kiosk';
+const CSS='html,body{background:'+BG+'!important;margin:0!important;padding:0!important;}'
++':root{color-scheme:'+SCHEME+';--serve-sim-panel-bg:'+BG+';--color-page:'+BG+';}'
++'.bg-page{background:'+BG+'!important;}'
++'div.h-screen{padding:0!important;gap:0!important;}'
++'[data-simulator-toolbar],[data-testid="stream-status-pill"],'
++'a[href*="serve-sim" i],a[href*="evanbacon" i],'
++'button[aria-label="Open tools panel"],button[aria-label="Open WebKit DevTools"],button[aria-label="Open devices sidebar"],'
++'div:has(>button[aria-label="Open tools panel"]),div:has(>button[aria-label="Open devices sidebar"]),'
++'aside,div[role="separator"]{display:none!important;}';
+let st=document.getElementById(ID);
+if(!st){st=document.createElement('style');st.id=ID;document.head.appendChild(st);}
+st.textContent=CSS;
+if(document.body)document.body.style.background=BG;
+const hideFixed=(btn)=>{let n=btn;while(n&&n!==document.body){const p=n.parentElement;if(!p)break;const c=p.className;if(typeof c==='string'&&c.indexOf('fixed')>=0){p.style.display='none';break;}n=p;}};
+document.querySelectorAll('button[aria-label="Open tools panel"],button[aria-label="Open WebKit DevTools"],button[aria-label="Open devices sidebar"]').forEach(hideFixed);
+return true;}catch(e){return false;}})()"#;
+    TEMPLATE
+        .replace("{BG}", bg)
+        .replace("{SCHEME}", if dark { "dark" } else { "light" })
+}
+/// Full stop: kill every stream helper and shut down every booted
+/// simulator, best-effort. This is what the Stop button promises — it must
+/// work even when the app restarted and lost its owned-stream state, so it
+/// deliberately scopes wider than the single owned UDID.
+///
+/// The graceful pass (`--kill` + `simctl shutdown`) is verified: helpers can
+/// outlive `--kill`, so anything still listed is reaped with `SIGKILL` and
+/// the shutdown re-issued on a bounded poll. Whatever survives the budget is
+/// reported instead of silently leaking.
 pub fn stop_all_blocking() -> Result<(), SimStreamError> {
     let mut first_error: Option<SimStreamError> = None;
     let mut note = |error: SimStreamError| {
@@ -470,6 +496,7 @@ pub fn stop_all_blocking() -> Result<(), SimStreamError> {
         }
     };
 
+    // Graceful pass.
     match list_streams_blocking(None) {
         Ok(streams) => {
             for stream in streams {
@@ -490,7 +517,96 @@ pub fn stop_all_blocking() -> Result<(), SimStreamError> {
         }
         Err(error) => note(error),
     }
+
+    // Verify the stop actually landed; escalate while the budget holds.
+    // `simctl shutdown` reports success before the device leaves Booted, so
+    // the first poll is expected to still see devices.
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let streams = list_streams_blocking(None).unwrap_or_default();
+        let booted: Vec<SimDevice> = list_devices_blocking()
+            .map(|devices| devices.into_iter().filter(|d| d.is_booted()).collect())
+            .unwrap_or_default();
+        if streams.is_empty() && booted.is_empty() {
+            break;
+        }
+        for stream in &streams {
+            // Freshly listed, so the pid was alive milliseconds ago; SIGKILL
+            // is the escalation when `--kill` left it behind.
+            if let Some(pid) = stream.pid {
+                force_kill(pid);
+            }
+            if let Err(error) = kill_blocking(&stream.device) {
+                note(error);
+            }
+        }
+        for device in &booted {
+            if let Err(error) = shutdown_device_blocking(&device.udid) {
+                note(error);
+            }
+        }
+        if Instant::now() >= deadline {
+            let streams = list_streams_blocking(None).unwrap_or_default();
+            let booted: Vec<SimDevice> = list_devices_blocking()
+                .map(|devices| devices.into_iter().filter(|d| d.is_booted()).collect())
+                .unwrap_or_default();
+            if let Some(detail) = describe_remaining(&streams, &booted) {
+                return Err(SimStreamError::CommandFailed {
+                    tool: "serve-sim",
+                    detail,
+                });
+            }
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
     first_error.map_or(Ok(()), Err)
+}
+
+/// Human-readable remainder for a stop that did not fully land, or `None`
+/// when nothing is left running.
+fn describe_remaining(streams: &[SimStreamInfo], booted: &[SimDevice]) -> Option<String> {
+    if streams.is_empty() && booted.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if !streams.is_empty() {
+        parts.push(format!(
+            "{} stream{} still running ({})",
+            streams.len(),
+            if streams.len() == 1 { "" } else { "s" },
+            streams
+                .iter()
+                .map(|s| s.device.clone())
+                .collect::<Vec<_>>()
+                .join(", "),
+        ));
+    }
+    if !booted.is_empty() {
+        parts.push(format!(
+            "{} simulator{} still booted ({})",
+            booted.len(),
+            if booted.len() == 1 { "" } else { "s" },
+            booted
+                .iter()
+                .map(|d| d.name.clone())
+                .collect::<Vec<_>>()
+                .join(", "),
+        ));
+    }
+    let mut detail = parts.join("; ");
+    detail.push_str("; retry Stop or run `npx serve-sim --kill`");
+    if detail.len() > 300 {
+        detail.truncate(300);
+    }
+    Some(detail)
+}
+
+/// Best-effort `SIGKILL`; a stale pid is fine (already gone is the goal).
+fn force_kill(pid: u32) {
+    let _ = Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .output();
 }
 
 #[cfg(test)]
@@ -569,12 +685,23 @@ mod tests {
     #[test]
     fn kiosk_script_targets_chrome_and_theme() {
         let dark = kiosk_script(true);
-        assert!(dark.contains("#000000"));
+        assert!(dark.contains("#1A1A1A"));
+        assert!(dark.contains("color-scheme:"));
+        assert!(dark.contains("dark"));
+        assert!(dark.contains("data-simulator-toolbar"));
+        assert!(dark.contains("stream-status-pill"));
         assert!(dark.contains("serve-sim"));
-        assert!(dark.contains("Screenshot"));
+        assert!(dark.contains("Open tools panel"));
+        assert!(dark.contains("Open devices sidebar"));
         assert!(dark.contains("insulator-sim-kiosk"));
+        // Never gates on the stream node: the H.264 path renders into a
+        // canvas, and gating left every toolbar visible.
+        assert!(!dark.contains("querySelector('video')"));
         let light = kiosk_script(false);
-        assert!(light.contains("#ffffff"));
+        assert!(light.contains("#F6F5F6"));
+        assert!(light.contains("light"));
+        let custom = kiosk_script_with_background("#24273a", true);
+        assert!(custom.contains("#24273a"));
     }
 
     #[test]
@@ -589,5 +716,39 @@ mod tests {
     fn list_output_handles_empty_and_array() {
         assert!(parse_list_output("").expect("empty").is_empty());
         assert!(parse_list_output("[]").expect("array").is_empty());
+    }
+
+    fn test_stream(device: &str) -> SimStreamInfo {
+        SimStreamInfo {
+            device: device.to_owned(),
+            url: "http://127.0.0.1:3100".to_owned(),
+            stream_url: String::new(),
+            ws_url: String::new(),
+            port: 3100,
+            pid: Some(1234),
+        }
+    }
+
+    fn test_device(name: &str) -> SimDevice {
+        SimDevice {
+            udid: "31406148-6A0B-49E1-9CFA-4EDAB4D95F9A".to_owned(),
+            name: name.to_owned(),
+            state: "Booted".to_owned(),
+            is_available: true,
+        }
+    }
+
+    #[test]
+    fn stop_remainder_reports_what_survived() {
+        assert!(describe_remaining(&[], &[]).is_none());
+        let streams = vec![test_stream("D1")];
+        let booted = vec![test_device("iPhone 18 Pro")];
+        let detail = describe_remaining(&streams, &booted).expect("remainder");
+        assert!(detail.contains("1 stream still running"));
+        assert!(detail.contains("1 simulator still booted"));
+        assert!(detail.contains("iPhone 18 Pro"));
+        let streams_only = describe_remaining(&streams, &[]).expect("remainder");
+        assert!(streams_only.contains("stream"));
+        assert!(!streams_only.contains("booted"));
     }
 }

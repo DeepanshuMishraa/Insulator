@@ -12,13 +12,29 @@ use crate::sim_stream::{self, SimSupport, SimTheme};
 impl Insulator {
     /// The Simulator tab's dedicated browser surface. Separate from the
     /// Browser tab's entity so the stream never clobbers a browsing session.
+    /// Chromeless (no address bar): the stream is the content, not a page.
     fn ensure_sim_browser(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<crate::browser::BrowserView> {
         let browser_id = *self.sim_browser_id.get_or_insert_with(Uuid::new_v4);
-        self.ensure_right_panel_browser(browser_id, window, cx)
+        let browser = self.ensure_right_panel_browser(browser_id, window, cx);
+        browser.update(cx, |view, cx| view.set_chromeless(cx));
+        browser
+    }
+
+    /// The serve-sim letterbox color: this panel's own surface, so the page
+    /// tracks the active app theme (including custom themes), not a hardcoded
+    /// black/white.
+    fn sim_page_background(cx: &App) -> String {
+        let rgb = Theme::current(cx).surface.to_rgb();
+        format!(
+            "#{:02X}{:02X}{:02X}",
+            (rgb.r * 255.0).round().clamp(0.0, 255.0) as u8,
+            (rgb.g * 255.0).round().clamp(0.0, 255.0) as u8,
+            (rgb.b * 255.0).round().clamp(0.0, 255.0) as u8,
+        )
     }
 
     /// Navigate the Simulator tab's browser to the stream URL and reveal it.
@@ -32,9 +48,10 @@ impl Insulator {
         }
         // The preview renders chrome asynchronously; strip on a schedule and
         // match the page background to the app theme immediately.
+        let bg = Self::sim_page_background(cx);
         let dark = Theme::current(cx).is_dark;
-        self.inject_sim_chrome(dark, cx);
-        self.schedule_kiosk_passes(dark, cx);
+        self.inject_sim_chrome(bg.clone(), dark, cx);
+        self.schedule_kiosk_passes(bg, dark, cx);
         cx.notify();
     }
 
@@ -83,6 +100,8 @@ impl Insulator {
         // clears it below so the next sync retries.
         self.sim_applied_dark = Some(dark);
         let theme = if dark { SimTheme::Dark } else { SimTheme::Light };
+        let generation = self.sim_stream_generation.wrapping_add(1);
+        self.sim_stream_generation = generation;
         cx.notify();
         let window_handle = window.window_handle();
         let entity = cx.entity().downgrade();
@@ -116,6 +135,11 @@ impl Insulator {
                 })
                 .await;
             let _ = entity.update(cx, |this, cx| {
+                // A Stop that landed while this start was in flight wins:
+                // drop the stale result instead of resurrecting the view.
+                if this.sim_stream_generation != generation {
+                    return;
+                }
                 this.sim_stream_loading = false;
                 match &result {
                     Ok(info) => {
@@ -134,6 +158,10 @@ impl Insulator {
                 let url = info.url.clone();
                 let _ = window_handle.update(cx, |_, window, cx| {
                     let _ = entity.update(cx, |this, cx| {
+                        // Stale start (Stop won the race): never re-open.
+                        if this.sim_stream_generation != generation {
+                            return;
+                        }
                         this.open_sim_stream_url(url.clone(), window, cx);
                     });
                 });
@@ -155,6 +183,8 @@ impl Insulator {
         self.sim_stream_loading = true;
         self.right_panel_visible = true;
         self.right_panel_upper_tab = RightPanelUpperTab::Simulator;
+        let generation = self.sim_stream_generation.wrapping_add(1);
+        self.sim_stream_generation = generation;
         cx.notify();
         let window_handle = window.window_handle();
         let entity = cx.entity().downgrade();
@@ -165,6 +195,9 @@ impl Insulator {
                 .await;
             let url = entity
                 .update(cx, |this, cx| {
+                    if this.sim_stream_generation != generation {
+                        return None;
+                    }
                     this.sim_stream_loading = false;
                     match result {
                         Ok(mut streams) => {
@@ -194,6 +227,9 @@ impl Insulator {
             if let Some(url) = url {
                 let _ = window_handle.update(cx, |_, window, cx| {
                     let _ = entity.update(cx, |this, cx| {
+                        if this.sim_stream_generation != generation {
+                            return;
+                        }
                         this.open_sim_stream_url(url.clone(), window, cx);
                     });
                 });
@@ -218,16 +254,32 @@ impl Insulator {
     /// simulator. Deliberately wider than the owned UDID: after an abrupt
     /// quit + relaunch the owned state is gone but helpers and sims may
     /// still eat resources — Stop must always work, instantly and observably.
+    ///
+    /// The live view drops synchronously (the tab falls back to the stopping
+    /// loader that same frame); only the subprocess cleanup waits. Any start
+    /// still in flight is superseded via the generation counter.
     pub(super) fn stop_sim_stream(&mut self, cx: &mut Context<Self>) {
-        if self.sim_stream_loading {
+        // Already stopping: don't stack cleanups.
+        if self.sim_stopping {
             return;
         }
+        let generation = self.sim_stream_generation.wrapping_add(1);
+        self.sim_stream_generation = generation;
         self.sim_stream_loading = true;
         // Drop the live view immediately so the tab falls back to the
         // stopping loader while the subprocess cleanup lands off-thread.
         self.sim_stream_info = None;
         self.sim_stopping = true;
         self.sim_applied_dark = None;
+        // Park the webview on a blank page now so the dead preview can't
+        // linger or flash if it renders another frame before cleanup lands.
+        if let Some(browser_id) = self.sim_browser_id
+            && let Some(browser) = self.right_panel_browsers.get(&browser_id)
+        {
+            browser.update(cx, |view, cx| {
+                view.navigate_to_url("about:blank".to_owned(), cx);
+            });
+        }
         cx.notify();
         let entity = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
@@ -236,6 +288,10 @@ impl Insulator {
                 .spawn(async move { sim_stream::stop_all_blocking() })
                 .await;
             let _ = entity.update(cx, |this, cx| {
+                // A fresh Start supersedes this cleanup; leave its state alone.
+                if this.sim_stream_generation != generation {
+                    return;
+                }
                 this.sim_stream_loading = false;
                 this.sim_stopping = false;
                 match result {
@@ -256,23 +312,24 @@ impl Insulator {
     }
 
     /// Strip serve-sim chrome in the live view so only the simulator shows,
-    /// on the app's polarity background. Idempotent; re-run after load and
+    /// on the app's surface background. Idempotent; re-run after load and
     /// theme flips because the React page renders chrome asynchronously.
-    fn inject_sim_chrome(&self, dark: bool, cx: &mut Context<Self>) {
+    fn inject_sim_chrome(&self, bg: String, dark: bool, cx: &mut Context<Self>) {
         let Some(browser_id) = self.sim_browser_id else {
             return;
         };
         let Some(browser) = self.right_panel_browsers.get(&browser_id) else {
             return;
         };
-        let script = sim_stream::kiosk_script(dark);
+        let script = sim_stream::kiosk_script_with_background(&bg, dark);
         browser.update(cx, |view, _| view.evaluate_page_script(&script));
     }
 
     /// Re-apply the kiosk CSS on a short schedule after navigation: one shot
     /// races the React page, three spaced passes do not. Stops early when
     /// the stream is gone.
-    fn schedule_kiosk_passes(&self, dark: bool, cx: &mut Context<Self>) {
+    fn schedule_kiosk_passes(&self, bg: String, dark: bool, cx: &mut Context<Self>) {
+        let generation = self.sim_stream_generation;
         let entity = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
             for delay_ms in [1500u64, 3500, 7000] {
@@ -281,10 +338,12 @@ impl Insulator {
                     .await;
                 let done = entity
                     .update(cx, |this, cx| {
-                        if this.sim_stream_info.is_none() {
+                        if this.sim_stream_info.is_none()
+                            || this.sim_stream_generation != generation
+                        {
                             return true;
                         }
-                        this.inject_sim_chrome(dark, cx);
+                        this.inject_sim_chrome(bg.clone(), dark, cx);
                         false
                     })
                     .unwrap_or(true);
@@ -322,8 +381,9 @@ impl Insulator {
                     this.show_toast(error.to_string());
                 } else {
                     // Theme flips replace the page chrome asynchronously;
-                    // re-strip on the new polarity background.
-                    this.inject_sim_chrome(dark, cx);
+                    // re-strip on the new surface background.
+                    let bg = Self::sim_page_background(cx);
+                    this.inject_sim_chrome(bg, dark, cx);
                 }
                 cx.notify();
             });
