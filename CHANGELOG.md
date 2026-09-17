@@ -16,6 +16,26 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.8]
+
+### Added
+
+- Add customizable keyboard shortcuts in Settings, with per-action rebinding, conflict warnings, and reset
+- Add an iOS Simulator stream tab to the right panel with start, reopen, and stop commands
+- Sort sidebar projects by most recent session activity, matching the session ordering
+
+### Changed
+
+- Refine chat status display and hide unused statuses
+- Match the Simulator stream appearance to the app theme
+
+### Fixed
+
+- Fix pull-request refresh replacing the list with a stale page and keep reopened rows visible
+- Load pull-request avatars in the background with cached-file validation and an initials fallback
+- Make Stop halt live background work, cancel Computer Use descendants, and clear queued steers
+- Fix session status persistence and stop surfacing pre-turn checkpoint errors
+
 ## [0.1.7]
 
 ### Added
