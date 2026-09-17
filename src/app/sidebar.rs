@@ -309,6 +309,29 @@ fn sort_sidebar_sessions(sessions: &mut Vec<&AgentSession>, ordering: SidebarOrd
     }
 }
 
+/// Recency of a project section for the current ordering. A project with
+/// sessions is ranked by its newest session (updated or created, matching the
+/// sidebar ordering); a project without visible sessions falls back to when
+/// the project itself was added so empty projects still sort deterministically.
+fn sidebar_project_timestamp(
+    project: &Project,
+    sessions: &[&AgentSession],
+    ordering: SidebarOrdering,
+) -> u64 {
+    match ordering {
+        SidebarOrdering::Updated => sessions
+            .iter()
+            .map(|session| sidebar_session_timestamp(session))
+            .max()
+            .unwrap_or(project.created_at),
+        SidebarOrdering::Created => sessions
+            .iter()
+            .map(|session| session.created_at)
+            .max()
+            .unwrap_or(project.created_at),
+    }
+}
+
 fn project_sidebar_groups(
     sessions: &[&AgentSession],
     projectless_project_ids: &HashSet<Uuid>,
@@ -1457,7 +1480,12 @@ impl Insulator {
             fingerprint = mix_uuid(fingerprint, session.id);
             fingerprint = mix_uuid(fingerprint, session.project_id);
             fingerprint = mix(fingerprint, sidebar_session_timestamp(session));
+            fingerprint = mix(fingerprint, session.created_at);
             fingerprint = mix(fingerprint, session.chat_status.index() as u64);
+        }
+        for project in &self.state.projects {
+            fingerprint = mix_uuid(fingerprint, project.id);
+            fingerprint = mix(fingerprint, project.created_at);
         }
         for session_id in &self.pinned_session_ids {
             fingerprint = mix_uuid(fingerprint, *session_id);
@@ -1558,14 +1586,33 @@ impl Insulator {
                     }
                 }
 
-                for project in &self.state.projects {
-                    if sidebar_project_is_projectless(project, projectless_root.as_deref()) {
-                        continue;
-                    }
+                let mut ordered_projects: Vec<(&Project, Vec<&AgentSession>)> = self
+                    .state
+                    .projects
+                    .iter()
+                    .filter(|project| {
+                        !sidebar_project_is_projectless(project, projectless_root.as_deref())
+                    })
+                    .map(|project| {
+                        let project_sessions =
+                            sessions_by_project.remove(&project.id).unwrap_or_default();
+                        (project, project_sessions)
+                    })
+                    .collect();
+                // Latest updated/created project first, matching the session
+                // ordering. Stable sort keeps `state.projects` order as the
+                // tie-break.
+                ordered_projects.sort_by_key(|(project, project_sessions)| {
+                    std::cmp::Reverse(sidebar_project_timestamp(
+                        project,
+                        project_sessions,
+                        self.state.sidebar_ordering,
+                    ))
+                });
+
+                for (project, mut project_sessions) in ordered_projects {
                     let group = SidebarGroup::Project(project.id);
                     let is_collapsed = !self.sidebar_expanded_groups.contains(&group);
-                    let mut project_sessions =
-                        sessions_by_project.remove(&project.id).unwrap_or_default();
                     if !sidebar_project_should_show(project_sessions.len()) {
                         continue;
                     }
@@ -4024,6 +4071,42 @@ mod tests {
 
         sort_sidebar_sessions(&mut sessions, SidebarOrdering::Created);
         assert_eq!(sessions[0].id, newer_unanswered_session.id);
+    }
+
+    #[test]
+    fn project_timestamp_follows_sidebar_ordering_with_project_fallback() {
+        let project = Project {
+            id: Uuid::from_u128(1),
+            name: "Demo".to_owned(),
+            path: PathBuf::from("/tmp/demo"),
+            created_at: 5,
+        };
+        let mut old_session = AgentSession::new(project.id, ProviderKind::Codex);
+        old_session.created_at = 10;
+        old_session.last_reply_at = Some(20);
+        old_session.updated_at = 1_000;
+        let mut new_session = AgentSession::new(project.id, ProviderKind::Codex);
+        new_session.created_at = 30;
+        new_session.last_reply_at = None;
+        new_session.updated_at = 30;
+
+        let sessions = vec![&old_session, &new_session];
+        assert_eq!(
+            sidebar_project_timestamp(&project, &sessions, SidebarOrdering::Updated),
+            30
+        );
+        assert_eq!(
+            sidebar_project_timestamp(&project, &sessions, SidebarOrdering::Created),
+            30
+        );
+        assert_eq!(
+            sidebar_project_timestamp(&project, &[], SidebarOrdering::Updated),
+            5
+        );
+        assert_eq!(
+            sidebar_project_timestamp(&project, &[], SidebarOrdering::Created),
+            5
+        );
     }
 
     #[test]
