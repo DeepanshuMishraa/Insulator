@@ -1486,6 +1486,17 @@ pub struct Insulator {
     /// Per-response file cards the user expanded beyond their three-file
     /// preview. Runtime-only, like the other transcript disclosures.
     expanded_changed_files: HashSet<Uuid>,
+    /// Long user prompts the reader expanded past their bounded preview.
+    /// Collapsing a huge paste keeps its first paint to a small prefix parse
+    /// plus a small layout; the full body parses only on explicit expand.
+    /// Keyed by message id, unique across sessions, so switching chats keeps
+    /// the choice.
+    expanded_user_messages: HashSet<Uuid>,
+    /// Cached (chars, lines) for long user prompts, keyed by message id.
+    /// Message bodies are immutable, so the counts never go stale; caching
+    /// keeps the per-frame collapse check bounded by the preview size instead
+    /// of the full paste.
+    user_message_counts: RefCell<HashMap<Uuid, (usize, usize)>>,
     /// Stable focus identities for controls inside virtualized transcript and
     /// diff rows. Recreating a handle on every row build would drop keyboard
     /// focus whenever GPUI re-renders the list.
@@ -3354,6 +3365,8 @@ impl Insulator {
                 expanded_activity_items: HashMap::new(),
                 expanded_turns: HashSet::new(),
                 expanded_changed_files: HashSet::new(),
+                expanded_user_messages: HashSet::new(),
+                user_message_counts: RefCell::new(HashMap::new()),
                 transcript_control_focuses: RefCell::new(HashMap::new()),
                 session_navigation,
                 session_rename: None,

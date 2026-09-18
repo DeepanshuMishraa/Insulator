@@ -22,6 +22,10 @@ use super::{
     transcript_rows_fingerprint, widened_panel_width_for_file_editor,
     widened_panel_width_for_review,
 };
+use super::{
+    USER_MESSAGE_PREVIEW_CHARS, USER_MESSAGE_PREVIEW_LINES, should_collapse_user_message,
+    user_message_preview_len,
+};
 use crate::git_branch::BranchEntry;
 use crate::model::{
     ActivityItem, ActivityKind, AgentSession, Checkpoint, CheckpointFile, CheckpointStatus,
@@ -523,6 +527,50 @@ fn conversation_navigation_preview_does_not_change_during_a_running_turn() {
     session.finish_active_turn(TurnStatus::Completed);
     let completed = transcript_navigation_turns(&session, &rows);
     assert_eq!(completed[0].response, "Partial response");
+}
+
+#[test]
+fn short_user_prompts_render_in_full() {
+    assert!(!should_collapse_user_message("hello"));
+    assert!(!should_collapse_user_message(&"line\n".repeat(5)));
+}
+
+#[test]
+fn long_user_paste_collapses_to_a_prefix_preview() {
+    let content = "x".repeat(USER_MESSAGE_PREVIEW_CHARS + 100);
+    assert!(should_collapse_user_message(&content));
+    let preview_len = user_message_preview_len(&content);
+    assert!(content.is_char_boundary(preview_len));
+    assert_eq!(
+        &content[..preview_len],
+        "x".repeat(USER_MESSAGE_PREVIEW_CHARS)
+    );
+    // The preview stays an exact prefix so expanding is an incremental append.
+    assert!(content.starts_with(&content[..preview_len]));
+}
+
+#[test]
+fn many_line_user_paste_collapses_at_the_line_boundary() {
+    let content = (0..USER_MESSAGE_PREVIEW_LINES + 10)
+        .map(|index| format!("line {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(should_collapse_user_message(&content));
+    let preview_len = user_message_preview_len(&content);
+    let preview = &content[..preview_len];
+    assert_eq!(preview.lines().count(), USER_MESSAGE_PREVIEW_LINES);
+    assert!(content.starts_with(preview));
+}
+
+#[test]
+fn user_preview_handles_multibyte_content() {
+    let content = "é".repeat(USER_MESSAGE_PREVIEW_CHARS + 10);
+    let preview_len = user_message_preview_len(&content);
+    assert!(content.is_char_boundary(preview_len));
+    assert_eq!(
+        &content[..preview_len],
+        "é".repeat(USER_MESSAGE_PREVIEW_CHARS)
+    );
 }
 
 #[test]

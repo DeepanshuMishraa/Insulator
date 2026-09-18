@@ -421,6 +421,20 @@ pub(super) fn render_message_footer(
     footer.into_any_element()
 }
 
+/// Collapse state for a long user prompt.
+///
+/// The markdown view behind the row already holds only the preview (or the
+/// full body once expanded), so this carries just the identity and counts the
+/// toggle label needs.
+pub(super) struct UserMessageCollapse {
+    pub(super) message_id: Uuid,
+    pub(super) message_index: usize,
+    pub(super) expanded: bool,
+    pub(super) total_chars: usize,
+    pub(super) total_lines: usize,
+    pub(super) focus: FocusHandle,
+}
+
 /// Everything one transcript message row needs to render itself. Bundled
 /// because these travel together from `transcript_row` and nowhere else.
 pub(super) struct MessageRender<'a> {
@@ -445,6 +459,9 @@ pub(super) struct MessageRender<'a> {
     pub(super) menu: ContextMenuHandle,
     pub(super) insulator: gpui::WeakEntity<Insulator>,
     pub(super) composer: Entity<ComposerInput>,
+    /// Present for a long user prompt: the row shows a bounded preview until
+    /// the reader explicitly expands it.
+    pub(super) user_collapse: Option<UserMessageCollapse>,
 }
 
 fn render_sent_message_attachments(
@@ -617,6 +634,74 @@ fn render_markdown_message_body<'a>(
         })
 }
 
+/// Expand/collapse control for a long user prompt.
+///
+/// The collapsed preview parses and lays out only a small prefix, so the sent
+/// row paints immediately no matter how large the paste is. Copy and context
+/// menu keep the full content; only the presented body is bounded.
+fn render_user_message_collapse_toggle(
+    theme: &Theme,
+    collapse: UserMessageCollapse,
+    insulator: &gpui::WeakEntity<Insulator>,
+) -> AnyElement {
+    let UserMessageCollapse {
+        message_id,
+        message_index,
+        expanded,
+        total_chars,
+        total_lines,
+        focus,
+    } = collapse;
+    let label = if expanded {
+        "Show less".to_owned()
+    } else {
+        format!("Show full message ({total_chars} chars · {total_lines} lines)")
+    };
+    div()
+        .id(SharedString::from(format!(
+            "user-message-collapse-{message_id}"
+        )))
+        .track_focus(&focus)
+        .tab_index(0)
+        .h(px(26.0))
+        .px(px(10.0))
+        .rounded(px(7.0))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.overlay)
+        .flex()
+        .items_center()
+        .cursor_default()
+        .text_size(sp(12.5))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.text_secondary)
+        .focus_visible(|style| style.border_color(theme.accent))
+        .hover(|style| style.bg(theme.overlay_strong).text_color(theme.text))
+        .active(|style| style.opacity(0.8))
+        .child(SharedString::from(label))
+        .on_click({
+            let insulator = insulator.clone();
+            move |_, _, cx| {
+                let _ = insulator.update(cx, |this, cx| {
+                    this.toggle_user_message_expanded(message_id, message_index, cx);
+                });
+                cx.stop_propagation();
+            }
+        })
+        .on_key_down({
+            let insulator = insulator.clone();
+            move |event: &KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    let _ = insulator.update(cx, |this, cx| {
+                        this.toggle_user_message_expanded(message_id, message_index, cx);
+                    });
+                    cx.stop_propagation();
+                }
+            }
+        })
+        .into_any_element()
+}
+
 pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement {
     let MessageRender {
         theme,
@@ -635,6 +720,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
         menu,
         insulator,
         composer,
+        user_collapse,
     } = params;
 
     let content = message.visible_content().to_owned();
@@ -766,6 +852,11 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                             .line_height(sp(20.0))
                             .child(body),
                     );
+                }
+                if let Some(collapse) = user_collapse {
+                    column = column.child(render_user_message_collapse_toggle(
+                        theme, collapse, &insulator,
+                    ));
                 }
                 column = column.child(render_message_footer(
                     theme,

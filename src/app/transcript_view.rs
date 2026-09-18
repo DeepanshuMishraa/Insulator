@@ -1455,9 +1455,50 @@ impl Insulator {
                             animate_streaming,
                         )
                         .with_context_menu(menu.clone());
-                    if let Some(highlights) = self.transcript_search_highlights(message_index) {
+                    let search_highlights = self.transcript_search_highlights(message_index);
+                    let highlights_active = search_highlights.is_some();
+                    if let Some(highlights) = search_highlights {
                         ctx = ctx.with_search_highlights(highlights);
                     }
+                    // A huge paste parsed and laid out in full on its first
+                    // frame stalls the UI thread, leaving the just-sent row
+                    // blank until measurement settles. Collapsed prompts parse
+                    // and lay out only a small prefix, so the row appears
+                    // immediately; the full body parses on explicit expand.
+                    // Search matches force the full body so no hit hides
+                    // behind the preview, and the edit field always shows it.
+                    let full_content = message.visible_content();
+                    let collapsible = message.role == MessageRole::User
+                        && message_edit_input.is_none()
+                        && !highlights_active
+                        && should_collapse_user_message(full_content);
+                    let expanded = collapsible && self.expanded_user_messages.contains(&message.id);
+                    let preview_len = collapsible
+                        .then(|| {
+                            if expanded {
+                                full_content.len()
+                            } else {
+                                user_message_preview_len(full_content)
+                            }
+                        })
+                        .unwrap_or(full_content.len());
+                    let display_text = &full_content[..preview_len];
+                    let user_collapse = collapsible.then(|| {
+                        let (total_chars, total_lines) =
+                            self.cached_user_message_counts(message.id, full_content);
+                        let focus = self.transcript_control_focus(
+                            format!("user-message-collapse-{}", message.id),
+                            cx,
+                        );
+                        UserMessageCollapse {
+                            message_id: message.id,
+                            message_index,
+                            expanded,
+                            total_chars,
+                            total_lines,
+                            focus,
+                        }
+                    });
                     // Human and assistant messages share the Markdown path.
                     // Parse only visible rows rather than doing work for every
                     // driver delta or every off-screen prompt.
@@ -1465,7 +1506,7 @@ impl Insulator {
                     let view = matches!(message.role, MessageRole::User | MessageRole::Assistant)
                         .then(|| {
                             let view = markdown.entry(message.id).or_default();
-                            view.set_text(message.visible_content(), message.streaming);
+                            view.set_text(display_text, message.streaming);
                             &*view
                         });
                     let rendered = render_message(
@@ -1486,6 +1527,7 @@ impl Insulator {
                             menu,
                             insulator,
                             composer,
+                            user_collapse,
                         },
                         cx,
                     );

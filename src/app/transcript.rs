@@ -1272,3 +1272,93 @@ pub(super) fn message_starts_followup_turn(messages: &[Message], message_index: 
             .iter()
             .any(|message| message.role == MessageRole::User)
 }
+
+impl Insulator {
+    /// Cached (chars, lines) for a long user prompt's expand label.
+    ///
+    /// Bodies are immutable under a message id, so one O(paste) pass per
+    /// message replaces an O(paste) recount on every frame the row is
+    /// visible.
+    pub(super) fn cached_user_message_counts(
+        &self,
+        message_id: Uuid,
+        content: &str,
+    ) -> (usize, usize) {
+        if let Some(cached) = self.user_message_counts.borrow().get(&message_id) {
+            return *cached;
+        }
+        let mut chars = 0;
+        let mut newlines = 0;
+        for ch in content.chars() {
+            chars += 1;
+            newlines += (ch == '\n') as usize;
+        }
+        let lines = if content.is_empty() {
+            0
+        } else {
+            newlines + (!content.ends_with('\n')) as usize
+        };
+        let counts = (chars, lines);
+        self.user_message_counts
+            .borrow_mut()
+            .insert(message_id, counts);
+        counts
+    }
+
+    /// Expand or collapse a long user prompt in place, holding the reader's
+    /// scroll position across the row's height change.
+    pub(super) fn toggle_user_message_expanded(
+        &mut self,
+        message_id: Uuid,
+        message_index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.pin_transcript_for_disclosure();
+        if !self.expanded_user_messages.remove(&message_id) {
+            self.expanded_user_messages.insert(message_id);
+        }
+        self.remeasure_transcript_message(message_index);
+        cx.notify();
+    }
+}
+
+/// Bounds for a collapsed user prompt's first paint.
+///
+/// A huge paste parsed and laid out in full on its first frame stalls the UI
+/// thread: markdown parsing, flattening, text shaping, and the list's row
+/// measurement all scale with the body. The collapsed preview parses and lays
+/// out only this prefix, so the sent row appears immediately no matter how
+/// large the paste is; the full body parses on explicit expand.
+pub(super) const USER_MESSAGE_PREVIEW_CHARS: usize = 1_500;
+pub(super) const USER_MESSAGE_PREVIEW_LINES: usize = 30;
+
+/// Whether `content` is large enough to deserve a collapsed preview.
+///
+/// Both probes stop at the preview boundary, so this costs O(preview) per
+/// frame rather than O(paste) — the check itself must never become the stall
+/// it guards against.
+pub(super) fn should_collapse_user_message(content: &str) -> bool {
+    content.chars().nth(USER_MESSAGE_PREVIEW_CHARS).is_some()
+        || content.lines().nth(USER_MESSAGE_PREVIEW_LINES).is_some()
+}
+
+/// Byte length of the collapsed preview: an exact prefix of `content`.
+///
+/// The prefix property matters for the incremental markdown cache: expanding
+/// from preview to full is then an append, and collapsing back is a small
+/// re-parse, instead of two full parses of a huge body. The newline scan runs
+/// only over the char-truncated prefix, keeping this O(preview) as well.
+pub(super) fn user_message_preview_len(content: &str) -> usize {
+    let char_cut = content
+        .char_indices()
+        .nth(USER_MESSAGE_PREVIEW_CHARS)
+        .map(|(index, _)| index)
+        .unwrap_or(content.len());
+    let prefix = &content[..char_cut.min(content.len())];
+    let prefix = &content[..char_cut.min(content.len())];
+    prefix
+        .match_indices('\n')
+        .nth(USER_MESSAGE_PREVIEW_LINES.saturating_sub(1))
+        .map(|(index, _)| index)
+        .unwrap_or(char_cut)
+}
