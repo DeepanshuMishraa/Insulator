@@ -16,6 +16,16 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.9]
+
+### Changed
+
+- Collapse long user prompts to an instant preview with an expand toggle
+
+### Fixed
+
+- Keep sidebar, pull-request, and skills row highlights from strobing while a long list scrolls; the hover fill now waits until the list is still, then reappears under the cursor
+
 ## [0.1.8]
 
 ### Added

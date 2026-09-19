@@ -3211,6 +3211,9 @@ impl Insulator {
                 entry,
                 Theme::current(cx),
                 is_selected,
+                // Consulted fresh on every row build; rows rebuild each
+                // scroll frame, so the hover fill hides while scrolling.
+                self.pull_requests_hover_gate.hover_allowed(),
                 cx.entity().downgrade(),
             ))
             .into_any_element()
@@ -3221,6 +3224,7 @@ fn render_pull_request_row(
     entry: &PullRequest,
     theme: Theme,
     is_selected: bool,
+    hover_allowed: bool,
     insulator: WeakEntity<Insulator>,
 ) -> AnyElement {
     let state_color = match entry.state.as_str() {
@@ -3259,10 +3263,21 @@ fn render_pull_request_row(
             element
                 .border_1()
                 .border_color(gpui::transparent_black())
-                .hover(|element| {
-                    element
-                        .bg(theme.overlay)
-                        .border_color(theme.border)
+                .hover({
+                    // While the list scrolls, rows slide under a
+                    // stationary cursor and the highlight would strobe
+                    // across them trying to keep up. Hide it until the
+                    // list is still again; the gate's wake repaints once
+                    // it reopens.
+                    let hover_bg = theme.overlay;
+                    let hover_border = theme.border;
+                    move |style| {
+                        if hover_allowed {
+                            style.bg(hover_bg).border_color(hover_border)
+                        } else {
+                            style
+                        }
+                    }
                 })
                 .active(|element| element.bg(theme.overlay_strong))
         })

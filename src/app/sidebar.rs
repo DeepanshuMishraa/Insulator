@@ -2481,7 +2481,22 @@ impl Insulator {
             .when(selected, |element| {
                 element.bg(theme.sidebar_item_background)
             })
-            .hover(|element| element.bg(theme.sidebar_item_background))
+            .hover({
+                // While the list scrolls, rows slide under a stationary
+                // cursor and the highlight would strobe across them trying
+                // to keep up. Hide it until the list is still again; rows
+                // rebuild every scroll frame, so the gate is consulted
+                // fresh, and the gate's wake repaints once it reopens.
+                let hover_gate = self.sidebar_hover_gate.clone();
+                let hover_bg = theme.sidebar_item_background;
+                move |style| {
+                    if hover_gate.hover_allowed() {
+                        style.bg(hover_bg)
+                    } else {
+                        style
+                    }
+                }
+            })
             .active(|element| element.bg(theme.overlay_strong))
             .child(
                 div()
