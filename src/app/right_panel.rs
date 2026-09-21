@@ -2497,9 +2497,15 @@ impl Insulator {
     pub(super) fn close_active_tab_action(
         &mut self,
         _: &CloseActiveTab,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The Browser, Simulator and BackgroundWork tabs live outside
+        // `right_panel_surfaces`, so without this the shortcut would sail
+        // past the panel and close the main chat tab underneath them.
+        if self.close_right_panel_upper_tab(window, cx) {
+            return;
+        }
         if self.active_main_review_tab {
             self.close_main_review_tab(cx);
             return;
@@ -2556,12 +2562,49 @@ impl Insulator {
         cx.notify();
     }
 
+    /// Close the active right-panel web tab, if it is one that the surface
+    /// list below cannot see. The Browser, Simulator and BackgroundWork tabs
+    /// are not entries in `right_panel_surfaces`, so neither close path
+    /// would otherwise touch them: ⌘W would close the main tab behind the
+    /// panel, or hide the window. Closing steps back to Files — and for the
+    /// Browser tab drops its page, so reopening starts clean the way a
+    /// closed browser tab does. Returns whether a tab was closed.
+    pub(super) fn close_right_panel_upper_tab(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.right_panel_visible {
+            return false;
+        }
+        match self.right_panel_upper_tab.clone() {
+            RightPanelUpperTab::Browser => {
+                if let Some(browser_id) = self.right_panel_browser_id.take() {
+                    self.right_panel_browsers.remove(&browser_id);
+                }
+                self.select_right_panel_upper_tab(RightPanelUpperTab::Files, cx);
+            }
+            RightPanelUpperTab::Simulator | RightPanelUpperTab::BackgroundWork { .. } => {
+                self.select_right_panel_upper_tab(RightPanelUpperTab::Files, cx);
+            }
+            RightPanelUpperTab::Files | RightPanelUpperTab::Changes => return false,
+        }
+        let focus_handle = self.composer_focus(cx);
+        window.focus(&focus_handle, cx);
+        self.save();
+        cx.notify();
+        true
+    }
+
     pub(super) fn close_window_or_right_panel_tab_action(
         &mut self,
         _: &CloseWindow,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_right_panel_upper_tab(window, cx) {
+            return;
+        }
         // The frontmost main tab goes first: ⌘W on a chat, file, or Review
         // tab closes that tab the way tabbed apps do, instead of hiding the
         // window while tabs are still open.
@@ -3295,6 +3338,9 @@ impl Insulator {
                         })
                         .child("All files"),
                 )
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.select_right_panel_upper_tab(RightPanelUpperTab::Files, cx);
                 })),
@@ -3328,6 +3374,9 @@ impl Insulator {
                         })
                         .child(format!("Changes {changes_count}")),
                 )
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.select_right_panel_upper_tab(RightPanelUpperTab::Changes, cx);
                 })),
@@ -3361,6 +3410,9 @@ impl Insulator {
                         })
                         .child("Browser"),
                 )
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.select_right_panel_upper_tab(RightPanelUpperTab::Browser, cx);
                 })),
@@ -3394,6 +3446,9 @@ impl Insulator {
                         })
                         .child("Simulator"),
                 )
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.select_right_panel_upper_tab(RightPanelUpperTab::Simulator, cx);
                 })),
@@ -3445,7 +3500,13 @@ impl Insulator {
             );
         }
 
-        let header = div()
+        // Note: this header is intentionally *not* wrapped in
+        // `window_drag_region`. The tab strip fills the header width, and on
+        // Windows a drag/caption region covering the tabs swallows their
+        // clicks — a tab then only responds when pressed without moving a
+        // single pixel. Window dragging stays available from the main header's
+        // center drag region.
+        div()
             .id("right-panel-header")
             .h(px(44.0))
             .flex_none()
@@ -3474,16 +3535,12 @@ impl Insulator {
                         &self.right_panel_tabs_scrollbar,
                     )),
             )
-            .child(div().flex_none().child(self.render_right_panel_toggle(cx)));
-
-        self.window_drag_region(
-            header.children(self.render_client_window_controls(
+            .child(div().flex_none().child(self.render_right_panel_toggle(cx)))
+            .children(self.render_client_window_controls(
                 super::window_chrome::WindowControlSide::Right,
                 window,
                 cx,
-            )),
-            cx,
-        )
+            ))
     }
 
     fn render_right_panel_chooser(&self, cx: &mut Context<Self>) -> Stateful<Div> {

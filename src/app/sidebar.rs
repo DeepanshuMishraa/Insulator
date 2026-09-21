@@ -1524,15 +1524,10 @@ impl Insulator {
                 if session.conversation_root_id.is_some() {
                     return false;
                 }
-                let is_projectless = self.state.projects.iter().any(|project| {
-                    project.id == session.project_id
-                        && sidebar_project_is_projectless(project, projectless_root.as_deref())
-                });
-                if is_projectless {
-                    session.has_started() || self.state.selected_session == Some(session.id)
-                } else {
-                    session.has_started()
-                }
+                // A freshly created chat selects its draft immediately; keep
+                // that selected draft visible so a new chat appears in the
+                // sidebar no matter which button created it.
+                session.has_started() || self.state.selected_session == Some(session.id)
             })
             .collect::<Vec<_>>();
         sort_sidebar_sessions(&mut sessions, self.state.sidebar_ordering);

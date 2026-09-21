@@ -272,7 +272,11 @@ impl Insulator {
             .state
             .sessions
             .iter()
-            .find(|session| session.project_id == project_id && !session.has_started())
+            .find(|session| {
+                session.project_id == project_id
+                    && session.conversation_root_id.is_none()
+                    && !session.has_started()
+            })
             .map(|session| session.id)
         {
             if self.selected_session().is_none() {
@@ -525,11 +529,19 @@ impl Insulator {
             .selected_project()
             .map(|p| p.id)
             .or_else(|| self.state.projects.first().map(|p| p.id))?;
+        // The tab strip's "+" button advertises itself as a new task, so it
+        // creates a sidebar-visible root conversation — the same as clicking
+        // the project. Tab-only child conversations (conversation_root_id set)
+        // stay out of the sidebar by design and are never reused here.
         if let Some(draft_id) = self
             .state
             .sessions
             .iter()
-            .find(|session| session.project_id == project_id && !session.has_started())
+            .find(|session| {
+                session.project_id == project_id
+                    && session.conversation_root_id.is_none()
+                    && !session.has_started()
+            })
             .map(|session| session.id)
         {
             self.active_main_file_tab = None;
@@ -543,11 +555,7 @@ impl Insulator {
         }
         let runtime_mode =
             new_task_runtime_mode(self.selected_session(), self.state.last_runtime_mode);
-        let conversation_root_id = self
-            .selected_session()
-            .map(|session| session.conversation_root_id.unwrap_or(session.id));
         let mut session = self.state.new_session(project_id, self.state.last_provider);
-        session.conversation_root_id = conversation_root_id;
         session.runtime_mode = runtime_mode;
         let id = session.id;
         self.state.push_session(session);

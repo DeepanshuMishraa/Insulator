@@ -81,7 +81,7 @@ pub const ALL: &[KeybindingDef] = &[
     },
     KeybindingDef {
         id: "close_active_tab",
-        label: "Close active main tab",
+        label: "Close active tab",
         category: "Tabs",
         default: Some("secondary-shift-w"),
         context: None,

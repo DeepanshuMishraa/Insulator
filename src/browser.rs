@@ -1533,6 +1533,13 @@ impl BrowserView {
         cx.notify();
     }
 
+    // Set when the view was constructed before the window owned an HWND.
+    // Unlike a missing WebView2 runtime this heals on its own, so `render`
+    // retries the build once the handle exists instead of parking the tab on
+    // an error forever.
+    #[cfg(target_os = "windows")]
+    const NO_NATIVE_HANDLE: &'static str = "the window has no native handle";
+
     /// WebView2 rendered into GPUI's composition tree.
     ///
     /// Nothing exists synchronously here: `create` returns before the
@@ -1545,7 +1552,7 @@ impl BrowserView {
     fn build_webview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let parent = window_hwnd(window);
         if parent == 0 {
-            self.host_error = Some("the window has no native handle".to_owned());
+            self.host_error = Some(Self::NO_NATIVE_HANDLE.to_owned());
             return;
         }
         // The portal is a visual GPUI keeps between its own base and overlay
@@ -2014,14 +2021,18 @@ impl BrowserView {
 
     /// Run page script fire-and-forget. The Simulator tab uses this to strip
     /// serve-sim chrome and match the page background to the app theme.
-    /// Injection is idempotent; macOS-only in practice, no-op elsewhere so
-    /// callers need no platform cfg.
+    /// Injection is idempotent; a no-op without a host so callers need no
+    /// platform cfg.
     pub(crate) fn evaluate_page_script(&self, script: &str) {
         #[cfg(target_os = "macos")]
         if let Some(host) = &self.host {
             let _ = host.webview.evaluate_script(script);
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        if let Some(host) = &self.host {
+            let _ = host.webview.evaluate_script(script);
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let _ = script;
     }
 
@@ -2641,6 +2652,14 @@ impl Focusable for BrowserView {
 
 impl Render for BrowserView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(target_os = "windows")]
+        if self.host.is_none() && self.host_error.as_deref() == Some(Self::NO_NATIVE_HANDLE) {
+            // The view was built before the window owned an HWND; the check
+            // inside `build_webview` is cheap until the handle exists, so
+            // retry here rather than leaving the tab on an error forever.
+            self.host_error = None;
+            self.build_webview(window, cx);
+        }
         let theme = Theme::current(cx);
         self.reconcile_focus(window, cx);
         if self.loading && !self.progress_poll_armed {
