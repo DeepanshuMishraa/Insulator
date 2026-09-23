@@ -16,6 +16,12 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.10]
+
+### Fixed
+
+- Stop scroll-triggered crashes by removing the detached hover-gate wake tasks from scroll handlers
+
 ## [0.1.9]
 
 ### Changed

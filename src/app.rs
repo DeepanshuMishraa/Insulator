@@ -50,7 +50,6 @@ use crate::ui::menu::{
     ConfirmEntry, ContextMenuHandle, DismissMenu, MenuAlign, MenuItem, SelectNextEntry,
     SelectNextTab, SelectPreviousEntry, SelectPreviousTab, context_menu, dropdown_menu, popover,
 };
-use crate::ui::hover_gate::HoverGate;
 use crate::ui::scrollbar::{self, ScrollbarState};
 use crate::ui::tooltip::Tooltip;
 
@@ -1572,9 +1571,6 @@ pub struct Insulator {
     pull_requests_list_state: ListState,
     pull_requests_rows: RefCell<Vec<usize>>,
     pull_requests_scrollbar: Rc<ScrollbarState>,
-    /// Hides PR row hover fills while the list scrolls; see
-    /// [`hover_gate::HoverGate`].
-    pull_requests_hover_gate: HoverGate,
     pull_request_detail_scroll_handle: ScrollHandle,
     pull_request_detail_scrollbar: Rc<ScrollbarState>,
     pull_request_detail_selection: TranscriptSelection,
@@ -1720,9 +1716,6 @@ pub struct Insulator {
     /// Virtualized list over the filtered skill rows.
     skills_list_state: ListState,
     skills_scrollbar: Rc<ScrollbarState>,
-    /// Hides skill row hover fills while the list scrolls; see
-    /// [`hover_gate::HoverGate`].
-    skills_hover_gate: HoverGate,
     /// The rows the list currently draws — sections and catalog indices —
     /// refreshed once per frame rather than per row.
     skills_rows: RefCell<Vec<skills_page::SkillsRow>>,
@@ -1776,9 +1769,6 @@ pub struct Insulator {
     /// rows are built and laid out regardless of how many sessions exist.
     sidebar_list_state: ListState,
     sidebar_scrollbar: Rc<ScrollbarState>,
-    /// Hides sidebar row hover fills while the list scrolls; see
-    /// [`hover_gate::HoverGate`].
-    sidebar_hover_gate: HoverGate,
     /// Snapshot of the sidebar rows the list state currently corresponds to.
     sidebar_row_cache: RefCell<Vec<SidebarRow>>,
     /// Fingerprint + snapshot pair backing `sidebar_rows_cached`.
@@ -3429,7 +3419,6 @@ impl Insulator {
                 pull_requests_list_state: pull_requests_list_state.clone(),
                 pull_requests_rows: RefCell::new(Vec::new()),
                 pull_requests_scrollbar: ScrollbarState::new(),
-                pull_requests_hover_gate: HoverGate::new(),
                 pull_request_detail_scroll_handle: ScrollHandle::new(),
                 pull_request_detail_scrollbar: ScrollbarState::new(),
                 pull_request_detail_selection: TranscriptSelection::default(),
@@ -3537,7 +3526,6 @@ impl Insulator {
                 skills_search,
                 skills_list_state: ListState::new(0, ListAlignment::Top, px(512.0)),
                 skills_scrollbar: ScrollbarState::new(),
-                skills_hover_gate: HoverGate::new(),
                 skills_rows: RefCell::new(Vec::new()),
                 skills_selected: None,
                 skills_detail_markdown: RefCell::new(None),
@@ -3573,7 +3561,6 @@ impl Insulator {
                 anchored_transcript_rows,
                 sidebar_list_state,
                 sidebar_scrollbar: ScrollbarState::new(),
-                sidebar_hover_gate: HoverGate::new(),
                 sidebar_row_cache: RefCell::new(Vec::new()),
                 sidebar_rows_fingerprint: Cell::new(None),
                 sidebar_rows_snapshot: RefCell::new(Rc::new(Vec::new())),
@@ -3634,34 +3621,13 @@ impl Insulator {
             }
         });
         let pull_requests_entity = entity.downgrade();
-        let pull_requests_hover_gate = entity.read(cx).pull_requests_hover_gate.clone();
-        pull_requests_list_state.set_scroll_handler(move |event, window, cx| {
-            pull_requests_hover_gate.note_scrolled(window, cx);
+        pull_requests_list_state.set_scroll_handler(move |event, _, cx| {
             if event.visible_range.end.saturating_add(4) >= event.count {
                 let _ = pull_requests_entity.update(cx, |this, cx| {
                     this.ensure_more_pull_requests(cx);
                 });
             }
         });
-        // Sidebar and skills lists have no other scroll handling; the gate
-        // alone keeps their row hover fills from strobing during fast
-        // scrolls (see `hover_gate::HoverGate`).
-        let sidebar_hover_gate = entity.read(cx).sidebar_hover_gate.clone();
-        entity
-            .read(cx)
-            .sidebar_list_state
-            .clone()
-            .set_scroll_handler(move |_, window, cx| {
-                sidebar_hover_gate.note_scrolled(window, cx);
-            });
-        let skills_hover_gate = entity.read(cx).skills_hover_gate.clone();
-        entity
-            .read(cx)
-            .skills_list_state
-            .clone()
-            .set_scroll_handler(move |_, window, cx| {
-                skills_hover_gate.note_scrolled(window, cx);
-            });
         navigation_rail.update(cx, |rail, _| rail.set_insulator(entity.downgrade()));
         for pane in [&sidebar_pane, &transcript_pane, &right_panel_pane] {
             pane.update(cx, |pane, cx| pane.bind(&entity, cx));
