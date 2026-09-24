@@ -1482,7 +1482,8 @@ impl Insulator {
                                         selected_tab == ModelPickerTab::Recents
                                             || selected_tab == ModelPickerTab::Favorites
                                             || searching
-                                            || model.sub_provider.is_some(),
+                                            || model.sub_provider.is_some()
+                                            || kind == ProviderKind::Devin,
                                         |element| {
                                             element.child(
                                                 div()

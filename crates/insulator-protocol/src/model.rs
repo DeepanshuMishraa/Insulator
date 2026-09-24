@@ -21,12 +21,13 @@ pub enum ProviderKind {
     OpenCode2,
     Grok,
     Kimi,
+    Devin,
     OhMyPi,
     Pi,
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Amp,
         Self::Claude,
         Self::Codex,
@@ -37,6 +38,7 @@ impl ProviderKind {
         Self::OpenCode2,
         Self::Grok,
         Self::Kimi,
+        Self::Devin,
         Self::OhMyPi,
         Self::Pi,
     ];
@@ -53,6 +55,7 @@ impl ProviderKind {
             Self::OpenCode2 => "opencode2",
             Self::Grok => "grok",
             Self::Kimi => "kimi",
+            Self::Devin => "devin",
             Self::OhMyPi => "ohmypi",
             Self::Pi => "pi",
         }
@@ -70,6 +73,7 @@ impl ProviderKind {
             Self::OpenCode2 => "OpenCode 2",
             Self::Grok => "Grok Build",
             Self::Kimi => "Kimi Code",
+            Self::Devin => "Devin CLI",
             Self::OhMyPi => "Oh My Pi",
             Self::Pi => "Pi",
         }
@@ -87,6 +91,7 @@ impl ProviderKind {
             Self::OpenCode2 => "OpenCode 2",
             Self::Grok => "Grok",
             Self::Kimi => "Kimi",
+            Self::Devin => "Devin",
             Self::OhMyPi => "Oh My Pi",
             Self::Pi => "Pi",
         }
@@ -106,6 +111,7 @@ impl ProviderKind {
             Self::OpenCode2 => "opencode2",
             Self::Grok => "grok",
             Self::Kimi => "kimi",
+            Self::Devin => "devin",
             Self::OhMyPi => "omp",
             Self::Pi => "pi",
         }
@@ -160,6 +166,7 @@ impl ProviderKind {
                 | Self::OpenCode2
                 | Self::Grok
                 | Self::Kimi
+                | Self::Devin
                 | Self::OhMyPi
                 | Self::Pi
         )
@@ -211,6 +218,9 @@ pub enum ProviderResumeCursor {
     Kimi {
         session_id: String,
     },
+    Devin {
+        session_id: String,
+    },
     OhMyPi {
         session_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -248,6 +258,7 @@ impl ProviderResumeCursor {
             },
             ProviderKind::Grok => Self::Grok { session_id: id },
             ProviderKind::Kimi => Self::Kimi { session_id: id },
+            ProviderKind::Devin => Self::Devin { session_id: id },
             ProviderKind::OhMyPi => Self::OhMyPi {
                 session_id: id,
                 session_file: None,
@@ -271,6 +282,7 @@ impl ProviderResumeCursor {
             Self::OpenCode2 { .. } => ProviderKind::OpenCode2,
             Self::Grok { .. } => ProviderKind::Grok,
             Self::Kimi { .. } => ProviderKind::Kimi,
+            Self::Devin { .. } => ProviderKind::Devin,
             Self::OhMyPi { .. } => ProviderKind::OhMyPi,
             Self::Pi { .. } => ProviderKind::Pi,
         }
@@ -287,6 +299,7 @@ impl ProviderResumeCursor {
             | Self::OpenCode2 { session_id, .. }
             | Self::Grok { session_id }
             | Self::Kimi { session_id }
+            | Self::Devin { session_id }
             | Self::OhMyPi { session_id, .. }
             | Self::Pi { session_id, .. } => session_id,
             Self::Codex { thread_id } => thread_id,

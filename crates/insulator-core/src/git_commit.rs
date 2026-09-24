@@ -529,6 +529,15 @@ fn agent_arguments(
             }
             return args;
         }
+        ProviderKind::Devin => {
+            push(&mut args, "--print");
+            push(&mut args, prompt);
+            if let Some(model) = model {
+                push(&mut args, "--model");
+                push(&mut args, model);
+            }
+            return args;
+        }
         // Oh My Pi rejects unknown flags outright, so it gets its own list
         // rather than Pi's: context files are `--no-rules`, and it has no
         // prompt-template or project-trust switch to turn off.
@@ -1051,6 +1060,10 @@ mod tests {
                 ProviderKind::Kimi => {
                     assert!(has_pair(&args, "--prompt", prompt));
                     assert!(has_pair(&args, "--output-format", "text"));
+                    assert!(has_pair(&args, "--model", "model"));
+                }
+                ProviderKind::Devin => {
+                    assert!(has_pair(&args, "--print", prompt));
                     assert!(has_pair(&args, "--model", "model"));
                 }
             }

@@ -60,6 +60,7 @@ enum CommandMessage {
 pub struct AcpDriver {
     commands: smol::channel::Sender<CommandMessage>,
     supports_steer: bool,
+    provider: ProviderKind,
     mode: RuntimeMode,
     computer_use: Option<super::support::HeadlessComputerUseRuntime>,
 }
@@ -70,7 +71,11 @@ struct AcpLaunch {
     env: Vec<(String, String)>,
 }
 
-fn launch_for(provider: ProviderKind, reasoning_effort: Option<&str>) -> anyhow::Result<AcpLaunch> {
+fn launch_for(
+    provider: ProviderKind,
+    reasoning_effort: Option<&str>,
+    model: Option<&str>,
+) -> anyhow::Result<AcpLaunch> {
     match provider {
         ProviderKind::Cursor => Ok(AcpLaunch {
             args: vec!["acp".into()],
@@ -96,6 +101,16 @@ fn launch_for(provider: ProviderKind, reasoning_effort: Option<&str>) -> anyhow:
             args: vec!["acp".into()],
             env: Vec::new(),
         }),
+        ProviderKind::Devin => {
+            let mut args = vec!["acp".into()];
+            if let Some(model) = model {
+                args.extend(["--model".into(), model.to_owned()]);
+            }
+            Ok(AcpLaunch {
+                args,
+                env: Vec::new(),
+            })
+        }
         ProviderKind::OpenCode => Ok(AcpLaunch {
             args: vec!["acp".into()],
             env: Vec::new(),
@@ -144,7 +159,7 @@ impl AcpDriver {
             None => None,
         };
 
-        let launch = launch_for(provider, reasoning_effort.as_deref())?;
+        let launch = launch_for(provider, reasoning_effort.as_deref(), model.as_deref())?;
         let computer_use = (provider == ProviderKind::Grok && computer_use_enabled)
             .then(|| super::support::HeadlessComputerUseRuntime::start(provider, events.clone()))
             .transpose()?;
@@ -200,6 +215,7 @@ impl AcpDriver {
         Ok(Self {
             commands,
             supports_steer: provider != ProviderKind::Fx,
+            provider,
             mode,
             computer_use,
         })
@@ -265,7 +281,7 @@ pub(crate) fn catalog_agent(
     binary: &Path,
     cwd: &Path,
 ) -> anyhow::Result<AcpAgent> {
-    let launch = launch_for(provider, None)?;
+    let launch = launch_for(provider, None, None)?;
     sdk_agent(binary, cwd, launch, None, Arc::new(Mutex::new(Vec::new())))
 }
 
@@ -1067,6 +1083,11 @@ async fn apply_model(
     reasoning_effort: Option<&str>,
     events: &DriverEventSender,
 ) {
+    // Devin applies the model from `devin acp --model`; its ACP server does
+    // not implement the non-standard `session/set_model` request below.
+    if provider == ProviderKind::Devin {
+        return;
+    }
     let Some(model) = model else {
         return;
     };
@@ -1982,7 +2003,7 @@ impl DriverControl for AcpDriver {
     }
 
     fn apply_options(&self, options: SessionOptions) -> bool {
-        if options.mode != self.mode {
+        if options.mode != self.mode || self.provider == ProviderKind::Devin {
             return false;
         }
         self.commands
@@ -2172,9 +2193,36 @@ mod tests {
 
     #[test]
     fn fx_launches_its_documented_acp_subcommand() {
-        let launch = launch_for(ProviderKind::Fx, None).unwrap();
+        let launch = launch_for(ProviderKind::Fx, None, None).unwrap();
         assert_eq!(launch.args, ["acp"]);
         assert!(launch.env.is_empty());
+    }
+
+    #[test]
+    fn changing_devin_options_restarts_the_acp_process() {
+        let (commands, _receiver) = smol::channel::unbounded();
+        let driver = AcpDriver {
+            commands,
+            supports_steer: true,
+            provider: ProviderKind::Devin,
+            mode: RuntimeMode::FullAccess,
+            computer_use: None,
+        };
+        let options = SessionOptions {
+            mode: RuntimeMode::FullAccess,
+            model: Some("opus".into()),
+            reasoning_effort: None,
+            service_tier: None,
+            context_window: None,
+        };
+
+        assert!(!driver.apply_options(options));
+    }
+
+    #[test]
+    fn devin_launch_passes_the_selected_model_to_acp() {
+        let launch = launch_for(ProviderKind::Devin, None, Some("opus")).unwrap();
+        assert_eq!(launch.args, ["acp", "--model", "opus"]);
     }
 
     #[test]
@@ -2474,12 +2522,12 @@ mod tests {
 
     #[test]
     fn grok_launch_passes_reasoning_effort_before_stdio() {
-        let launch = launch_for(ProviderKind::Grok, Some("xhigh")).unwrap();
+        let launch = launch_for(ProviderKind::Grok, Some("xhigh"), None).unwrap();
         assert_eq!(
             launch.args,
             ["agent", "--reasoning-effort", "xhigh", "stdio"]
         );
-        let bare = launch_for(ProviderKind::Grok, None).unwrap();
+        let bare = launch_for(ProviderKind::Grok, None, None).unwrap();
         assert_eq!(bare.args, ["agent", "stdio"]);
     }
 

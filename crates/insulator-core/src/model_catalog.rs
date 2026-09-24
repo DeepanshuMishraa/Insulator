@@ -89,7 +89,9 @@ pub fn fallback_models(provider: ProviderKind) -> Vec<ProviderModel> {
         // Pi, Oh My Pi, and Kimi Code all take their catalog from the user's
         // configured LLM providers. A fabricated fallback would make
         // unavailable models look selectable.
-        ProviderKind::Kimi | ProviderKind::OhMyPi | ProviderKind::Pi => Vec::new(),
+        ProviderKind::Kimi | ProviderKind::Devin | ProviderKind::OhMyPi | ProviderKind::Pi => {
+            Vec::new()
+        }
     }
 }
 
@@ -130,6 +132,7 @@ pub fn discover_catalog(
         ProviderKind::OpenCode2 => crate::opencode2_session::discover_catalog(binary),
         ProviderKind::Grok => (discover_grok_models(binary), None),
         ProviderKind::Kimi => (discover_kimi_models(binary), None),
+        ProviderKind::Devin => (discover_devin_models(binary), None),
         ProviderKind::Pi => (discover_pi_models(binary, PiDialect::Pi), None),
         ProviderKind::OhMyPi => (discover_pi_models(binary, PiDialect::OhMyPi), None),
     };
@@ -603,6 +606,53 @@ fn parse_opencode_models(output: &str) -> Vec<ProviderModel> {
             )
         })
         .collect()
+}
+
+fn discover_devin_models(binary: &Path) -> Vec<ProviderModel> {
+    let mut command = crate::command_env::command(binary);
+    let Ok(output) =
+        crate::command_env::output(command.args(["models", "list", "--format", "json"]))
+    else {
+        return Vec::new();
+    };
+    let Ok(catalog) = serde_json::from_slice::<Value>(&output.stdout) else {
+        return Vec::new();
+    };
+    parse_devin_models(&catalog)
+}
+
+fn parse_devin_models(catalog: &Value) -> Vec<ProviderModel> {
+    fn collect(value: &Value, models: &mut Vec<ProviderModel>) {
+        match value {
+            Value::Array(items) => items.iter().for_each(|item| collect(item, models)),
+            Value::Object(object) => {
+                let id = ["id", "slug", "model"]
+                    .iter()
+                    .find_map(|key| object.get(*key).and_then(Value::as_str));
+                if let Some(id) = id.filter(|id| !id.is_empty()) {
+                    let label = object
+                        .get("name")
+                        .or_else(|| object.get("label"))
+                        .and_then(Value::as_str)
+                        .unwrap_or(id);
+                    let mut model = ProviderModel::new(id, label);
+                    model.is_default = object
+                        .get("default")
+                        .or_else(|| object.get("isDefault"))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    models.push(model);
+                } else {
+                    object.values().for_each(|value| collect(value, models));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut models = Vec::new();
+    collect(catalog, &mut models);
+    models
 }
 
 fn discover_grok_models(binary: &Path) -> Vec<ProviderModel> {
@@ -1355,6 +1405,25 @@ mod tests {
         permissions.set_mode(0o755);
         std::fs::set_permissions(&path, permissions).unwrap();
         path
+    }
+
+    #[test]
+    fn parses_devin_models_from_family_grouped_json() {
+        let models = parse_devin_models(&json!({
+            "families": [{
+                "name": "Anthropic",
+                "models": [
+                    {"id": "opus", "name": "Claude Opus", "default": true},
+                    {"id": "swe", "name": "SWE-2"}
+                ]
+            }]
+        }));
+
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "opus");
+        assert_eq!(models[0].name, "Claude Opus");
+        assert!(models[0].is_default);
+        assert_eq!(models[1].id, "swe");
     }
 
     #[test]

@@ -327,7 +327,7 @@ fn assemble_slash_commands(
         // Harness commands are session-scoped and reported live by the Host,
         // and Kimi Code likewise publishes its whole command set over ACP
         // rather than from files Insulator could scan.
-        ProviderKind::DeepSeek | ProviderKind::Grok | ProviderKind::Kimi => {}
+        ProviderKind::DeepSeek | ProviderKind::Grok | ProviderKind::Kimi | ProviderKind::Devin => {}
     }
     // The cross-tool skill standard, read by Amp and OpenCode among others;
     // Insulator lists it for every provider.
