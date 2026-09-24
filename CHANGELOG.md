@@ -29,7 +29,9 @@ the original feature bullet instead of adding separate entries for them.
 ### Fixed
 
 - Stop scroll-triggered crashes by removing the detached hover-gate wake tasks from scroll handlers
-- Fix right-panel tab closing, drafts, and Windows browser
+- Make the close-tab shortcut close the right-panel Browser, Simulator, and Background Work tabs instead of the main tab behind them; closing the Browser tab drops its page so reopening starts clean
+- Always show a newly created chat in the sidebar
+- Fix right-panel tabs ignoring clicks on Windows and retry the browser view once the window handle exists
 - Fix tab strip dragging and scroll propagation
 
 ## [0.1.8]
