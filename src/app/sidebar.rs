@@ -536,18 +536,21 @@ impl Insulator {
         region: Stateful<Div>,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        // Windows drags from the hit test, not from a mouse-move handler:
-        // `DefWindowProc` moves the window once the region reports itself as
-        // caption, and performs the user's configured double-click action.
-        #[cfg(target_os = "windows")]
-        let region = region.window_control_area(gpui::WindowControlArea::Drag);
-
-        region
+        self.window_move_region(region, cx)
             .on_click(|event, window, _| {
                 if event.click_count() == 2 {
                     crate::platform::titlebar_double_click(window);
                 }
             })
+    }
+
+    fn window_move_region(&self, region: Stateful<Div>, cx: &mut Context<Self>) -> Stateful<Div> {
+        // Windows starts caption drags from hit testing; other platforms use
+        // the armed mouse-move handler below.
+        #[cfg(target_os = "windows")]
+        let region = region.window_control_area(gpui::WindowControlArea::Drag);
+
+        region
             .on_mouse_down_out(cx.listener(|this, _, _, _| {
                 this.header_drag_armed = false;
             }))
@@ -563,9 +566,10 @@ impl Insulator {
                     this.header_drag_armed = false;
                 }),
             )
-            .on_mouse_move(cx.listener(|this, _, window, _| {
+            .on_mouse_move(cx.listener(|this, _, window, cx| {
                 if this.header_drag_armed {
                     this.header_drag_armed = false;
+                    cx.stop_propagation();
                     crate::platform::start_window_move(window);
                 }
             }))
@@ -2879,9 +2883,6 @@ impl Insulator {
                                             .text_color(theme.text)
                                     })
                             })
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                cx.stop_propagation();
-                            })
                             .on_mouse_down(MouseButton::Middle, move |_, _, cx| {
                                 cx.stop_propagation();
                                 let _ = middle_close_insulator.update(cx, |insulator, cx| {
@@ -2990,9 +2991,6 @@ impl Insulator {
                                             .border_color(theme.border)
                                             .text_color(theme.text)
                                     })
-                            })
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                cx.stop_propagation();
                             })
                             .on_mouse_down(MouseButton::Middle, move |_, _, cx| {
                                 cx.stop_propagation();
@@ -3118,9 +3116,6 @@ impl Insulator {
                                             .text_color(theme.text)
                                     })
                             })
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                cx.stop_propagation();
-                            })
                             .on_mouse_down(MouseButton::Middle, move |_, _, cx| {
                                 cx.stop_propagation();
                                 let _ = middle_close_insulator.update(cx, |insulator, cx| {
@@ -3226,41 +3221,47 @@ impl Insulator {
             })
             .child(icon("icons/plus.svg", 12.0, theme.text_secondary));
 
-        div()
-            .id("session-tabs")
-            .h_full()
-            .min_w_0()
-            .flex_shrink(1.0)
-            .flex()
-            .items_center()
-            .child(
-                div()
-                    .id("session-tabs-wrapper")
-                    .relative()
-                    .min_w_0()
-                    .flex_shrink(1.0)
-                    .h_full()
-                    .flex()
-                    .items_center()
-                    .child(
-                        h_flex()
-                            .id("session-tabs-scroll")
-                            .h_full()
-                            .items_center()
-                            .overflow_x_scroll()
-                            .track_scroll(&self.main_tabs_scroll_handle)
-                            .on_scroll_wheel(cx.listener(|this, _, _, cx| {
-                                contain_horizontal_scroll(&this.main_tabs_scroll_handle, cx);
-                            }))
-                            .gap(px(3.0))
-                            .children(tabs),
-                    )
-                    .child(scrollbar::horizontal(
-                        &self.main_tabs_scroll_handle,
-                        &self.main_tabs_scrollbar,
-                    )),
-            )
-            .child(new_tab)
+        self.window_move_region(
+            div()
+                .id("session-tabs")
+                .h_full()
+                .min_w_0()
+                .flex_shrink(1.0)
+                .flex()
+                .items_center()
+                .child(
+                    div()
+                        .id("session-tabs-wrapper")
+                        .relative()
+                        .min_w_0()
+                        .flex_shrink(1.0)
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .child(
+                            h_flex()
+                                .id("session-tabs-scroll")
+                                .h_full()
+                                .items_center()
+                                .overflow_x_scroll()
+                                .track_scroll(&self.main_tabs_scroll_handle)
+                                .on_scroll_wheel(|_, _, cx| {
+                                    // A vertical wheel gesture over the tab strip
+                                    // must not leak into the transcript below.
+                                    cx.stop_propagation();
+                                })
+                                .gap(px(3.0))
+                                .children(tabs),
+                        )
+                        .child(scrollbar::horizontal(
+                            &self.main_tabs_scroll_handle,
+                            &self.main_tabs_scrollbar,
+                        )),
+                )
+                .child(new_tab)
+                .on_scroll_wheel(|_, _, cx| cx.stop_propagation()),
+            cx,
+        )
     }
 
     // ── Empty states ───────────────────────────────────────────────────────
