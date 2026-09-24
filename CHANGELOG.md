@@ -16,13 +16,11 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
-## [0.1.10]
-
-### Fixed
-
-- Stop scroll-triggered crashes by removing the detached hover-gate wake tasks from scroll handlers
-
 ## [0.1.9]
+
+### Added
+
+- Add Devin CLI as an ACP provider with model discovery and session support, including its provider icon
 
 ### Changed
 
@@ -30,7 +28,9 @@ the original feature bullet instead of adding separate entries for them.
 
 ### Fixed
 
-- Keep sidebar, pull-request, and skills row highlights from strobing while a long list scrolls; the hover fill now waits until the list is still, then reappears under the cursor
+- Stop scroll-triggered crashes by removing the detached hover-gate wake tasks from scroll handlers
+- Fix right-panel tab closing, drafts, and Windows browser
+- Fix tab strip dragging and scroll propagation
 
 ## [0.1.8]
 
