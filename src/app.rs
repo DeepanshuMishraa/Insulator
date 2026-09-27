@@ -1196,6 +1196,12 @@ pub struct Insulator {
     /// Cached once at construction for the Daemon settings connection URL;
     /// rendering must not query account or network configuration.
     daemon_hostname: String,
+    /// This machine's Tailscale IPv4, resolved once off the UI thread via
+    /// `tailscale ip -4`. Render reads only this store: `None` while
+    /// `daemon_tailscale_loading` means "not known yet", `None` after it
+    /// settles means Tailscale is unavailable and the LAN hostname applies.
+    daemon_tailscale_ip: Option<String>,
+    daemon_tailscale_loading: bool,
     /// Session details currently being fetched from the daemon. Sidebar rows
     /// stay usable while the selected transcript hydrates asynchronously.
     session_hydrations: HashSet<Uuid>,
@@ -3212,6 +3218,8 @@ impl Insulator {
             Self {
                 daemon,
                 daemon_hostname,
+                daemon_tailscale_ip: None,
+                daemon_tailscale_loading: false,
                 session_hydrations: HashSet::new(),
                 pending_session_activation: None,
                 state,
@@ -3658,6 +3666,11 @@ impl Insulator {
             // And the header's "open project in app" targets, so its menu
             // lists installed apps and icons without ever probing on a frame.
             this.detect_open_in_apps(cx);
+            // The Daemon settings page shows the Tailscale IP so a phone on
+            // the same Tailnet can connect from any network. `tailscale ip`
+            // spawns a subprocess, so it resolves here off the UI thread and
+            // the settings frame reads only the cached store.
+            this.ensure_daemon_tailscale_ip(cx);
         });
         entity
     }

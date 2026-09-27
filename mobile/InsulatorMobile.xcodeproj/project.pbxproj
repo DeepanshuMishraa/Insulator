@@ -1,0 +1,488 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		16C02F12F1B1A2774003E4B4 /* HomeToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB051BE8B9577BBE34645F27 /* HomeToolbar.swift */; };
+		25C298781FC6DBE7430CECBB /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 987735073E84DC1FB9951FA9 /* SettingsView.swift */; };
+		5136BF8C1A2AB49358451EF3 /* PairingPayloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F079997C5923A95F4186B098 /* PairingPayloadTests.swift */; };
+		55DDCA6E28E09FD87C3B15C9 /* CredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2889ADF35AE88969A467C27C /* CredentialStore.swift */; };
+		64CEDB66481D956C78834EB0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B3333B1E589EEF1A322EC0BC /* Assets.xcassets */; };
+		667C40A8258CDCC515FA44C9 /* InsulatorMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCB9EE03071A6FA1B193F8F9 /* InsulatorMobileApp.swift */; };
+		79108ADB92DFA91682B99876 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F7BF570F59575E39C3D7810 /* Theme.swift */; };
+		896F1288C92071CAB69BA6AC /* ConnectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C649A61F166BCC364B8EDB9E /* ConnectionView.swift */; };
+		913EEFE6A28FE446C8C20215 /* JSONValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCEE9132370D838D8EC7478D /* JSONValue.swift */; };
+		9661BC3C837E036EAFF9A804 /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1FC7AFFD62676E2EF1F1236 /* MainView.swift */; };
+		C06C8F8EC0ADFAE014A570E3 /* DaemonClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6087872E79B05831DA86812C /* DaemonClient.swift */; };
+		CB253FD6FE823138DAB77E8F /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 369DAAD694A4389F78897EF4 /* AppModel.swift */; };
+		CC0E4BC8277FEA087FE0C6DE /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9893E96886B37290AE6D323D /* Models.swift */; };
+		CFBE3511AE8F80512CF3093B /* ReconnectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52FBAC43F52379AF2E603D24 /* ReconnectView.swift */; };
+		D31DF5578AA4EBB3C4334D2E /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9A9E83EC29BEA42881C7D55 /* ContentView.swift */; };
+		E51CCBA5364EEB1DC343652C /* ThreadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEDD944FC7B4A8A03322D3C8 /* ThreadView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		64AF71084172C19184FF55BC /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 9E546EF500EEBD8129396204 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 3398107EDC842F578B11A173;
+			remoteInfo = InsulatorMobile;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		1F7BF570F59575E39C3D7810 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		224F085A3C56F8740B6FACCD /* InsulatorMobileTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = InsulatorMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		2889ADF35AE88969A467C27C /* CredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialStore.swift; sourceTree = "<group>"; };
+		28A3296B775E7A960A072FF2 /* InsulatorMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = InsulatorMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		369DAAD694A4389F78897EF4 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		52FBAC43F52379AF2E603D24 /* ReconnectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconnectView.swift; sourceTree = "<group>"; };
+		6087872E79B05831DA86812C /* DaemonClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonClient.swift; sourceTree = "<group>"; };
+		93F9975E0A1D207219BA0A38 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		987735073E84DC1FB9951FA9 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		9893E96886B37290AE6D323D /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		B3333B1E589EEF1A322EC0BC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C649A61F166BCC364B8EDB9E /* ConnectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionView.swift; sourceTree = "<group>"; };
+		C9A9E83EC29BEA42881C7D55 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		DCB9EE03071A6FA1B193F8F9 /* InsulatorMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsulatorMobileApp.swift; sourceTree = "<group>"; };
+		F079997C5923A95F4186B098 /* PairingPayloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingPayloadTests.swift; sourceTree = "<group>"; };
+		F1FC7AFFD62676E2EF1F1236 /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
+		FB051BE8B9577BBE34645F27 /* HomeToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeToolbar.swift; sourceTree = "<group>"; };
+		FCEE9132370D838D8EC7478D /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONValue.swift; sourceTree = "<group>"; };
+		FEDD944FC7B4A8A03322D3C8 /* ThreadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		28C39A23F097BEF2420A0DB8 = {
+			isa = PBXGroup;
+			children = (
+				7810B326BD914AC9C72EC24D /* InsulatorMobile */,
+				2977D3BF9FEF7EBC90887E92 /* InsulatorMobileTests */,
+				78C513CAF8E966401B48787D /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		2977D3BF9FEF7EBC90887E92 /* InsulatorMobileTests */ = {
+			isa = PBXGroup;
+			children = (
+				F079997C5923A95F4186B098 /* PairingPayloadTests.swift */,
+			);
+			path = InsulatorMobileTests;
+			sourceTree = "<group>";
+		};
+		42CDC679BC64A386583EF334 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				9893E96886B37290AE6D323D /* Models.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		7810B326BD914AC9C72EC24D /* InsulatorMobile */ = {
+			isa = PBXGroup;
+			children = (
+				B3333B1E589EEF1A322EC0BC /* Assets.xcassets */,
+				C9A9E83EC29BEA42881C7D55 /* ContentView.swift */,
+				93F9975E0A1D207219BA0A38 /* Info.plist */,
+				DCB9EE03071A6FA1B193F8F9 /* InsulatorMobileApp.swift */,
+				7AFDB9D0C4F8709E0A493523 /* App */,
+				42CDC679BC64A386583EF334 /* Models */,
+				B3D2A80B6D7AEC07205F5684 /* Networking */,
+				FB90599073FB86ACDCA5EDAF /* Views */,
+			);
+			path = InsulatorMobile;
+			sourceTree = "<group>";
+		};
+		78C513CAF8E966401B48787D /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				28A3296B775E7A960A072FF2 /* InsulatorMobile.app */,
+				224F085A3C56F8740B6FACCD /* InsulatorMobileTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		7AFDB9D0C4F8709E0A493523 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				369DAAD694A4389F78897EF4 /* AppModel.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		B3D2A80B6D7AEC07205F5684 /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				2889ADF35AE88969A467C27C /* CredentialStore.swift */,
+				6087872E79B05831DA86812C /* DaemonClient.swift */,
+				FCEE9132370D838D8EC7478D /* JSONValue.swift */,
+			);
+			path = Networking;
+			sourceTree = "<group>";
+		};
+		FB90599073FB86ACDCA5EDAF /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				C649A61F166BCC364B8EDB9E /* ConnectionView.swift */,
+				FB051BE8B9577BBE34645F27 /* HomeToolbar.swift */,
+				F1FC7AFFD62676E2EF1F1236 /* MainView.swift */,
+				52FBAC43F52379AF2E603D24 /* ReconnectView.swift */,
+				987735073E84DC1FB9951FA9 /* SettingsView.swift */,
+				1F7BF570F59575E39C3D7810 /* Theme.swift */,
+				FEDD944FC7B4A8A03322D3C8 /* ThreadView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		3398107EDC842F578B11A173 /* InsulatorMobile */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D7C899EC64BC3DE90B081F97 /* Build configuration list for PBXNativeTarget "InsulatorMobile" */;
+			buildPhases = (
+				CB850AFA6CB2814FB0EB3CD8 /* Sources */,
+				CF4CB6FCF86B4980B2A0D00E /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = InsulatorMobile;
+			packageProductDependencies = (
+			);
+			productName = InsulatorMobile;
+			productReference = 28A3296B775E7A960A072FF2 /* InsulatorMobile.app */;
+			productType = "com.apple.product-type.application";
+		};
+		C43911B4E1F98EA98C896E4A /* InsulatorMobileTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D4F58A0DAD136042A850CCED /* Build configuration list for PBXNativeTarget "InsulatorMobileTests" */;
+			buildPhases = (
+				20C03B813291FD66D64193CB /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				FFEE43FEECB0E1D8C0F5948A /* PBXTargetDependency */,
+			);
+			name = InsulatorMobileTests;
+			packageProductDependencies = (
+			);
+			productName = InsulatorMobileTests;
+			productReference = 224F085A3C56F8740B6FACCD /* InsulatorMobileTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		9E546EF500EEBD8129396204 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+			};
+			buildConfigurationList = 73C606EFCFEBDB0B8A34238D /* Build configuration list for PBXProject "InsulatorMobile" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 28C39A23F097BEF2420A0DB8;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 78C513CAF8E966401B48787D /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				3398107EDC842F578B11A173 /* InsulatorMobile */,
+				C43911B4E1F98EA98C896E4A /* InsulatorMobileTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		CF4CB6FCF86B4980B2A0D00E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				64CEDB66481D956C78834EB0 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		20C03B813291FD66D64193CB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5136BF8C1A2AB49358451EF3 /* PairingPayloadTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CB850AFA6CB2814FB0EB3CD8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CB253FD6FE823138DAB77E8F /* AppModel.swift in Sources */,
+				896F1288C92071CAB69BA6AC /* ConnectionView.swift in Sources */,
+				D31DF5578AA4EBB3C4334D2E /* ContentView.swift in Sources */,
+				55DDCA6E28E09FD87C3B15C9 /* CredentialStore.swift in Sources */,
+				C06C8F8EC0ADFAE014A570E3 /* DaemonClient.swift in Sources */,
+				16C02F12F1B1A2774003E4B4 /* HomeToolbar.swift in Sources */,
+				667C40A8258CDCC515FA44C9 /* InsulatorMobileApp.swift in Sources */,
+				913EEFE6A28FE446C8C20215 /* JSONValue.swift in Sources */,
+				9661BC3C837E036EAFF9A804 /* MainView.swift in Sources */,
+				CC0E4BC8277FEA087FE0C6DE /* Models.swift in Sources */,
+				CFBE3511AE8F80512CF3093B /* ReconnectView.swift in Sources */,
+				25C298781FC6DBE7430CECBB /* SettingsView.swift in Sources */,
+				79108ADB92DFA91682B99876 /* Theme.swift in Sources */,
+				E51CCBA5364EEB1DC343652C /* ThreadView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		FFEE43FEECB0E1D8C0F5948A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 3398107EDC842F578B11A173 /* InsulatorMobile */;
+			targetProxy = 64AF71084172C19184FF55BC /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		328994269D65DE02C6EA4B3A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		64742D30C6433469B53B3B0F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.dipxsy.InsulatorMobileTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/InsulatorMobile.app/InsulatorMobile";
+			};
+			name = Debug;
+		};
+		77F3DADD3F74E9F862CA38A0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.dipxsy.InsulatorMobileTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/InsulatorMobile.app/InsulatorMobile";
+			};
+			name = Release;
+		};
+		BC3A2F587B03B2E140FD569D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = YY5H9WM46P;
+				INFOPLIST_FILE = InsulatorMobile/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.dipxsy.insulatorMobile;
+				PRODUCT_NAME = InsulatorMobile;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		DE199ACDAA62D1FDAE1C954C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = YY5H9WM46P;
+				INFOPLIST_FILE = InsulatorMobile/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.dipxsy.insulatorMobile;
+				PRODUCT_NAME = InsulatorMobile;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		E424689DFC9B8D3E233855CE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		73C606EFCFEBDB0B8A34238D /* Build configuration list for PBXProject "InsulatorMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				328994269D65DE02C6EA4B3A /* Debug */,
+				E424689DFC9B8D3E233855CE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		D4F58A0DAD136042A850CCED /* Build configuration list for PBXNativeTarget "InsulatorMobileTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				64742D30C6433469B53B3B0F /* Debug */,
+				77F3DADD3F74E9F862CA38A0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		D7C899EC64BC3DE90B081F97 /* Build configuration list for PBXNativeTarget "InsulatorMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DE199ACDAA62D1FDAE1C954C /* Debug */,
+				BC3A2F587B03B2E140FD569D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 9E546EF500EEBD8129396204 /* Project object */;
+}

@@ -38,8 +38,7 @@ pub fn start_process() -> anyhow::Result<insulator_client::DaemonSupervisor> {
 
 /// Resolve the local host name once during app construction. Settings can
 /// then show a useful LAN URL without touching the OS from a render frame.
-pub fn local_hostname() -> Option<String> {
-    #[cfg(unix)]
+pub fn local_hostname() -> Option<String> {    #[cfg(unix)]
     {
         let mut buffer = [0_u8; 256];
         let result = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
@@ -61,6 +60,124 @@ pub fn local_hostname() -> Option<String> {
         .filter_map(|name| std::env::var(name).ok())
         .map(|hostname| hostname.trim().to_owned())
         .find(|hostname| !hostname.is_empty())
+}
+
+/// First IPv4 address in `tailscale ip` output, preferring Tailnet (100.x)
+/// addresses. Pure parsing so it stays unit-testable.
+pub fn parse_tailscale_ipv4(output: &str) -> Option<String> {
+    let mut fallback = None;
+    for line in output.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if line.parse::<std::net::Ipv4Addr>().is_ok() {
+            if line.starts_with("100.") {
+                return Some(line.to_owned());
+            }
+            fallback.get_or_insert_with(|| line.to_owned());
+        }
+    }
+    fallback
+}
+
+/// Resolve this machine's Tailscale IPv4.
+///
+/// Primary path reads interface addresses directly (no subprocess, no PATH
+/// lookup — GUI apps do not inherit the shell's PATH, so `tailscale` is
+/// often unresolvable there). `tailscale ip -4` remains as a fallback for
+/// exotic setups. Blocking at worst — invoke from a background executor.
+pub fn tailscale_ipv4() -> Option<String> {
+    local_tailscale_ipv4().or_else(tailscale_cli_ipv4)
+}
+
+/// Tailscale assigns addresses from the shared CGNAT range 100.64.0.0/10.
+/// No other local interface should hold one, so the first match wins.
+#[cfg(unix)]
+fn local_tailscale_ipv4() -> Option<String> {
+    // SAFETY: getifaddrs hands a linked list freed exactly once via the
+    // guard below; each ifa_addr is read only while the list is alive.
+    unsafe {
+        let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
+        if libc::getifaddrs(&mut list) != 0 || list.is_null() {
+            return None;
+        }
+        struct ListGuard(*mut libc::ifaddrs);
+        impl Drop for ListGuard {
+            fn drop(&mut self) {
+                // SAFETY: paired with the successful getifaddrs above.
+                unsafe { libc::freeifaddrs(self.0) };
+            }
+        }
+        let _guard = ListGuard(list);
+        let mut current = list;
+        while !current.is_null() {
+            let entry = &*current;
+            if !entry.ifa_addr.is_null()
+                && (*entry.ifa_addr).sa_family as i32 == libc::AF_INET
+            {
+                let raw = &*(entry.ifa_addr as *const libc::sockaddr_in);
+                // s_addr is network byte order, which is also memory order.
+                let octets = std::net::Ipv4Addr::from(raw.sin_addr.s_addr.to_ne_bytes()).octets();
+                if octets[0] == 100 && (64..=127).contains(&octets[1]) {
+                    return Some(std::net::Ipv4Addr::from(octets).to_string());
+                }
+            }
+            current = (*current).ifa_next;
+        }
+        None
+    }
+}
+
+#[cfg(not(unix))]
+fn local_tailscale_ipv4() -> Option<String> {
+    None
+}
+
+fn tailscale_cli_ipv4() -> Option<String> {
+    // The bare name covers shells and service managers with a full PATH;
+    // the absolute paths cover GUI apps (Homebrew installs).
+    for binary in [
+        "tailscale",
+        "/opt/homebrew/bin/tailscale",
+        "/usr/local/bin/tailscale",
+    ] {
+        let output = std::process::Command::new(binary)
+            .arg("ip")
+            .arg("-4")
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            continue;
+        }
+        if let Some(address) = parse_tailscale_ipv4(&String::from_utf8_lossy(&output.stdout)) {
+            return Some(address);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tailscale_output_prefers_tailnet_ipv4() {
+        assert_eq!(
+            parse_tailscale_ipv4("100.64.245.111\nfd7a:115c:a1e0::4a01:f596\n"),
+            Some("100.64.245.111".into())
+        );
+    }
+
+    #[test]
+    fn tailscale_output_skips_ipv6_and_blanks() {
+        assert_eq!(
+            parse_tailscale_ipv4("\nfd7a:115c:a1e0::1\n100.99.0.2\n"),
+            Some("100.99.0.2".into())
+        );
+    }
+
+    #[test]
+    fn tailscale_output_without_ipv4_resolves_to_none() {
+        assert_eq!(parse_tailscale_ipv4(""), None);
+        assert_eq!(parse_tailscale_ipv4("fd7a:115c:a1e0::1\n"), None);
+    }
 }
 
 fn daemon_executable_path() -> anyhow::Result<PathBuf> {
