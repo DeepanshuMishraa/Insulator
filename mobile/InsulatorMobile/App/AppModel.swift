@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UIKit
 
 @MainActor
 @Observable
@@ -15,11 +16,14 @@ final class AppModel {
     var transcriptRevision = 0
     var connectedAddress: String?
     /// Host of the Mac saved in the Keychain. Non-nil means this iPhone has
-    /// paired before, so a disconnect shows the reconnect screen instead of
-    /// the first-time entry form.
+    /// paired before, so a disconnect shows the reconnect screen instead of the
+    /// first-time entry form.
     var rememberedHost: String?
+    /// Transcript images live on the Mac. Previews are fetched by blob reference
+    /// and cached here so a thumbnail and the full-screen viewer share one read.
+    let attachmentImages: AttachmentImageStore
 
-    @ObservationIgnored private let client = DaemonClient()
+    @ObservationIgnored private let client: DaemonClient
     @ObservationIgnored private var runtimes: [UUID: UUID] = [:]
     @ObservationIgnored private var supportsSteer: [UUID: Bool] = [:]
     @ObservationIgnored private var activityIDs: [UUID: [String: String]] = [:]
@@ -27,11 +31,28 @@ final class AppModel {
     @ObservationIgnored private var disabledProviders: Set<ProviderKind> = []
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var savedPayload: PairingPayload?
+    @ObservationIgnored private var pendingTextDeltas: [String] = []
+    @ObservationIgnored private var pendingReasoningDeltas: [String] = []
+    @ObservationIgnored private var pendingDeltasSessionID: UUID?
+    @ObservationIgnored private var streamCommitTask: Task<Void, Never>?
 
     init() {
+        let client = DaemonClient()
+        self.client = client
+        // The store reads blobs through the client, captured directly so this
+        // does not need a fully initialized `self`.
+        attachmentImages = AttachmentImageStore { reference in
+            try await Self.readBlobData(reference: reference, using: client)
+        }
         client.onNotice = { [weak self] notice in self?.handle(notice) }
         rememberedHost = CredentialStore.load()?.url.host
     }
+
+    /// The Mac forwards one event per provider delta, and every delta re-rendered
+    /// the whole transcript — a Markdown re-parse per token. Deltas are committed
+    /// at a fixed cadence instead, which reads as a faster stream rather than a
+    /// stuttering one.
+    private static let streamCommitInterval = Duration.milliseconds(80)
 
     var installedProbes: [ProviderProbe] {
         ProviderKind.allCases.compactMap { probes[$0] }.filter { $0.installed && !disabledProviders.contains($0.provider) }
@@ -76,6 +97,9 @@ final class AppModel {
     }
 
     func disconnect(forget: Bool = false) {
+        flushStreamDeltas()
+        streamCommitTask?.cancel()
+        streamCommitTask = nil
         client.disconnect()
         connectionState = .disconnected
         projects = []
@@ -102,6 +126,7 @@ final class AppModel {
     }
 
     func open(_ session: AgentSession) async {
+        flushStreamDeltas()
         selectedSession = session
         do {
             try await hydrate(session.id)
@@ -194,19 +219,22 @@ final class AppModel {
         return session
     }
 
-    func send(_ text: String) async {
+    func send(_ text: String, images: [UIImage] = []) async {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, let session = selectedSession else { return }
+        guard !prompt.isEmpty || !images.isEmpty, let session = selectedSession else { return }
         do {
             let runtimeID = try await ensureRuntime(for: session)
+            let attachments = try await upload(images: images)
+            guard let submission = Self.submission(prompt: prompt, attachments: attachments) else { return }
             let messageID = UUID()
             let turnID = UUID()
             appendOptimisticMessage(Message(
                 id: messageID,
                 turnID: turnID,
                 role: .user,
-                content: prompt,
-                displayContent: nil,
+                content: submission.transport,
+                displayContent: submission.display,
+                attachments: attachments,
                 createdAt: UInt64(Date().timeIntervalSince1970),
                 streaming: false
             ))
@@ -216,7 +244,7 @@ final class AppModel {
                 runtimeID: runtimeID,
                 command: .object([
                     "type": .string("prompt"),
-                    "prompt": .string(prompt),
+                    "prompt": .string(submission.transport),
                     "turnId": .uuid(turnID),
                     "messageId": .uuid(messageID),
                 ])
@@ -227,21 +255,88 @@ final class AppModel {
         }
     }
 
-    func steer(_ text: String) async {
+    func steer(_ text: String, images: [UIImage] = []) async {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty,
-              let session = selectedSession,
+        guard let session = selectedSession,
               let runtimeID = runtimes[session.id],
               supportsSteer[session.id] == true else { return }
         do {
+            let attachments = try await upload(images: images)
+            guard let submission = Self.submission(prompt: prompt, attachments: attachments) else { return }
             _ = try await client.request(
                 sessionID: session.id,
                 runtimeID: runtimeID,
-                command: .object(["type": .string("steer"), "prompt": .string(prompt)])
+                command: .object([
+                    "type": .string("steer"),
+                    "prompt": .string(submission.transport),
+                ])
             )
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Splits a submission into the text the provider receives and the text the
+    /// user sees. Attachment mentions are transport-only, exactly as on the Mac,
+    /// so the user bubble shows what was typed and nothing else.
+    private static func submission(
+        prompt: String,
+        attachments: [MessageAttachment]
+    ) -> (transport: String, display: String?)? {
+        let mentions = attachments.map { "@\($0.mention)" }.joined(separator: " ")
+        let transport: String
+        switch (prompt.isEmpty, mentions.isEmpty) {
+        case (true, true): return nil
+        case (false, true): transport = prompt
+        case (true, false): transport = mentions
+        case (false, false): transport = "\(prompt) \(mentions)"
+        }
+        return (transport, attachments.isEmpty ? nil : prompt)
+    }
+
+    /// Uploads picked images into the daemon's blob store and returns the
+    /// attachments the provider will see. The local pixels are cached against
+    /// the new reference so the transcript row draws without another round trip.
+    private func upload(images: [UIImage]) async throws -> [MessageAttachment] {
+        var attachments: [MessageAttachment] = []
+        for image in images {
+            guard let prepared = await ComposerImage.prepare(image) else { continue }
+            let payload = try await client.request(command: .object([
+                "type": .string("storeBlob"),
+                "mimeType": .string(prepared.mimeType),
+                "bytes": .string(prepared.data.base64EncodedString()),
+            ]))
+            guard let reference = payload["reference"]?.string, let path = payload["path"]?.string else {
+                throw ConnectionError.malformedResponse
+            }
+            attachmentImages.adopt(prepared.preview, for: reference)
+            attachments.append(MessageAttachment(
+                path: path,
+                mention: path,
+                name: "image\(attachments.count == 0 ? "" : "-\(attachments.count + 1)").\(prepared.fileExtension)",
+                isDir: false,
+                isImage: true,
+                blobReference: reference
+            ))
+        }
+        return attachments
+    }
+
+    /// Reads blob bytes the daemon owns. The transcript keeps only a reference,
+    /// so this is the only way back to a picture the user sent earlier.
+    private static func readBlobData(reference: String, using client: DaemonClient) async throws -> Data {
+        let payload = try await client.request(command: .object([
+            "type": .string("readBlob"),
+            "reference": .string(reference),
+        ]))
+        guard let encoded = payload["bytes"]?.string else { throw ConnectionError.malformedResponse }
+        // A photo is megabytes of base64; decoding it on the main actor would
+        // drop frames while the user is scrolling.
+        let data = await Task.detached(priority: .userInitiated) {
+            Data(base64Encoded: encoded)
+        }.value
+        guard let data else { throw ConnectionError.malformedResponse }
+        return data
     }
 
     func cancel() async {
@@ -832,10 +927,10 @@ final class AppModel {
             }
         case "textDelta":
             guard let text = payload.string else { return }
-            appendTextDelta(text, to: sessionID)
+            enqueueTextDelta(text, from: sessionID)
         case "reasoningDelta":
             guard let text = payload.string else { return }
-            appendReasoningDelta(text, to: sessionID)
+            enqueueReasoningDelta(text, from: sessionID)
         case "activity":
             guard let activity = activity(from: payload, sessionID: sessionID) else { return }
             appendActivity(activity, to: sessionID)
@@ -846,6 +941,7 @@ final class AppModel {
             updateSession(sessionID) { $0.status = .waiting }
             persistSession(sessionID)
         case "turnFinished":
+            flushStreamDeltas()
             updateSession(sessionID) { session in
                 session.status = .idle
                 session.messages.indices.forEach { session.messages[$0].streaming = false }
@@ -890,6 +986,7 @@ final class AppModel {
             )
             updateSession(sessionID) { $0.status = .waiting }
         case "error":
+            flushStreamDeltas()
             errorMessage = payload.string ?? "The agent reported an error."
             updateSession(sessionID) { session in
                 session.status = .failed
@@ -935,6 +1032,51 @@ final class AppModel {
         session.updatedAt = message.createdAt
         session.lastReplyAt = message.createdAt
         updateSelectedSession(session)
+    }
+
+    private func enqueueTextDelta(_ delta: String, from sessionID: UUID) {
+        pendingTextDeltas.append(delta)
+        noteDeltas(from: sessionID)
+        scheduleStreamCommit()
+    }
+
+    private func enqueueReasoningDelta(_ delta: String, from sessionID: UUID) {
+        pendingReasoningDeltas.append(delta)
+        noteDeltas(from: sessionID)
+        scheduleStreamCommit()
+    }
+
+    /// A run of deltas belongs to one session. Switching mid-run commits what is
+    /// buffered so two turns never merge into the same message.
+    private func noteDeltas(from sessionID: UUID) {
+        if pendingDeltasSessionID != sessionID {
+            flushStreamDeltas()
+        }
+        pendingDeltasSessionID = sessionID
+    }
+
+    private func scheduleStreamCommit() {
+        guard streamCommitTask == nil else { return }
+        streamCommitTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.streamCommitInterval)
+            guard !Task.isCancelled else { return }
+            self?.flushStreamDeltas()
+        }
+    }
+
+    /// Applies buffered deltas in arrival order. Both buffers drain on every
+    /// commit, so a reasoning burst never waits behind a text burst.
+    private func flushStreamDeltas() {
+        streamCommitTask = nil
+        let sessionID = pendingDeltasSessionID
+        let text = pendingTextDeltas.joined()
+        let reasoning = pendingReasoningDeltas.joined()
+        pendingTextDeltas.removeAll()
+        pendingReasoningDeltas.removeAll()
+        pendingDeltasSessionID = nil
+        guard let sessionID else { return }
+        if !text.isEmpty { appendTextDelta(text, to: sessionID) }
+        if !reasoning.isEmpty { appendReasoningDelta(reasoning, to: sessionID) }
     }
 
     private func appendTextDelta(_ delta: String, to sessionID: UUID) {
@@ -1129,5 +1271,125 @@ final class AppModel {
 private extension JSONValue {
     static func decode<T: Encodable>(_ value: T) throws -> JSONValue {
         try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value))
+    }
+}
+
+// MARK: - Attachment Images
+
+/// An image picked in the composer, encoded for upload and kept locally so the
+/// transcript can show it without waiting for a round trip to the Mac.
+struct PreparedAttachmentImage: @unchecked Sendable {
+    let data: Data
+    let mimeType: String
+    let fileExtension: String
+    /// Immutable, decoded once and only read on the main actor.
+    let preview: UIImage
+}
+
+enum ComposerImage {
+    /// A photo straight off the camera is far larger than any provider needs,
+    /// and a megabyte of base64 inside a websocket frame is a visible stall, so
+    /// uploads are downscaled and re-encoded off the main actor first.
+    static let maxDimension: CGFloat = 2048
+    /// Transparent images keep their alpha as PNG, but only while they are small
+    /// enough that the larger file is worth it.
+    private static let maxPNGDimension: CGFloat = 1024
+
+    static func prepare(_ image: UIImage) async -> PreparedAttachmentImage? {
+        let box = UncheckedImageBox(image)
+        return await Task.detached(priority: .userInitiated) {
+            guard box.image.size.width > 0, box.image.size.height > 0 else { return nil }
+            let normalized = redraw(box.image)
+            if hasAlpha(box.image), max(normalized.size.width, normalized.size.height) <= Self.maxPNGDimension,
+               let data = normalized.pngData() {
+                return PreparedAttachmentImage(
+                    data: data,
+                    mimeType: "image/png",
+                    fileExtension: "png",
+                    preview: normalized
+                )
+            }
+            guard let data = normalized.jpegData(compressionQuality: 0.82) else { return nil }
+            return PreparedAttachmentImage(
+                data: data,
+                mimeType: "image/jpeg",
+                fileExtension: "jpg",
+                preview: normalized
+            )
+        }.value
+    }
+
+    /// Redraws at the upload size, which also bakes in the orientation the
+    /// picker handed us so the Mac never sees a sideways photo.
+    private static func redraw(_ image: UIImage) -> UIImage {
+        let longestSide = max(image.size.width, image.size.height)
+        let scale = longestSide > maxDimension ? maxDimension / longestSide : 1
+        let size = CGSize(
+            width: max(1, (image.size.width * scale).rounded()),
+            height: max(1, (image.size.height * scale).rounded())
+        )
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = true
+        return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+
+    private static func hasAlpha(_ image: UIImage) -> Bool {
+        switch image.cgImage?.alphaInfo {
+        case .first, .last, .premultipliedFirst, .premultipliedLast: true
+        default: false
+        }
+    }
+}
+
+/// `UIImage` is immutable once created, so a background executor may redraw and
+/// encode it. UIKit does not declare that, hence the box.
+private struct UncheckedImageBox: @unchecked Sendable {
+    let image: UIImage
+
+    init(_ image: UIImage) {
+        self.image = image
+    }
+}
+
+/// Image bytes for transcript attachments live on the Mac, so a preview is
+/// fetched once per blob reference and kept for the life of the process.
+/// Each thumbnail observes the store itself, so a decode only invalidates the
+/// cell that needed it rather than the whole transcript.
+@MainActor
+@Observable
+final class AttachmentImageStore {
+    private(set) var images: [String: UIImage] = [:]
+    @ObservationIgnored private var inFlight: Set<String> = []
+    @ObservationIgnored private var unreadable: Set<String> = []
+    @ObservationIgnored private let fetchData: (String) async throws -> Data
+
+    init(fetchData: @escaping (String) async throws -> Data) {
+        self.fetchData = fetchData
+    }
+
+    func image(for reference: String) -> UIImage? {
+        images[reference]
+    }
+
+    /// Seeds the cache with the image the user just picked, so the row it will
+    /// appear in draws immediately instead of after an upload round trip.
+    func adopt(_ image: UIImage, for reference: String) {
+        images[reference] = image
+    }
+
+    func load(_ reference: String) {
+        guard images[reference] == nil, !inFlight.contains(reference), !unreadable.contains(reference) else { return }
+        inFlight.insert(reference)
+        Task {
+            defer { inFlight.remove(reference) }
+            guard let data = try? await fetchData(reference), let image = UIImage(data: data) else {
+                unreadable.insert(reference)
+                return
+            }
+            images[reference] = image
+        }
     }
 }

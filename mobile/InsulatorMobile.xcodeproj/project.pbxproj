@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		16C02F12F1B1A2774003E4B4 /* HomeToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB051BE8B9577BBE34645F27 /* HomeToolbar.swift */; };
+		22B1AABFD93CAF659CCD9749 /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = 18446057C64ACBF6B45A07E5 /* Textual */; };
 		25C298781FC6DBE7430CECBB /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 987735073E84DC1FB9951FA9 /* SettingsView.swift */; };
 		5136BF8C1A2AB49358451EF3 /* PairingPayloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F079997C5923A95F4186B098 /* PairingPayloadTests.swift */; };
 		55DDCA6E28E09FD87C3B15C9 /* CredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2889ADF35AE88969A467C27C /* CredentialStore.swift */; };
@@ -15,6 +16,7 @@
 		667C40A8258CDCC515FA44C9 /* InsulatorMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCB9EE03071A6FA1B193F8F9 /* InsulatorMobileApp.swift */; };
 		79108ADB92DFA91682B99876 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F7BF570F59575E39C3D7810 /* Theme.swift */; };
 		896F1288C92071CAB69BA6AC /* ConnectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C649A61F166BCC364B8EDB9E /* ConnectionView.swift */; };
+		8ED6F4BBD80FCC2B03C74023 /* TranscriptTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94516094AC074C0543391F4E /* TranscriptTimelineTests.swift */; };
 		913EEFE6A28FE446C8C20215 /* JSONValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCEE9132370D838D8EC7478D /* JSONValue.swift */; };
 		9661BC3C837E036EAFF9A804 /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1FC7AFFD62676E2EF1F1236 /* MainView.swift */; };
 		C06C8F8EC0ADFAE014A570E3 /* DaemonClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6087872E79B05831DA86812C /* DaemonClient.swift */; };
@@ -44,6 +46,7 @@
 		52FBAC43F52379AF2E603D24 /* ReconnectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconnectView.swift; sourceTree = "<group>"; };
 		6087872E79B05831DA86812C /* DaemonClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonClient.swift; sourceTree = "<group>"; };
 		93F9975E0A1D207219BA0A38 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		94516094AC074C0543391F4E /* TranscriptTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptTimelineTests.swift; sourceTree = "<group>"; };
 		987735073E84DC1FB9951FA9 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		9893E96886B37290AE6D323D /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		B3333B1E589EEF1A322EC0BC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -56,6 +59,17 @@
 		FCEE9132370D838D8EC7478D /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONValue.swift; sourceTree = "<group>"; };
 		FEDD944FC7B4A8A03322D3C8 /* ThreadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		1436EC60C8D2AD36431F02F3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				22B1AABFD93CAF659CCD9749 /* Textual in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		28C39A23F097BEF2420A0DB8 = {
@@ -71,6 +85,7 @@
 			isa = PBXGroup;
 			children = (
 				F079997C5923A95F4186B098 /* PairingPayloadTests.swift */,
+				94516094AC074C0543391F4E /* TranscriptTimelineTests.swift */,
 			);
 			path = InsulatorMobileTests;
 			sourceTree = "<group>";
@@ -148,6 +163,7 @@
 			buildPhases = (
 				CB850AFA6CB2814FB0EB3CD8 /* Sources */,
 				CF4CB6FCF86B4980B2A0D00E /* Resources */,
+				1436EC60C8D2AD36431F02F3 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -155,6 +171,7 @@
 			);
 			name = InsulatorMobile;
 			packageProductDependencies = (
+				18446057C64ACBF6B45A07E5 /* Textual */,
 			);
 			productName = InsulatorMobile;
 			productReference = 28A3296B775E7A960A072FF2 /* InsulatorMobile.app */;
@@ -196,6 +213,9 @@
 			);
 			mainGroup = 28C39A23F097BEF2420A0DB8;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				5F5E98EC2ADE4CCE2F5E583A /* XCRemoteSwiftPackageReference "textual" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 78C513CAF8E966401B48787D /* Products */;
 			projectDirPath = "";
@@ -224,6 +244,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				5136BF8C1A2AB49358451EF3 /* PairingPayloadTests.swift in Sources */,
+				8ED6F4BBD80FCC2B03C74023 /* TranscriptTimelineTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -483,6 +504,25 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		5F5E98EC2ADE4CCE2F5E583A /* XCRemoteSwiftPackageReference "textual" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/gonzalezreal/textual";
+			requirement = {
+				kind = exactVersion;
+				version = 0.5.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		18446057C64ACBF6B45A07E5 /* Textual */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5F5E98EC2ADE4CCE2F5E583A /* XCRemoteSwiftPackageReference "textual" */;
+			productName = Textual;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 9E546EF500EEBD8129396204 /* Project object */;
 }

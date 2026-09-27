@@ -167,22 +167,137 @@ enum MessageRole: String, Codable, Sendable {
     case tool
 }
 
+/// A file carried by a sent message. The bytes stay on the Mac: `blobReference`
+/// is the only handle a client may use to read them back, never `path`.
+struct MessageAttachment: Codable, Hashable, Identifiable, Sendable {
+    let path: String
+    let mention: String
+    let name: String
+    let isDir: Bool
+    let isImage: Bool
+    let blobReference: String?
+
+    var id: String { blobReference ?? path }
+
+    enum CodingKeys: String, CodingKey {
+        case path, mention, name
+        case isDir = "is_dir"
+        case isImage = "is_image"
+        case blobReference = "blob_reference"
+    }
+}
+
 struct Message: Codable, Hashable, Identifiable, Sendable {
     let id: UUID
     let turnID: UUID?
     let role: MessageRole
     var content: String
     let displayContent: String?
+    var attachments: [MessageAttachment]
     let createdAt: UInt64
     var streaming: Bool
 
     var visibleContent: String { displayContent ?? content }
 
+    init(
+        id: UUID,
+        turnID: UUID?,
+        role: MessageRole,
+        content: String,
+        displayContent: String? = nil,
+        attachments: [MessageAttachment] = [],
+        createdAt: UInt64,
+        streaming: Bool
+    ) {
+        self.id = id
+        self.turnID = turnID
+        self.role = role
+        self.content = content
+        self.displayContent = displayContent
+        self.attachments = attachments
+        self.createdAt = createdAt
+        self.streaming = streaming
+    }
+
     enum CodingKeys: String, CodingKey {
         case id, role, content, streaming
         case turnID = "turn_id"
         case displayContent = "display_content"
+        case attachments
         case createdAt = "created_at"
+    }
+
+    /// Hand-decoded because the daemon omits `display_content` and `attachments`
+    /// for plain messages, and a synthesized decoder would treat the missing keys
+    /// as corrupt state.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(UUID.self, forKey: .id)
+        self.turnID = try container.decodeIfPresent(UUID.self, forKey: .turnID)
+        self.role = try container.decode(MessageRole.self, forKey: .role)
+        self.content = try container.decode(String.self, forKey: .content)
+        self.displayContent = try container.decodeIfPresent(String.self, forKey: .displayContent)
+        self.attachments = try container.decodeIfPresent([MessageAttachment].self, forKey: .attachments) ?? []
+        self.createdAt = try container.decode(UInt64.self, forKey: .createdAt)
+        self.streaming = try container.decode(Bool.self, forKey: .streaming)
+    }
+}
+
+/// One renderable row of a transcript: a message, or a block of reasoning and
+/// tool activity that the Mac anchored to a position in that message list.
+enum TranscriptEntry: Identifiable, Hashable, Sendable {
+    case message(Message, footerTime: UInt64?)
+    case block(TranscriptBlock)
+
+    var id: String {
+        switch self {
+        case .message(let message, _): "message-\(message.id.uuidString)"
+        case .block(let block): "block-\(block.id)"
+        }
+    }
+}
+
+/// The transcript flattened into render order.
+///
+/// Built in one pass over the messages and the blocks. The view used to
+/// recompute this on every streamed token by scanning all blocks for all
+/// messages, which made long threads cost more the longer they got.
+struct TranscriptTimeline: Equatable, Sendable {
+    let entries: [TranscriptEntry]
+
+    init(_ session: AgentSession) {
+        var blocksByAnchor: [Int: [TranscriptBlock]] = [:]
+        for block in session.transcriptBlocks {
+            blocksByAnchor[block.afterMessage, default: []].append(block)
+        }
+
+        let completionByTurn = Dictionary(
+            uniqueKeysWithValues: session.turns.compactMap { turn in
+                turn.completedAt.map { (turn.id, $0) }
+            }
+        )
+
+        // Only the last assistant row of a turn carries the footer, so walking
+        // backwards once beats re-checking the tail of every message.
+        var footerByMessage: [UUID: UInt64] = [:]
+        var seenTurns: Set<UUID?> = []
+        for message in session.messages.reversed() where message.role == .assistant {
+            guard seenTurns.insert(message.turnID).inserted,
+                  !message.streaming,
+                  !message.content.isEmpty else { continue }
+            footerByMessage[message.id] = message.turnID.flatMap { completionByTurn[$0] }
+                ?? (session.status.isBusy ? nil : session.lastReplyAt)
+                ?? message.createdAt
+        }
+
+        var entries: [TranscriptEntry] = []
+        entries.reserveCapacity(session.messages.count + session.transcriptBlocks.count)
+        entries.append(contentsOf: (blocksByAnchor[0] ?? []).map { .block($0) })
+        for (index, message) in session.messages.enumerated() {
+            entries.append(.message(message, footerTime: footerByMessage[message.id]))
+            entries.append(contentsOf: (blocksByAnchor[index + 1] ?? []).map { .block($0) })
+        }
+        self.entries = entries
     }
 }
 

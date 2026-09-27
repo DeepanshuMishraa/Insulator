@@ -112,8 +112,9 @@ struct MainView: View {
                 HStack(spacing: 8) {
                     ForEach(HomeTab.allCases, id: \.self) { tab in
                         Button {
+                            UISelectionFeedbackGenerator().selectionChanged()
                             searchFocused = false
-                            withAnimation(.easeInOut(duration: 0.18)) {
+                            withAnimation(.spring(response: 0.24, dampingFraction: 0.78)) {
                                 selectedTab = tab
                             }
                         } label: {
@@ -127,7 +128,7 @@ struct MainView: View {
                                 )
                                 .foregroundStyle(selectedTab == tab ? Color.black : Color.white)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(BouncyButtonStyle(scale: 0.96))
                     }
                     Spacer()
                 }
@@ -166,6 +167,7 @@ struct MainView: View {
                     .background(AppTheme.raised, in: Capsule())
 
                     Button {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                         searchFocused = false
                         createNewChat()
                     } label: {
@@ -182,7 +184,7 @@ struct MainView: View {
                                 .background(Color.white, in: Circle())
                         }
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(BouncyButtonStyle(scale: 0.94))
                     .disabled(isCreatingChat)
                     .accessibilityLabel("New chat")
                 }
@@ -257,6 +259,7 @@ struct MainView: View {
             }
             .listStyle(.plain)
             .scrollDismissesKeyboard(.immediately)
+            .scrollIndicators(.hidden)
             .refreshable { await app.refresh() }
         }
     }
@@ -275,6 +278,7 @@ struct MainView: View {
             }
             .listStyle(.plain)
             .scrollDismissesKeyboard(.immediately)
+            .scrollIndicators(.hidden)
             .refreshable { await app.refresh() }
         }
     }

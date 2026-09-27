@@ -27,5 +27,9 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to your Insulator daemon over your private Tailscale network.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Take photos to attach them to your chat with Insulator.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Select photos from your library to attach them to your chat with Insulator.</string>
 </dict>
 </plist>
