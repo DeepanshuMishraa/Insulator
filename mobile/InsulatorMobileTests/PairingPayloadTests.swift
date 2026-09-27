@@ -56,6 +56,22 @@ struct ConnectionTests {
         #expect(probe.models.first?.reasoningEfforts.first?.label == "High")
     }
 
+    @Test func streamedReasoningKeepsStableTranscriptIdentity() {
+        let turnID = UUID()
+        let initial = TranscriptBlock(
+            afterMessage: 1,
+            turnID: turnID,
+            content: .reasoning(ReasoningBlock(content: "Reading", startedAt: 10, finishedAt: 0))
+        )
+        let updated = TranscriptBlock(
+            afterMessage: 1,
+            turnID: turnID,
+            content: .reasoning(ReasoningBlock(content: "Reading files", startedAt: 10, finishedAt: 0))
+        )
+
+        #expect(initial.id == updated.id)
+    }
+
     @Test func requestEnvelopeMatchesTheDaemonContract() {
         let requestID = UUID(uuid: (1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1))
         let envelope = daemonRequestEnvelope(

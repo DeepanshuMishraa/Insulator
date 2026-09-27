@@ -15,9 +15,10 @@ struct HomeToolbar<RightMenu: View>: ToolbarContent {
                 Image(systemName: "gearshape")
                     .font(.system(size: 18, weight: .medium))
                     .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 40, height: 40)
                     .background(AppTheme.raised, in: Circle())
             }
+            .buttonStyle(.plain)
             .accessibilityLabel("Settings")
         }
         ToolbarItem(placement: .principal) {
@@ -50,9 +51,10 @@ struct HomeToolbar<RightMenu: View>: ToolbarContent {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 17, weight: .medium))
                     .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 40, height: 40)
                     .background(AppTheme.raised, in: Circle())
             }
+            .buttonStyle(.plain)
             .accessibilityLabel("More actions")
         }
     }

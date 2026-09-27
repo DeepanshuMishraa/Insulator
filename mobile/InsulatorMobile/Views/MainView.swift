@@ -1,95 +1,197 @@
 import SwiftUI
 
+enum HomeTab: String, CaseIterable {
+    case projects = "Projects"
+    case chats = "Chats"
+}
+
 struct MainView: View {
     @Bindable var app: AppModel
+    @State private var selectedTab: HomeTab = .projects
     @State private var search = ""
-    @State private var showsNewTask = false
     @State private var showsSettings = false
     @State private var confirmsForget = false
+    @State private var isCreatingChat = false
+    @State private var expandedProjects: Set<UUID> = []
     @State private var path: [UUID] = []
+    @FocusState private var searchFocused: Bool
 
     private var filteredSessions: [AgentSession] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return app.sessions }
-        return app.sessions.filter { session in
+        let sorted = app.sessions.sorted { sessionRecency($0) > sessionRecency($1) }
+        guard !query.isEmpty else { return sorted }
+        return sorted.filter { session in
             session.displayTitle.localizedStandardContains(query)
                 || app.project(for: session)?.name.localizedStandardContains(query) == true
                 || session.provider.name.localizedStandardContains(query)
         }
     }
 
+    private var filteredProjects: [Project] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return app.projects }
+        return app.projects.filter { project in
+            project.name.localizedStandardContains(query)
+                || project.path.localizedStandardContains(query)
+                || sessions(for: project).contains { session in
+                    session.displayTitle.localizedStandardContains(query)
+                        || session.provider.name.localizedStandardContains(query)
+                }
+        }
+    }
+
     var body: some View {
         NavigationStack(path: $path) {
             VStack(spacing: 0) {
-                Group {
-                    if app.isLoading && app.sessions.isEmpty {
-                        ProgressView("Loading tasks…")
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if filteredSessions.isEmpty && search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        ContentUnavailableView {
-                            Label("No tasks", systemImage: "bubble.left.and.text.bubble.right")
-                        } description: {
-                            Text("Start a task on this iPhone or in Insulator Desktop.")
-                        } actions: {
-                            Button("New task") { showsNewTask = true }
-                                .buttonStyle(.borderedProminent)
+                // Custom Top Header Bar (No system navigation bar chrome = zero double buttons)
+                HStack(alignment: .center) {
+                    Button {
+                        showsSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(AppTheme.raised, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Settings")
+
+                    Spacer()
+
+                    VStack(spacing: 3) {
+                        Text("Insulator")
+                            .font(.title3.bold())
+                            .foregroundStyle(.white)
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(app.isConnected ? AppTheme.accent : Color.secondary)
+                                .frame(width: 6, height: 6)
+                                .accessibilityHidden(true)
+                            Image(systemName: "laptopcomputer")
+                                .font(.caption2)
+                                .foregroundStyle(AppTheme.secondary)
+                                .accessibilityHidden(true)
+                            Text(app.displayHost ?? "No Mac paired")
+                                .font(.caption)
+                                .foregroundStyle(AppTheme.secondary)
+                                .lineLimit(1)
                         }
-                    } else if filteredSessions.isEmpty {
-                        ContentUnavailableView.search
-                    } else {
-                        List(filteredSessions) { session in
-                            NavigationLink(value: session.id) {
-                                SessionRow(session: session, project: app.project(for: session))
+                    }
+
+                    Spacer()
+
+                    Menu {
+                        Button {
+                            Task { await app.reconnect() }
+                        } label: {
+                            Label("Reconnect", systemImage: "arrow.clockwise")
+                        }
+                        Button(role: .destructive) {
+                            confirmsForget = true
+                        } label: {
+                            Label("Forget Mac", systemImage: "trash")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(AppTheme.raised, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("More actions")
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 8)
+                .contentShape(Rectangle())
+                .simultaneousGesture(TapGesture().onEnded { searchFocused = false })
+
+                // Tab switcher (Projects / Chats)
+                HStack(spacing: 8) {
+                    ForEach(HomeTab.allCases, id: \.self) { tab in
+                        Button {
+                            searchFocused = false
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                selectedTab = tab
                             }
-                            .listRowBackground(AppTheme.background)
+                        } label: {
+                            Text(tab.rawValue)
+                                .font(.system(size: 15, weight: .medium))
+                                .padding(.horizontal, 18)
+                                .padding(.vertical, 8)
+                                .background(
+                                    selectedTab == tab ? Color.white : AppTheme.raised,
+                                    in: Capsule()
+                                )
+                                .foregroundStyle(selectedTab == tab ? Color.black : Color.white)
                         }
-                        .listStyle(.plain)
-                        .refreshable { await app.refresh() }
+                        .buttonStyle(.plain)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+
+                Group {
+                    if app.isLoading && app.sessions.isEmpty && app.projects.isEmpty {
+                        ProgressView("Loading…")
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if selectedTab == .projects {
+                        projectsList
+                    } else {
+                        chatsList
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(AppTheme.background)
 
-                HStack(spacing: 10) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(AppTheme.secondary)
-                    TextField("Search tasks", text: $search)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .foregroundStyle(.white)
+                // Bottom Bar: Search Chats capsule + New Chat button
+                HStack(spacing: 12) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 16))
+                            .foregroundStyle(AppTheme.secondary)
+                        TextField(selectedTab == .projects ? "Search Projects" : "Search Chats", text: $search)
+                            .focused($searchFocused)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.search)
+                            .onSubmit { searchFocused = false }
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 16)
+                    .frame(height: 52)
+                    .background(AppTheme.raised, in: Capsule())
+
+                    Button {
+                        searchFocused = false
+                        createNewChat()
+                    } label: {
+                        if isCreatingChat {
+                            ProgressView()
+                                .tint(.black)
+                                .frame(width: 52, height: 52)
+                                .background(Color.white, in: Circle())
+                        } else {
+                            Image(systemName: "square.and.pencil")
+                                .font(.system(size: 20, weight: .semibold))
+                                .foregroundStyle(.black)
+                                .frame(width: 52, height: 52)
+                                .background(Color.white, in: Circle())
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isCreatingChat)
+                    .accessibilityLabel("New chat")
                 }
-                .padding(.horizontal, 16)
-                .frame(minHeight: 52)
-                .background(AppTheme.raised, in: Capsule())
                 .padding(.horizontal, 16)
                 .padding(.bottom, 8)
                 .background(AppTheme.background)
             }
             .background(AppTheme.background)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                HomeToolbar(
-                    host: app.displayHost,
-                    isConnected: app.isConnected,
-                    onGear: { showsSettings = true }
-                ) {
-                    Button {
-                        showsNewTask = true
-                    } label: {
-                        Label("New task", systemImage: "square.and.pencil")
-                    }
-                    Button {
-                        Task { await app.reconnect() }
-                    } label: {
-                        Label("Reconnect", systemImage: "arrow.clockwise")
-                    }
-                    Button(role: .destructive) {
-                        confirmsForget = true
-                    } label: {
-                        Label("Forget Mac", systemImage: "trash")
-                    }
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
             .confirmationDialog("Forget this Mac?", isPresented: $confirmsForget, titleVisibility: .visible) {
                 Button("Forget Mac", role: .destructive) {
                     app.disconnect(forget: true)
@@ -105,17 +207,164 @@ struct MainView: View {
                         await app.open(session)
                     }
             }
-            .sheet(isPresented: $showsNewTask) {
-                NewTaskView(app: app) { session in
-                    showsNewTask = false
-                    path.append(session.id)
-                }
-            }
             .sheet(isPresented: $showsSettings) {
                 SettingsView(app: app)
             }
         }
         .tint(.white)
+    }
+
+    @ViewBuilder
+    private var projectsList: some View {
+        if filteredProjects.isEmpty {
+            emptyState(title: search.isEmpty ? "No projects" : "No matching projects")
+        } else {
+            List {
+                ForEach(filteredProjects) { project in
+                    Section {
+                        Button {
+                            searchFocused = false
+                            withAnimation(.snappy) {
+                                if expandedProjects.contains(project.id) {
+                                    expandedProjects.remove(project.id)
+                                } else {
+                                    expandedProjects.insert(project.id)
+                                }
+                            }
+                        } label: {
+                            ProjectRow(
+                                project: project,
+                                chatCount: sessions(for: project).count,
+                                isExpanded: expandedProjects.contains(project.id) || !searchQuery.isEmpty
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(AppTheme.background)
+                        .accessibilityValue(expandedProjects.contains(project.id) || !searchQuery.isEmpty ? "Expanded" : "Collapsed")
+
+                        if expandedProjects.contains(project.id) || !searchQuery.isEmpty {
+                            ForEach(visibleSessions(for: project)) { session in
+                                NavigationLink(value: session.id) {
+                                    SessionRow(session: session, project: project)
+                                        .padding(.leading, 16)
+                                }
+                                .simultaneousGesture(TapGesture().onEnded { searchFocused = false })
+                                .listRowBackground(AppTheme.background)
+                            }
+                        }
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .scrollDismissesKeyboard(.immediately)
+            .refreshable { await app.refresh() }
+        }
+    }
+
+    @ViewBuilder
+    private var chatsList: some View {
+        if filteredSessions.isEmpty {
+            emptyState(title: search.isEmpty ? "No chats" : "No matching chats")
+        } else {
+            List(filteredSessions) { session in
+                NavigationLink(value: session.id) {
+                    SessionRow(session: session, project: app.project(for: session))
+                }
+                .simultaneousGesture(TapGesture().onEnded { searchFocused = false })
+                .listRowBackground(AppTheme.background)
+            }
+            .listStyle(.plain)
+            .scrollDismissesKeyboard(.immediately)
+            .refreshable { await app.refresh() }
+        }
+    }
+
+    private func emptyState(title: String) -> some View {
+        Text(title)
+            .font(.system(size: 15))
+            .foregroundStyle(AppTheme.secondary)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(16)
+            .contentShape(Rectangle())
+            .onTapGesture { searchFocused = false }
+    }
+
+    private var searchQuery: String {
+        search.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func visibleSessions(for project: Project) -> [AgentSession] {
+        let projectSessions = sessions(for: project)
+        guard !searchQuery.isEmpty,
+              !project.name.localizedStandardContains(searchQuery),
+              !project.path.localizedStandardContains(searchQuery) else { return projectSessions }
+        return projectSessions.filter {
+            $0.displayTitle.localizedStandardContains(searchQuery)
+                || $0.provider.name.localizedStandardContains(searchQuery)
+        }
+    }
+
+    private func sessions(for project: Project) -> [AgentSession] {
+        app.sessions
+            .filter { $0.projectID == project.id }
+            .sorted { sessionRecency($0) > sessionRecency($1) }
+    }
+
+    private func sessionRecency(_ session: AgentSession) -> UInt64 {
+        session.lastReplyAt ?? session.createdAt
+    }
+
+    private func createNewChat() {
+        guard !isCreatingChat else { return }
+        isCreatingChat = true
+        Task {
+            defer { isCreatingChat = false }
+            do {
+                let session = try await app.createNewSession()
+                path.append(session.id)
+            } catch {
+                app.errorMessage = error.localizedDescription
+            }
+        }
+    }
+}
+
+private struct ProjectRow: View {
+    let project: Project
+    let chatCount: Int
+    let isExpanded: Bool
+
+    var body: some View {
+        HStack(spacing: 13) {
+            Image(systemName: "folder")
+                .font(.system(size: 17, weight: .medium))
+                .frame(width: 36, height: 36)
+                .background(AppTheme.raised, in: Circle())
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(project.name)
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+                Text(project.path)
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            Text("\(chatCount)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(AppTheme.secondary)
+                .accessibilityLabel("\(chatCount) chats")
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(AppTheme.secondary)
+                .rotationEffect(.degrees(isExpanded ? 90 : 0))
+        }
+        .padding(.vertical, 6)
     }
 }
 
@@ -139,7 +388,7 @@ private struct SessionRow: View {
                     .font(.body.weight(.medium))
                     .lineLimit(1)
                 HStack(spacing: 6) {
-                    Text(project?.name ?? "Unknown project")
+                    Text(project?.name ?? "Quick Chat")
                     Text("·")
                     Text(session.provider.name)
                 }
@@ -157,135 +406,5 @@ private struct SessionRow: View {
             }
         }
         .padding(.vertical, 6)
-    }
-}
-
-private struct NewTaskView: View {
-    @Bindable var app: AppModel
-    @Environment(\.dismiss) private var dismiss
-    let onCreate: (AgentSession) -> Void
-
-    @State private var projectID: UUID?
-    @State private var provider: ProviderKind = .pi
-    @State private var modelID: String?
-    @State private var mode: RuntimeMode = .ask
-    @State private var reasoningEffort: String?
-    @State private var isCreating = false
-
-    private var selectedProject: Project? {
-        app.projects.first { $0.id == projectID }
-    }
-
-    private var availableModels: [ProviderModel] { app.models(for: provider) }
-
-    private var selectedModel: ProviderModel? {
-        availableModels.first { $0.id == modelID }
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Project") {
-                    Picker("Project", selection: $projectID) {
-                        Text("Choose a project").tag(UUID?.none)
-                        ForEach(app.projects) { project in
-                            Text(project.name).tag(Optional(project.id))
-                        }
-                    }
-                }
-
-                Section("Agent") {
-                    Picker("Provider", selection: $provider) {
-                        ForEach(app.installedProbes) { probe in
-                            Label {
-                                Text(probe.provider.name)
-                            } icon: {
-                                Image(probe.provider.iconName)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fit)
-                                    .frame(width: 18, height: 18)
-                            }
-                            .tag(probe.provider)
-                        }
-                    }
-                    .onChange(of: provider) { _, newProvider in selectDefaults(for: newProvider) }
-
-                    if !availableModels.isEmpty {
-                        Picker("Model", selection: $modelID) {
-                            Text("Provider default").tag(String?.none)
-                            ForEach(availableModels) { model in
-                                Text(model.name).tag(Optional(model.id))
-                            }
-                        }
-                    }
-
-                    Picker("Access", selection: $mode) {
-                        ForEach(RuntimeMode.allCases) { mode in
-                            Text(mode.name).tag(mode)
-                        }
-                    }
-
-                    if let model = selectedModel, !model.reasoningEfforts.isEmpty {
-                        Picker("Reasoning", selection: $reasoningEffort) {
-                            ForEach(model.reasoningEfforts) { effort in
-                                Text(effort.label).tag(Optional(effort.id))
-                            }
-                        }
-                    }
-                }
-            }
-            .navigationTitle("New task")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(isCreating ? "Creating…" : "Create") {
-                        create()
-                    }
-                    .disabled(selectedProject == nil || isCreating || app.probes[provider]?.installed != true)
-                }
-            }
-            .task {
-                projectID = projectID ?? app.projects.first?.id
-                if app.probes[provider]?.installed != true,
-                   let first = app.installedProbes.first?.provider {
-                    provider = first
-                }
-                selectDefaults(for: provider)
-            }
-        }
-    }
-
-    private func selectDefaults(for provider: ProviderKind) {
-        let models = app.models(for: provider)
-        let model = models.first(where: \.isDefault) ?? models.first
-        modelID = model?.id
-        reasoningEffort = model?.defaultReasoningEffort
-    }
-
-    private func create() {
-        guard let project = selectedProject else { return }
-        isCreating = true
-        Task {
-            do {
-                let session = try await app.createSession(
-                    project: project,
-                    provider: provider,
-                    model: selectedModel,
-                    mode: mode,
-                    reasoningEffort: reasoningEffort,
-                    serviceTier: selectedModel?.defaultServiceTier,
-                    contextWindow: selectedModel?.defaultContextWindow,
-                    agentPreset: app.probes[provider]?.agentPresets.first(where: \.isDefault)?.id
-                )
-                onCreate(session)
-                dismiss()
-            } catch {
-                app.errorMessage = error.localizedDescription
-                isCreating = false
-            }
-        }
     }
 }

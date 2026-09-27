@@ -12,6 +12,7 @@ final class AppModel {
     var pendingPermission: PendingPermission?
     var errorMessage: String?
     var isLoading = false
+    var transcriptRevision = 0
     var connectedAddress: String?
     /// Host of the Mac saved in the Keychain. Non-nil means this iPhone has
     /// paired before, so a disconnect shows the reconnect screen instead of
@@ -21,6 +22,7 @@ final class AppModel {
     @ObservationIgnored private let client = DaemonClient()
     @ObservationIgnored private var runtimes: [UUID: UUID] = [:]
     @ObservationIgnored private var supportsSteer: [UUID: Bool] = [:]
+    @ObservationIgnored private var activityIDs: [UUID: [String: String]] = [:]
     @ObservationIgnored private var binaryOverrides: [ProviderKind: String] = [:]
     @ObservationIgnored private var disabledProviders: Set<ProviderKind> = []
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
@@ -81,6 +83,7 @@ final class AppModel {
         probes = [:]
         selectedSession = nil
         runtimes = [:]
+        activityIDs = [:]
         connectedAddress = nil
         if forget {
             CredentialStore.clear()
@@ -108,6 +111,40 @@ final class AppModel {
         }
     }
 
+    func createNewSession(project: Project? = nil) async throws -> AgentSession {
+        let resolvedProject: Project
+        if let project {
+            resolvedProject = project
+        } else if let first = projects.first {
+            resolvedProject = first
+        } else {
+            let defaultProject = Project(
+                id: UUID(),
+                name: "Quick Chat",
+                path: "~",
+                createdAt: UInt64(Date().timeIntervalSince1970)
+            )
+            projects = [defaultProject]
+            resolvedProject = defaultProject
+        }
+
+        let provider = installedProbes.first?.provider ?? .pi
+        let availableModels = models(for: provider)
+        let model = availableModels.first(where: \.isDefault) ?? availableModels.first
+        let preset = probes[provider]?.agentPresets.first(where: \.isDefault)?.id
+
+        return try await createSession(
+            project: resolvedProject,
+            provider: provider,
+            model: model,
+            mode: .ask,
+            reasoningEffort: model?.defaultReasoningEffort,
+            serviceTier: model?.defaultServiceTier,
+            contextWindow: model?.defaultContextWindow,
+            agentPreset: preset
+        )
+    }
+
     func createSession(
         project: Project,
         provider: ProviderKind,
@@ -121,7 +158,7 @@ final class AppModel {
         let now = UInt64(Date().timeIntervalSince1970)
         let session = AgentSession(
             id: UUID(),
-            title: "New task",
+            title: "New thread",
             autoTitle: nil,
             projectID: project.id,
             provider: provider,
@@ -137,12 +174,18 @@ final class AppModel {
             lastReplyAt: nil,
             providerCursor: nil,
             messages: [],
-            transcriptBlocks: []
+            transcriptBlocks: [],
+            turns: []
         )
+        var updatedProjects = projects
+        if !updatedProjects.contains(where: { $0.id == project.id }) {
+            updatedProjects.append(project)
+            projects = updatedProjects
+        }
         let encodedSession = try JSONValue.decode(session)
         _ = try await client.request(command: .object([
             "type": .string("saveTaskState"),
-            "projects": .array(try projects.map { try JSONValue.decode($0) }),
+            "projects": .array(try updatedProjects.map { try JSONValue.decode($0) }),
             "liveSessionIds": .array([]),
             "sessions": .array([encodedSession]),
         ]))
@@ -167,6 +210,7 @@ final class AppModel {
                 createdAt: UInt64(Date().timeIntervalSince1970),
                 streaming: false
             ))
+            try await saveSession(session.id)
             _ = try await client.request(
                 sessionID: session.id,
                 runtimeID: runtimeID,
@@ -225,6 +269,7 @@ final class AppModel {
                 ])
             )
             pendingPermission = nil
+            updateSession(permission.sessionID) { $0.status = .working }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -246,30 +291,299 @@ final class AppModel {
         selectedSession = session
         replaceInSessionList(session)
 
-        guard let runtimeID = runtimes[session.id] else { return }
-        do {
-            _ = try await client.request(
-                sessionID: session.id,
-                runtimeID: runtimeID,
-                command: .object([
-                    "type": .string("applyOptions"),
-                    "options": .object([
-                        "mode": .string(mode.rawValue),
-                        "model": .optional(model?.id),
-                        "reasoningEffort": .optional(reasoningEffort),
-                        "serviceTier": .optional(serviceTier),
-                        "contextWindow": .optional(contextWindow),
-                    ]),
-                ])
-            )
-        } catch {
-            errorMessage = error.localizedDescription
-            scheduleHydrate(session.id, delay: 0)
+        if let runtimeID = runtimes[session.id] {
+            do {
+                _ = try await client.request(
+                    sessionID: session.id,
+                    runtimeID: runtimeID,
+                    command: .object([
+                        "type": .string("applyOptions"),
+                        "options": .object([
+                            "mode": .string(mode.rawValue),
+                            "model": .optional(model?.id),
+                            "reasoningEffort": .optional(reasoningEffort),
+                            "serviceTier": .optional(serviceTier),
+                            "contextWindow": .optional(contextWindow),
+                        ]),
+                    ])
+                )
+                try await saveSession(session.id)
+            } catch {
+                errorMessage = error.localizedDescription
+                scheduleHydrate(session.id, delay: 0)
+            }
+        } else {
+            do {
+                _ = try await client.request(command: .object([
+                    "type": .string("saveTaskState"),
+                    "projects": .array(try projects.map { try JSONValue.decode($0) }),
+                    "liveSessionIds": .array([]),
+                    "sessions": .array([try JSONValue.decode(session)]),
+                ]))
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
+    func updateSessionProject(_ sessionID: UUID, projectID: UUID) async {
+        guard var session = session(withID: sessionID) else { return }
+        session.projectID = projectID
+        if selectedSession?.id == sessionID {
+            selectedSession = session
+        }
+        replaceInSessionList(session)
+        do {
+            _ = try await client.request(command: .object([
+                "type": .string("saveTaskState"),
+                "projects": .array(try projects.map { try JSONValue.decode($0) }),
+                "liveSessionIds": .array([]),
+                "sessions": .array([try JSONValue.decode(session)]),
+            ]))
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func updateSessionProvider(_ sessionID: UUID, provider: ProviderKind) async {
+        guard var session = session(withID: sessionID) else { return }
+        let availableModels = models(for: provider)
+        let defaultModel = availableModels.first(where: \.isDefault) ?? availableModels.first
+        session.provider = provider
+        session.model = defaultModel?.id
+        session.reasoningEffort = defaultModel?.defaultReasoningEffort
+        session.serviceTier = defaultModel?.defaultServiceTier
+        session.contextWindow = defaultModel?.defaultContextWindow
+        session.agentPreset = probes[provider]?.agentPresets.first(where: \.isDefault)?.id
+        session.updatedAt = UInt64(Date().timeIntervalSince1970)
+        if selectedSession?.id == sessionID {
+            selectedSession = session
+        }
+        replaceInSessionList(session)
+        do {
+            _ = try await client.request(command: .object([
+                "type": .string("saveTaskState"),
+                "projects": .array(try projects.map { try JSONValue.decode($0) }),
+                "liveSessionIds": .array([]),
+                "sessions": .array([try JSONValue.decode(session)]),
+            ]))
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func updateSessionMode(_ sessionID: UUID, mode: RuntimeMode) async {
+        guard let session = session(withID: sessionID) else { return }
+        let currentModel = models(for: session.provider).first(where: { $0.id == session.model })
+        await updateOptions(
+            model: currentModel,
+            mode: mode,
+            reasoningEffort: session.reasoningEffort,
+            serviceTier: session.serviceTier,
+            contextWindow: session.contextWindow
+        )
+    }
+
+    func updateSessionModel(_ sessionID: UUID, model: ProviderModel) async {
+        guard let session = session(withID: sessionID) else { return }
+        await updateOptions(
+            model: model,
+            mode: session.runtimeMode,
+            reasoningEffort: model.defaultReasoningEffort ?? session.reasoningEffort,
+            serviceTier: model.defaultServiceTier ?? session.serviceTier,
+            contextWindow: model.defaultContextWindow ?? session.contextWindow
+        )
+    }
+
+    func updateSessionReasoning(_ sessionID: UUID, reasoningEffort: String?) async {
+        guard let session = session(withID: sessionID) else { return }
+        let currentModel = models(for: session.provider).first(where: { $0.id == session.model })
+        await updateOptions(
+            model: currentModel,
+            mode: session.runtimeMode,
+            reasoningEffort: reasoningEffort,
+            serviceTier: session.serviceTier,
+            contextWindow: session.contextWindow
+        )
+    }
+
+    func toggleFastMode(_ sessionID: UUID) async {
+        guard let session = session(withID: sessionID) else { return }
+        let newTier: String? = session.serviceTier == "fast" ? nil : "fast"
+        let currentModel = models(for: session.provider).first(where: { $0.id == session.model })
+        await updateOptions(
+            model: currentModel,
+            mode: session.runtimeMode,
+            reasoningEffort: session.reasoningEffort,
+            serviceTier: newTier,
+            contextWindow: session.contextWindow
+        )
+    }
+
+    func togglePlanMode(_ sessionID: UUID) async {
+        guard var session = session(withID: sessionID) else { return }
+        let currentPreset = session.agentPreset
+        let newPreset: String? = currentPreset == "plan" ? nil : "plan"
+        session.agentPreset = newPreset
+        if selectedSession?.id == sessionID {
+            selectedSession = session
+        }
+        replaceInSessionList(session)
+        do {
+            _ = try await client.request(command: .object([
+                "type": .string("saveTaskState"),
+                "projects": .array(try projects.map { try JSONValue.decode($0) }),
+                "liveSessionIds": .array([]),
+                "sessions": .array([try JSONValue.decode(session)]),
+            ]))
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func deleteSession(_ sessionID: UUID) async {
+        guard let session = session(withID: sessionID) else { return }
+        var tombstone = session
+        tombstone.title = "__removed__"
+        sessions.removeAll { $0.id == sessionID }
+        if selectedSession?.id == sessionID {
+            selectedSession = nil
+        }
+        do {
+            _ = try await client.request(command: .object([
+                "type": .string("saveTaskState"),
+                "projects": .array(try projects.map { try JSONValue.decode($0) }),
+                "liveSessionIds": .array([]),
+                "sessions": .array([try JSONValue.decode(tombstone)]),
+            ]))
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func renameSession(_ sessionID: UUID, title: String) async {
+        guard var session = session(withID: sessionID) else { return }
+        session.title = title
+        if selectedSession?.id == sessionID {
+            selectedSession = session
+        }
+        replaceInSessionList(session)
+        do {
+            _ = try await client.request(command: .object([
+                "type": .string("saveTaskState"),
+                "projects": .array(try projects.map { try JSONValue.decode($0) }),
+                "liveSessionIds": .array([]),
+                "sessions": .array([try JSONValue.decode(session)]),
+            ]))
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    var allAvailableProviders: [ProviderKind] {
+        var providers: [ProviderKind] = []
+        for probe in installedProbes {
+            providers.append(probe.provider)
+        }
+        for kind in [ProviderKind.claude, .codex, .deepSeek, .grok, .pi, .cursor, .kimi, .devin, .openCode, .openCode2, .fx, .ohMyPi, .amp] {
+            if !providers.contains(kind) {
+                providers.append(kind)
+            }
+        }
+        return providers
+    }
+
     func models(for provider: ProviderKind) -> [ProviderModel] {
-        probes[provider]?.models ?? []
+        let discovered = probes[provider]?.models ?? []
+        if !discovered.isEmpty {
+            return discovered
+        }
+        return Self.fallbackModels(for: provider)
+    }
+
+    static let standardReasoning: [ProviderModelOption] = [
+        ProviderModelOption(id: "low", label: "Low", description: nil),
+        ProviderModelOption(id: "medium", label: "Medium", description: nil),
+        ProviderModelOption(id: "high", label: "High", description: nil),
+        ProviderModelOption(id: "max", label: "Max", description: nil)
+    ]
+
+    static func fallbackModels(for provider: ProviderKind) -> [ProviderModel] {
+        switch provider {
+        case .codex:
+            return [
+                ProviderModel(id: "gpt-5.6-sol", name: "GPT-5.6 Sol", subProvider: "OpenAI", isDefault: true, reasoningEfforts: standardReasoning, defaultReasoningEffort: "medium", serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "gpt-5.6-terra", name: "GPT-5.6 Terra", subProvider: "OpenAI", isDefault: false, reasoningEfforts: standardReasoning, defaultReasoningEffort: "medium", serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "gpt-5.6-luna", name: "GPT-5.6 Luna", subProvider: "OpenAI", isDefault: false, reasoningEfforts: standardReasoning, defaultReasoningEffort: "medium", serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "gpt-5.5", name: "GPT-5.5", subProvider: "OpenAI", isDefault: false, reasoningEfforts: standardReasoning, defaultReasoningEffort: "medium", serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "gpt-5.4", name: "GPT-5.4", subProvider: "OpenAI", isDefault: false, reasoningEfforts: standardReasoning, defaultReasoningEffort: "medium", serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "gpt-4o", name: "GPT-4o", subProvider: "OpenAI", isDefault: false, reasoningEfforts: [], defaultReasoningEffort: nil, serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "o3-mini", name: "o3-mini", subProvider: "OpenAI", isDefault: false, reasoningEfforts: standardReasoning, defaultReasoningEffort: "medium", serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "o1", name: "o1", subProvider: "OpenAI", isDefault: false, reasoningEfforts: standardReasoning, defaultReasoningEffort: "high", serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil)
+            ]
+        case .claude:
+            return [
+                ProviderModel(id: "claude-sonnet-5", name: "Claude Sonnet 5", subProvider: "Anthropic", isDefault: true, reasoningEfforts: standardReasoning, defaultReasoningEffort: "medium", serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "claude-opus-5", name: "Claude Opus 5", subProvider: "Anthropic", isDefault: false, reasoningEfforts: standardReasoning, defaultReasoningEffort: "high", serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "claude-fable-5", name: "Claude Fable 5", subProvider: "Anthropic", isDefault: false, reasoningEfforts: standardReasoning, defaultReasoningEffort: "medium", serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "claude-3-7-sonnet", name: "Claude 3.7 Sonnet", subProvider: "Anthropic", isDefault: false, reasoningEfforts: standardReasoning, defaultReasoningEffort: "medium", serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "claude-3-5-sonnet", name: "Claude 3.5 Sonnet", subProvider: "Anthropic", isDefault: false, reasoningEfforts: [], defaultReasoningEffort: nil, serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "claude-haiku-4-5", name: "Claude Haiku 4.5", subProvider: "Anthropic", isDefault: false, reasoningEfforts: [], defaultReasoningEffort: nil, serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil)
+            ]
+        case .deepSeek:
+            return [
+                ProviderModel(id: "deepseek-chat", name: "DeepSeek V3", subProvider: "DeepSeek", isDefault: true, reasoningEfforts: [], defaultReasoningEffort: nil, serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "deepseek-reasoner", name: "DeepSeek R1", subProvider: "DeepSeek", isDefault: false, reasoningEfforts: standardReasoning, defaultReasoningEffort: "medium", serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil)
+            ]
+        case .grok:
+            return [
+                ProviderModel(id: "grok-3", name: "Grok 3", subProvider: "xAI", isDefault: true, reasoningEfforts: standardReasoning, defaultReasoningEffort: "medium", serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "grok-3-mini", name: "Grok 3 Mini", subProvider: "xAI", isDefault: false, reasoningEfforts: standardReasoning, defaultReasoningEffort: "low", serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "grok-2", name: "Grok 2", subProvider: "xAI", isDefault: false, reasoningEfforts: [], defaultReasoningEffort: nil, serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil)
+            ]
+        case .cursor:
+            return [
+                ProviderModel(id: "auto", name: "Auto", subProvider: "Cursor", isDefault: true, reasoningEfforts: [], defaultReasoningEffort: nil, serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "cursor-small", name: "Cursor Small", subProvider: "Cursor", isDefault: false, reasoningEfforts: [], defaultReasoningEffort: nil, serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil)
+            ]
+        case .pi:
+            return [
+                ProviderModel(id: "pi-default", name: "Pi Agent", subProvider: "Inflection", isDefault: true, reasoningEfforts: standardReasoning, defaultReasoningEffort: "medium", serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "pi-fast", name: "Pi Fast", subProvider: "Inflection", isDefault: false, reasoningEfforts: [], defaultReasoningEffort: nil, serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil)
+            ]
+        case .ohMyPi:
+            return [
+                ProviderModel(id: "ohmypi-default", name: "Oh My Pi Agent", subProvider: "OhMyPi", isDefault: true, reasoningEfforts: standardReasoning, defaultReasoningEffort: "medium", serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil)
+            ]
+        case .kimi:
+            return [
+                ProviderModel(id: "moonshot-v1-auto", name: "Kimi Auto", subProvider: "Moonshot", isDefault: true, reasoningEfforts: [], defaultReasoningEffort: nil, serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "k1", name: "Kimi k1", subProvider: "Moonshot", isDefault: false, reasoningEfforts: standardReasoning, defaultReasoningEffort: "medium", serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil)
+            ]
+        case .devin:
+            return [
+                ProviderModel(id: "devin-default", name: "Devin Agent", subProvider: "Cognition", isDefault: true, reasoningEfforts: standardReasoning, defaultReasoningEffort: "medium", serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil)
+            ]
+        case .openCode:
+            return [
+                ProviderModel(id: "opencode-default", name: "OpenCode Default", subProvider: "OpenCode", isDefault: true, reasoningEfforts: [], defaultReasoningEffort: nil, serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil)
+            ]
+        case .openCode2:
+            return [
+                ProviderModel(id: "opencode2-default", name: "OpenCode 2 Default", subProvider: "OpenCode", isDefault: true, reasoningEfforts: [], defaultReasoningEffort: nil, serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil)
+            ]
+        case .fx:
+            return [
+                ProviderModel(id: "factory-default", name: "Factory Default", subProvider: "Factory", isDefault: true, reasoningEfforts: [], defaultReasoningEffort: nil, serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil)
+            ]
+        case .amp:
+            return [
+                ProviderModel(id: "medium", name: "Medium", subProvider: "Amp", isDefault: true, reasoningEfforts: [], defaultReasoningEffort: nil, serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "high", name: "High", subProvider: "Amp", isDefault: false, reasoningEfforts: [], defaultReasoningEffort: nil, serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "ultra", name: "Ultra", subProvider: "Amp", isDefault: false, reasoningEfforts: [], defaultReasoningEffort: nil, serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil),
+                ProviderModel(id: "low", name: "Low", subProvider: "Amp", isDefault: false, reasoningEfforts: [], defaultReasoningEffort: nil, serviceTiers: [], defaultServiceTier: nil, contextWindows: [], defaultContextWindow: nil)
+            ]
+        }
     }
 
     func project(for session: AgentSession) -> Project? {
@@ -350,9 +664,16 @@ final class AppModel {
             // our own prompt) must update status and titles but must never
             // wipe the open thread's detail — that blanked the whole view.
             var merged = projection
-            if !selected.messages.isEmpty || !selected.transcriptBlocks.isEmpty {
+            merged.runtimeMode = selected.runtimeMode
+            merged.reasoningEffort = selected.reasoningEffort
+            merged.serviceTier = selected.serviceTier
+            merged.contextWindow = selected.contextWindow
+            merged.agentPreset = selected.agentPreset
+            merged.providerCursor = selected.providerCursor
+            if !selected.messages.isEmpty || !selected.transcriptBlocks.isEmpty || !selected.turns.isEmpty {
                 merged.messages = selected.messages
                 merged.transcriptBlocks = selected.transcriptBlocks
+                merged.turns = selected.turns
             }
             selectedSession = merged
         }
@@ -381,9 +702,19 @@ final class AppModel {
             command: .object(["type": .string("hydrateSession"), "sessionId": .uuid(sessionID)])
         )
         guard let sessionValue = payload["session"], sessionValue != .null else { return }
-        let session = try sessionValue.decode(AgentSession.self)
-        selectedSession = session
-        replaceInSessionList(session)
+        var session = try sessionValue.decode(AgentSession.self)
+        if let local = selectedSession, local.id == sessionID, !local.messages.isEmpty {
+            let localMessages = Dictionary(uniqueKeysWithValues: local.messages.map { ($0.id, $0) })
+            let hydratedIDs = Set(session.messages.map(\.id))
+            session.messages = session.messages.map { localMessages[$0.id] ?? $0 }
+                + local.messages.filter { !hydratedIDs.contains($0.id) }
+            if session.transcriptBlocks.isEmpty {
+                session.transcriptBlocks = local.transcriptBlocks
+            }
+            let hydratedTurnIDs = Set(session.turns.map(\.id))
+            session.turns += local.turns.filter { !hydratedTurnIDs.contains($0.id) }
+        }
+        updateSelectedSession(session)
     }
 
     private func attach(_ sessionID: UUID) async throws {
@@ -451,9 +782,99 @@ final class AppModel {
 
     private func handleEvent(sessionID: UUID, runtimeID: UUID, kind: String, payload: JSONValue) {
         switch kind {
+        case "promptSubmitted":
+            guard var session = selectedSession, session.id == sessionID else { return }
+            if let messageID = payload["messageId"]?.string.flatMap(UUID.init(uuidString:)),
+               !session.messages.contains(where: { $0.id == messageID }),
+               let content = payload["message"]?.string {
+                let turnID = payload["turnId"]?.string.flatMap(UUID.init(uuidString:))
+                let now = UInt64(Date().timeIntervalSince1970)
+                session.messages.append(Message(
+                    id: messageID,
+                    turnID: turnID,
+                    role: .user,
+                    content: content,
+                    displayContent: nil,
+                    createdAt: now,
+                    streaming: false
+                ))
+                if let turnID {
+                    session.turns.append(AgentTurn(
+                        id: turnID,
+                        turnCount: session.turns.count + 1,
+                        status: "running",
+                        providerTurnStarted: false,
+                        providerResumeAt: nil,
+                        startedAt: now,
+                        completedAt: nil,
+                        checkpoint: nil
+                    ))
+                }
+            }
+            session.status = .working
+            updateSelectedSession(session)
+        case "connected":
+            updateSession(sessionID) { session in
+                session.providerCursor = payload == .null ? nil : payload
+                if session.status == .connecting {
+                    session.status = .working
+                }
+            }
+        case "agentPresetSelected":
+            updateSession(sessionID) { $0.agentPreset = payload.string }
+        case "turnStarted":
+            updateSession(sessionID) { session in
+                session.status = .working
+                if let index = session.turns.indices.last,
+                   session.turns[index].status == "running" {
+                    session.turns[index].providerTurnStarted = true
+                }
+            }
         case "textDelta":
             guard let text = payload.string else { return }
             appendTextDelta(text, to: sessionID)
+        case "reasoningDelta":
+            guard let text = payload.string else { return }
+            appendReasoningDelta(text, to: sessionID)
+        case "activity":
+            guard let activity = activity(from: payload, sessionID: sessionID) else { return }
+            appendActivity(activity, to: sessionID)
+        case "richActivity":
+            guard let activity = try? payload.decode(ActivityItem.self) else { return }
+            appendActivity(activity, to: sessionID)
+        case "turnParked":
+            updateSession(sessionID) { $0.status = .waiting }
+            persistSession(sessionID)
+        case "turnFinished":
+            updateSession(sessionID) { session in
+                session.status = .idle
+                session.messages.indices.forEach { session.messages[$0].streaming = false }
+                if let index = session.turns.indices.last,
+                   session.turns[index].status == "running" {
+                    session.turns[index].status = "completed"
+                    session.turns[index].completedAt = UInt64(Date().timeIntervalSince1970)
+                }
+                session.transcriptBlocks = session.transcriptBlocks.map { block in
+                    guard case .reasoning(let reasoning) = block.content,
+                          reasoning.finishedAt == 0 else { return block }
+                    return TranscriptBlock(
+                        afterMessage: block.afterMessage,
+                        turnID: block.turnID,
+                        content: .reasoning(ReasoningBlock(
+                            content: reasoning.content,
+                            startedAt: reasoning.startedAt,
+                            finishedAt: UInt64(Date().timeIntervalSince1970 * 1_000)
+                        ))
+                    )
+                }
+                let now = UInt64(Date().timeIntervalSince1970)
+                session.updatedAt = now
+                session.lastReplyAt = now
+            }
+            persistSession(sessionID)
+        case "autoTitleUpdated":
+            updateSession(sessionID) { $0.autoTitle = payload.string }
+            persistSession(sessionID)
         case "permission":
             guard let requestID = payload["requestId"]?.string,
                   let title = payload["title"]?.string,
@@ -467,22 +888,53 @@ final class AppModel {
                 detail: payload["detail"]?.string,
                 options: options
             )
+            updateSession(sessionID) { $0.status = .waiting }
         case "error":
             errorMessage = payload.string ?? "The agent reported an error."
-            scheduleHydrate(sessionID)
-        case "turnFinished", "turnParked", "connected", "autoTitleUpdated":
-            scheduleHydrate(sessionID)
+            updateSession(sessionID) { session in
+                session.status = .failed
+                if let index = session.turns.indices.last,
+                   session.turns[index].status == "running" {
+                    session.turns[index].status = "failed"
+                    session.turns[index].completedAt = UInt64(Date().timeIntervalSince1970)
+                }
+            }
+            persistSession(sessionID)
+        case "processExited":
+            updateSession(sessionID) { session in
+                session.status = .idle
+                if let index = session.turns.indices.last,
+                   session.turns[index].status == "running" {
+                    session.turns[index].status = "interrupted"
+                    session.turns[index].completedAt = UInt64(Date().timeIntervalSince1970)
+                }
+            }
+            persistSession(sessionID)
         default:
-            scheduleHydrate(sessionID, delay: 0.35)
+            break
         }
     }
 
     private func appendOptimisticMessage(_ message: Message) {
         guard var session = selectedSession else { return }
         session.messages.append(message)
+        if let turnID = message.turnID,
+           !session.turns.contains(where: { $0.id == turnID }) {
+            session.turns.append(AgentTurn(
+                id: turnID,
+                turnCount: session.turns.count + 1,
+                status: "running",
+                providerTurnStarted: false,
+                providerResumeAt: nil,
+                startedAt: message.createdAt,
+                completedAt: nil,
+                checkpoint: nil
+            ))
+        }
         session.status = .working
-        selectedSession = session
-        replaceInSessionList(session)
+        session.updatedAt = message.createdAt
+        session.lastReplyAt = message.createdAt
+        updateSelectedSession(session)
     }
 
     private func appendTextDelta(_ delta: String, to sessionID: UUID) {
@@ -494,7 +946,8 @@ final class AppModel {
         } else {
             session.messages.append(Message(
                 id: UUID(),
-                turnID: nil,
+                turnID: session.turns.last(where: { $0.status == "running" })?.id
+                    ?? session.messages.last(where: { $0.role == .user })?.turnID,
                 role: .assistant,
                 content: delta,
                 displayContent: nil,
@@ -503,7 +956,136 @@ final class AppModel {
             ))
         }
         session.status = .working
+        updateSelectedSession(session)
+    }
+
+    private func appendReasoningDelta(_ delta: String, to sessionID: UUID) {
+        updateSession(sessionID) { session in
+            let turnID = session.messages.last(where: { $0.role == .user })?.turnID
+            if let index = session.transcriptBlocks.indices.last,
+               session.transcriptBlocks[index].turnID == turnID,
+               case .reasoning(let reasoning) = session.transcriptBlocks[index].content {
+                session.transcriptBlocks[index] = TranscriptBlock(
+                    afterMessage: session.transcriptBlocks[index].afterMessage,
+                    turnID: turnID,
+                    content: .reasoning(ReasoningBlock(
+                        content: reasoning.content + delta,
+                        startedAt: reasoning.startedAt,
+                        finishedAt: 0
+                    ))
+                )
+            } else {
+                session.transcriptBlocks.append(TranscriptBlock(
+                    afterMessage: session.messages.count,
+                    turnID: turnID,
+                    content: .reasoning(ReasoningBlock(
+                        content: delta,
+                        startedAt: UInt64(Date().timeIntervalSince1970 * 1_000),
+                        finishedAt: 0
+                    ))
+                ))
+            }
+        }
+    }
+
+    private func appendActivity(_ activity: ActivityItem, to sessionID: UUID) {
+        updateSession(sessionID) { session in
+            for blockIndex in session.transcriptBlocks.indices.reversed() {
+                guard case .activities(var activities) = session.transcriptBlocks[blockIndex].content,
+                      let activityIndex = activities.firstIndex(where: { $0.id == activity.id }) else { continue }
+                activities[activityIndex] = activity
+                let block = session.transcriptBlocks[blockIndex]
+                session.transcriptBlocks[blockIndex] = TranscriptBlock(
+                    afterMessage: block.afterMessage,
+                    turnID: block.turnID,
+                    content: .activities(activities)
+                )
+                return
+            }
+
+            let turnID = session.messages.last(where: { $0.role == .user })?.turnID
+            if let index = session.transcriptBlocks.indices.last,
+               session.transcriptBlocks[index].turnID == turnID,
+               session.transcriptBlocks[index].afterMessage == session.messages.count,
+               case .activities(var activities) = session.transcriptBlocks[index].content {
+                activities.append(activity)
+                session.transcriptBlocks[index] = TranscriptBlock(
+                    afterMessage: session.messages.count,
+                    turnID: turnID,
+                    content: .activities(activities)
+                )
+            } else {
+                session.transcriptBlocks.append(TranscriptBlock(
+                    afterMessage: session.messages.count,
+                    turnID: turnID,
+                    content: .activities([activity])
+                ))
+            }
+        }
+    }
+
+    private func activity(from payload: JSONValue, sessionID: UUID) -> ActivityItem? {
+        guard let kind = payload["kind"]?.string,
+              let title = payload["title"]?.string,
+              case .bool(let complete)? = payload["complete"] else { return nil }
+        let sourceID = payload["id"]?.string ?? "\(kind):\(title)"
+        let turnID = selectedSession?.messages.last(where: { $0.role == .user })?.turnID?.uuidString ?? "none"
+        let scopedSourceID = "\(turnID):\(sourceID)"
+        let id = activityIDs[sessionID]?[scopedSourceID] ?? UUID().uuidString.lowercased()
+        activityIDs[sessionID, default: [:]][scopedSourceID] = id
+        return ActivityItem(
+            id: id,
+            kind: kind,
+            title: title,
+            detail: payload["detail"]?.string,
+            arguments: payload["arguments"]?.string,
+            output: payload["output"]?.string,
+            failed: payload["failed"]?.boolValue ?? false,
+            complete: complete,
+            fileChanges: nil,
+            displayTarget: payload["display_target"]?.string ?? payload["displayTarget"]?.string,
+            displayDescription: payload["display_description"]?.string ?? payload["displayDescription"]?.string,
+            reasoning: nil
+        )
+    }
+
+    private func updateSession(_ sessionID: UUID, mutation: (inout AgentSession) -> Void) {
+        guard var session = selectedSession, session.id == sessionID else { return }
+        mutation(&session)
+        updateSelectedSession(session)
+    }
+
+    private func updateSelectedSession(_ session: AgentSession) {
         selectedSession = session
+        replaceInSessionList(session)
+        transcriptRevision &+= 1
+    }
+
+    private func persistSession(_ sessionID: UUID) {
+        Task { [weak self] in
+            do {
+                try await self?.saveSession(sessionID)
+            } catch {
+                self?.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func session(withID sessionID: UUID) -> AgentSession? {
+        if let selectedSession, selectedSession.id == sessionID {
+            return selectedSession
+        }
+        return sessions.first { $0.id == sessionID }
+    }
+
+    private func saveSession(_ sessionID: UUID) async throws {
+        guard let session = session(withID: sessionID) else { return }
+        _ = try await client.request(command: .object([
+            "type": .string("saveTaskState"),
+            "projects": .array(try projects.map { try JSONValue.decode($0) }),
+            "liveSessionIds": .array(runtimes.keys.map(JSONValue.uuid)),
+            "sessions": .array([try JSONValue.decode(session)]),
+        ]))
     }
 
     private func scheduleHydrate(_ sessionID: UUID, delay: TimeInterval = 0.2) {

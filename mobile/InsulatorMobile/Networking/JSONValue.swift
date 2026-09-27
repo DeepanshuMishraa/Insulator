@@ -62,6 +62,11 @@ enum JSONValue: Codable, Equatable, Hashable, Sendable {
         return Int(value)
     }
 
+    var boolValue: Bool? {
+        guard case .bool(let value) = self else { return nil }
+        return value
+    }
+
     func decode<T: Decodable>(_ type: T.Type, using decoder: JSONDecoder = JSONDecoder()) throws -> T {
         try decoder.decode(type, from: JSONEncoder().encode(self))
     }

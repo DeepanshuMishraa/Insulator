@@ -198,6 +198,13 @@ struct ReasoningBlock: Codable, Hashable, Sendable {
     }
 }
 
+struct ActivityFileChange: Codable, Hashable, Sendable {
+    let path: String
+    let additions: UInt64?
+    let deletions: UInt64?
+    let diff: String?
+}
+
 struct ActivityItem: Codable, Hashable, Identifiable, Sendable {
     let id: String
     let kind: String
@@ -207,14 +214,44 @@ struct ActivityItem: Codable, Hashable, Identifiable, Sendable {
     let output: String?
     let failed: Bool
     let complete: Bool
+    let fileChanges: [ActivityFileChange]?
     let displayTarget: String?
     let displayDescription: String?
     let reasoning: ReasoningBlock?
 
     enum CodingKeys: String, CodingKey {
         case id, kind, title, detail, arguments, output, failed, complete, reasoning
+        case fileChanges = "file_changes"
         case displayTarget = "display_target"
         case displayDescription = "display_description"
+    }
+
+    init(
+        id: String,
+        kind: String,
+        title: String,
+        detail: String? = nil,
+        arguments: String? = nil,
+        output: String? = nil,
+        failed: Bool = false,
+        complete: Bool = true,
+        fileChanges: [ActivityFileChange]? = nil,
+        displayTarget: String? = nil,
+        displayDescription: String? = nil,
+        reasoning: ReasoningBlock? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.title = title
+        self.detail = detail
+        self.arguments = arguments
+        self.output = output
+        self.failed = failed
+        self.complete = complete
+        self.fileChanges = fileChanges
+        self.displayTarget = displayTarget
+        self.displayDescription = displayDescription
+        self.reasoning = reasoning
     }
 }
 
@@ -253,7 +290,13 @@ struct TranscriptBlock: Codable, Hashable, Identifiable, Sendable {
     let turnID: UUID?
     let content: TranscriptContent
 
-    var id: String { "\(turnID?.uuidString ?? "none")-\(afterMessage)-\(content.hashValue)" }
+    var id: String {
+        let contentID = switch content {
+        case .reasoning(let reasoning): "reasoning-\(reasoning.startedAt)"
+        case .activities(let activities): "activities-\(activities.first?.id ?? "empty")"
+        }
+        return "\(turnID?.uuidString ?? "none")-\(afterMessage)-\(contentID)"
+    }
 
     enum CodingKeys: String, CodingKey {
         case content
@@ -262,12 +305,32 @@ struct TranscriptBlock: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+struct AgentTurn: Codable, Hashable, Identifiable, Sendable {
+    let id: UUID
+    let turnCount: Int
+    var status: String
+    var providerTurnStarted: Bool
+    let providerResumeAt: String?
+    let startedAt: UInt64
+    var completedAt: UInt64?
+    let checkpoint: JSONValue?
+
+    enum CodingKeys: String, CodingKey {
+        case id, status, checkpoint
+        case turnCount = "turn_count"
+        case providerTurnStarted = "provider_turn_started"
+        case providerResumeAt = "provider_resume_at"
+        case startedAt = "started_at"
+        case completedAt = "completed_at"
+    }
+}
+
 struct AgentSession: Codable, Hashable, Identifiable, Sendable {
     let id: UUID
     var title: String
     var autoTitle: String?
-    let projectID: UUID
-    let provider: ProviderKind
+    var projectID: UUID
+    var provider: ProviderKind
     var model: String?
     var runtimeMode: RuntimeMode
     var reasoningEffort: String?
@@ -281,11 +344,12 @@ struct AgentSession: Codable, Hashable, Identifiable, Sendable {
     var providerCursor: JSONValue?
     var messages: [Message]
     var transcriptBlocks: [TranscriptBlock]
+    var turns: [AgentTurn]
 
     var displayTitle: String {
         let explicit = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if explicit != "New task", !explicit.isEmpty { return explicit }
-        return autoTitle?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "New task"
+        if explicit != "New task", explicit != "New thread", !explicit.isEmpty { return explicit }
+        return autoTitle?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "New thread"
     }
 
     enum CodingKeys: String, CodingKey {
@@ -302,6 +366,7 @@ struct AgentSession: Codable, Hashable, Identifiable, Sendable {
         case lastReplyAt = "last_reply_at"
         case providerCursor = "provider_cursor"
         case transcriptBlocks = "transcript_blocks"
+        case turns
     }
 }
 
