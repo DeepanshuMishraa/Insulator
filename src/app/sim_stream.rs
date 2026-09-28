@@ -58,9 +58,9 @@ impl Insulator {
     fn sim_unsupported_message() -> Option<String> {
         match sim_stream::support() {
             SimSupport::Supported => None,
-            SimSupport::UnsupportedPlatform => Some(
-                crate::sim_stream::SimStreamError::UnsupportedPlatform.to_string(),
-            ),
+            SimSupport::UnsupportedPlatform => {
+                Some(crate::sim_stream::SimStreamError::UnsupportedPlatform.to_string())
+            }
             SimSupport::UnsupportedArch => {
                 Some(crate::sim_stream::SimStreamError::UnsupportedArch.to_string())
             }
@@ -100,7 +100,11 @@ impl Insulator {
         // clears it below so the next sync retries.
         self.sim_applied_dark = Some(dark);
         self.sim_applied_surface = Some(Self::sim_page_background(cx));
-        let theme = if dark { SimTheme::Dark } else { SimTheme::Light };
+        let theme = if dark {
+            SimTheme::Dark
+        } else {
+            SimTheme::Light
+        };
         let generation = self.sim_stream_generation.wrapping_add(1);
         self.sim_stream_generation = generation;
         cx.notify();
@@ -565,9 +569,9 @@ impl Insulator {
         cx.spawn(async move |_, cx| {
             let devices: Result<Vec<crate::sim_stream::SimDevice>, String> = cx
                 .background_executor()
-                .spawn(async move {
-                    sim_stream::list_devices_blocking().map_err(|e| e.to_string())
-                })
+                .spawn(
+                    async move { sim_stream::list_devices_blocking().map_err(|e| e.to_string()) },
+                )
                 .await;
             let _ = entity.update(cx, |this, cx| {
                 if this.sim_devices_generation != generation {
@@ -652,7 +656,9 @@ impl Insulator {
                     .text_size(sp(12.5))
                     .line_height(sp(17.0))
                     .text_color(theme.text_tertiary)
-                    .child("Stream a booted simulator here and watch the agent verify its work live."),
+                    .child(
+                        "Stream a booted simulator here and watch the agent verify its work live.",
+                    ),
             )
             .when_some(error, |el, message| {
                 el.child(
@@ -681,23 +687,17 @@ impl Insulator {
                     .text_size(sp(12.5))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.on_inverse)
-                    .focus_visible(|style| {
-                        style
-                            .border_1()
-                            .border_color(theme.accent)
-                    })
+                    .focus_visible(|style| style.border_1().border_color(theme.accent))
                     .child("Start Simulator")
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.start_sim_stream(None, window, cx);
                     }))
-                    .on_key_down(cx.listener(
-                        |this, event: &KeyDownEvent, window, cx| {
-                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                this.start_sim_stream(None, window, cx);
-                                cx.stop_propagation();
-                            }
-                        },
-                    )),
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.start_sim_stream(None, window, cx);
+                            cx.stop_propagation();
+                        }
+                    })),
             )
             .into_any_element()
     }
@@ -754,21 +754,21 @@ impl Insulator {
                             .hover(|style| style.bg(theme.overlay).text_color(theme.text))
                             .active(|style| style.bg(theme.overlay_strong))
                             .focus_visible(|style| {
-                                style.bg(theme.overlay).border_1().border_color(theme.accent)
+                                style
+                                    .bg(theme.overlay)
+                                    .border_1()
+                                    .border_color(theme.accent)
                             })
                             .child("Stop")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.stop_sim_stream(cx);
                             }))
-                            .on_key_down(cx.listener(
-                                |this, event: &KeyDownEvent, _, cx| {
-                                    if matches!(event.keystroke.key.as_str(), "enter" | "space")
-                                    {
-                                        this.stop_sim_stream(cx);
-                                        cx.stop_propagation();
-                                    }
-                                },
-                            )),
+                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    this.stop_sim_stream(cx);
+                                    cx.stop_propagation();
+                                }
+                            })),
                     ),
             )
             .child(div().flex_1().min_h_0().child(browser))

@@ -38,7 +38,8 @@ pub fn start_process() -> anyhow::Result<insulator_client::DaemonSupervisor> {
 
 /// Resolve the local host name once during app construction. Settings can
 /// then show a useful LAN URL without touching the OS from a render frame.
-pub fn local_hostname() -> Option<String> {    #[cfg(unix)]
+pub fn local_hostname() -> Option<String> {
+    #[cfg(unix)]
     {
         let mut buffer = [0_u8; 256];
         let result = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
@@ -66,7 +67,11 @@ pub fn local_hostname() -> Option<String> {    #[cfg(unix)]
 /// addresses. Pure parsing so it stays unit-testable.
 pub fn parse_tailscale_ipv4(output: &str) -> Option<String> {
     let mut fallback = None;
-    for line in output.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for line in output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
         if line.parse::<std::net::Ipv4Addr>().is_ok() {
             if line.starts_with("100.") {
                 return Some(line.to_owned());
@@ -109,9 +114,7 @@ fn local_tailscale_ipv4() -> Option<String> {
         let mut current = list;
         while !current.is_null() {
             let entry = &*current;
-            if !entry.ifa_addr.is_null()
-                && (*entry.ifa_addr).sa_family as i32 == libc::AF_INET
-            {
+            if !entry.ifa_addr.is_null() && (*entry.ifa_addr).sa_family as i32 == libc::AF_INET {
                 let raw = &*(entry.ifa_addr as *const libc::sockaddr_in);
                 // s_addr is network byte order, which is also memory order.
                 let octets = std::net::Ipv4Addr::from(raw.sin_addr.s_addr.to_ne_bytes()).octets();

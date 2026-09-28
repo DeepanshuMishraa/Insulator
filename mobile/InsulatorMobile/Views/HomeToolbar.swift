@@ -12,9 +12,8 @@ struct HomeToolbar<RightMenu: View>: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
             Button(action: onGear) {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(.white)
+                ReiconIcon(.settings, size: 18)
+                    .foregroundStyle(AppTheme.primary)
                     .frame(width: 40, height: 40)
                     .background(AppTheme.raised, in: Circle())
             }
@@ -24,19 +23,18 @@ struct HomeToolbar<RightMenu: View>: ToolbarContent {
         ToolbarItem(placement: .principal) {
             VStack(spacing: 3) {
                 Text("Insulator")
-                    .font(.title3.bold())
-                    .foregroundStyle(.white)
+                    .font(AppTheme.font(.title3, weight: .bold))
+                    .foregroundStyle(AppTheme.primary)
                 HStack(spacing: 5) {
                     Circle()
                         .fill(isConnected ? AppTheme.accent : Color.secondary)
                         .frame(width: 6, height: 6)
                         .accessibilityHidden(true)
-                    Image(systemName: "laptopcomputer")
-                        .font(.caption2)
+                    ReiconIcon(.laptop, size: 11)
                         .foregroundStyle(AppTheme.secondary)
                         .accessibilityHidden(true)
                     Text(host ?? "No Mac paired")
-                        .font(.caption)
+                        .font(AppTheme.font(.caption))
                         .foregroundStyle(AppTheme.secondary)
                         .lineLimit(1)
                 }
@@ -48,9 +46,8 @@ struct HomeToolbar<RightMenu: View>: ToolbarContent {
             Menu {
                 rightMenu()
             } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(.white)
+                ReiconIcon(.more, size: 17)
+                    .foregroundStyle(AppTheme.primary)
                     .frame(width: 40, height: 40)
                     .background(AppTheme.raised, in: Circle())
             }

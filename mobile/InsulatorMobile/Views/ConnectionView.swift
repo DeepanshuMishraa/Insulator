@@ -19,10 +19,10 @@ struct ConnectionView: View {
                         .accessibilityHidden(true)
 
                     Text("Connect to Insulator")
-                        .font(.largeTitle.bold())
+                        .font(AppTheme.font(.largeTitle, weight: .bold))
 
                     Text("Enter the Tailscale IP and token shown in Insulator Desktop under Settings → Daemon. Both devices just need to be on the same Tailnet — they can be on different networks.")
-                        .font(.body)
+                        .font(AppTheme.font(.body))
                         .multilineTextAlignment(.center)
                         .foregroundStyle(AppTheme.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -52,19 +52,19 @@ struct ConnectionView: View {
                 } label: {
                     HStack {
                         if app.connectionState == .connecting {
-                            ProgressView().tint(.black)
+                            ProgressView().tint(AppTheme.background)
                         }
                         Text(app.connectionState == .connecting ? "Connecting…" : "Connect")
                             .fontWeight(.semibold)
                     }
                     .frame(maxWidth: .infinity, minHeight: 50)
-                    .foregroundStyle(.black)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 15))
+                    .foregroundStyle(AppTheme.background)
+                    .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 15))
                 }
                 .disabled(address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || token.isEmpty || app.connectionState == .connecting)
 
                 Text("Use the Mac's Tailscale IP from Desktop Settings → Daemon (for example 100.x.x.x:34123). The token stays in this iPhone's Keychain.")
-                    .font(.footnote)
+                    .font(AppTheme.font(.footnote))
                     .foregroundStyle(AppTheme.secondary)
 
                 Spacer()

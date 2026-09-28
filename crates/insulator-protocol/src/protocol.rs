@@ -174,6 +174,15 @@ pub enum Command {
         dirs: Vec<PathBuf>,
     },
     LoadTaskState,
+    #[serde(rename = "readGitHubAvatar")]
+    ReadGitHubAvatar,
+    #[serde(rename = "resolveProjectGitHubUrl")]
+    ResolveProjectGitHubUrl {
+        path: PathBuf,
+    },
+    RemoveProject {
+        project_id: Uuid,
+    },
     SaveTaskState {
         projects: Vec<Project>,
         live_session_ids: Vec<Uuid>,
@@ -419,6 +428,9 @@ pub enum ResponsePayload {
     },
     TaskStateSaved {
         sessions: Vec<AgentSession>,
+    },
+    ProjectGitHubUrl {
+        url: Option<String>,
     },
     Session {
         session: Option<AgentSession>,

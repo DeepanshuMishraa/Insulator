@@ -53,7 +53,10 @@ mod math_text;
 pub enum TextGeometry {
     Text(TextLayout),
     Math(math_text::Geometry),
-    Media { bounds: Bounds<Pixels>, text_len: usize },
+    Media {
+        bounds: Bounds<Pixels>,
+        text_len: usize,
+    },
 }
 
 impl TextGeometry {
@@ -753,10 +756,7 @@ impl<'a> Ctx<'a> {
         self
     }
 
-    pub fn with_video_renderer(
-        mut self,
-        renderer: Rc<dyn Fn(&str) -> Option<AnyElement>>,
-    ) -> Self {
+    pub fn with_video_renderer(mut self, renderer: Rc<dyn Fn(&str) -> Option<AnyElement>>) -> Self {
         self.video_renderer = Some(renderer);
         self
     }
@@ -1123,7 +1123,9 @@ pub fn text_range_bounds(layout: &TextGeometry, range: &Range<usize>) -> Vec<Bou
     match layout {
         TextGeometry::Text(layout) => range_rects(layout, range, 0.0, 0.0),
         TextGeometry::Math(layout) => layout.range_rects(range),
-        TextGeometry::Media { bounds, .. } => (!range.is_empty()).then_some(*bounds).into_iter().collect(),
+        TextGeometry::Media { bounds, .. } => {
+            (!range.is_empty()).then_some(*bounds).into_iter().collect()
+        }
     }
 }
 
@@ -1182,10 +1184,7 @@ pub fn install_selection_input(window: &mut Window, state: &TranscriptSelection)
 /// Extend the active selection to a window position using the latest painted
 /// registry. This is also called from autoscroll frames when the pointer is
 /// stationary at a viewport edge.
-pub fn update_selection_at_position(
-    state: &TranscriptSelection,
-    position: Point<Pixels>,
-) -> bool {
+pub fn update_selection_at_position(state: &TranscriptSelection, position: Point<Pixels>) -> bool {
     let registry = state.registry.borrow();
     let anchor_info = {
         let selection = state.selection.borrow();
@@ -1202,13 +1201,12 @@ pub fn update_selection_at_position(
     };
     let spans = match registry.position(&anchor_key) {
         Some(anchor_index) => {
-            let direction = if head.0 > anchor_index
-                || (head.0 == anchor_index && head.1 >= anchor_offset)
-            {
-                crate::md::selection::DragDirection::Forward
-            } else {
-                crate::md::selection::DragDirection::Backward
-            };
+            let direction =
+                if head.0 > anchor_index || (head.0 == anchor_index && head.1 >= anchor_offset) {
+                    crate::md::selection::DragDirection::Forward
+                } else {
+                    crate::md::selection::DragDirection::Backward
+                };
             state.selection.borrow_mut().set_direction(direction);
             registry.resolve((anchor_index, anchor_offset), head)
         }
@@ -1839,7 +1837,10 @@ fn render_video(url: &str, ctx: &Ctx) -> AnyElement {
     let key = ctx.next_key();
     if let Some(player) = ctx.video_renderer.as_ref().and_then(|render| render(url)) {
         let content = div()
-            .id(SharedString::from(format!("video-{}-{}", key.row, key.index)))
+            .id(SharedString::from(format!(
+                "video-{}-{}",
+                key.row, key.index
+            )))
             .w_full()
             .h(px(280.0))
             .rounded(px(8.0))

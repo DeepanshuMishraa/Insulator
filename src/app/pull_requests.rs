@@ -335,7 +335,9 @@ fn gh_command() -> std::process::Command {
 
 fn gh_spawn_error(error: std::io::Error) -> anyhow::Error {
     if error.kind() == std::io::ErrorKind::NotFound {
-        anyhow::anyhow!("GitHub CLI (gh) not found. Install it (e.g. `brew install gh`) and restart Insulator.")
+        anyhow::anyhow!(
+            "GitHub CLI (gh) not found. Install it (e.g. `brew install gh`) and restart Insulator."
+        )
     } else {
         error.into()
     }
@@ -355,8 +357,19 @@ fn load_owned_repository_pull_requests(limit: usize) -> anyhow::Result<Vec<GhPul
     let owner = String::from_utf8_lossy(&login.stdout).trim().to_owned();
     let output = gh_command()
         .args([
-            "search", "prs", "--owner", &owner, "--state", "open", "--sort", "created", "--order",
-            "desc", "--limit", &limit.to_string(), "--json",
+            "search",
+            "prs",
+            "--owner",
+            &owner,
+            "--state",
+            "open",
+            "--sort",
+            "created",
+            "--order",
+            "desc",
+            "--limit",
+            &limit.to_string(),
+            "--json",
             GH_FIELDS,
         ])
         .env("GH_PROMPT_DISABLED", "1")
@@ -373,8 +386,19 @@ fn load_owned_repository_pull_requests(limit: usize) -> anyhow::Result<Vec<GhPul
     let mut requests: Vec<GhPullRequest> = serde_json::from_slice(&output.stdout)?;
     let closed = gh_command()
         .args([
-            "search", "prs", "--owner", &owner, "--state", "closed", "--sort", "created", "--order",
-            "desc", "--limit", &limit.to_string(), "--json",
+            "search",
+            "prs",
+            "--owner",
+            &owner,
+            "--state",
+            "closed",
+            "--sort",
+            "created",
+            "--order",
+            "desc",
+            "--limit",
+            &limit.to_string(),
+            "--json",
             GH_FIELDS,
         ])
         .env("GH_PROMPT_DISABLED", "1")
@@ -404,11 +428,17 @@ fn gh_output(args: &[&str]) -> anyhow::Result<std::process::Output> {
     let stderr = child.stderr.take().expect("stderr was piped");
     let stdout_reader = thread::spawn(move || {
         let mut bytes = Vec::new();
-        stdout.take(16 * 1024 * 1024).read_to_end(&mut bytes).map(|_| bytes)
+        stdout
+            .take(16 * 1024 * 1024)
+            .read_to_end(&mut bytes)
+            .map(|_| bytes)
     });
     let stderr_reader = thread::spawn(move || {
         let mut bytes = Vec::new();
-        stderr.take(16 * 1024 * 1024).read_to_end(&mut bytes).map(|_| bytes)
+        stderr
+            .take(16 * 1024 * 1024)
+            .read_to_end(&mut bytes)
+            .map(|_| bytes)
     });
     let deadline = Instant::now() + Duration::from_secs(45);
     let status = loop {
@@ -426,8 +456,12 @@ fn gh_output(args: &[&str]) -> anyhow::Result<std::process::Output> {
     };
     Ok(std::process::Output {
         status,
-        stdout: stdout_reader.join().map_err(|_| anyhow::anyhow!("stdout reader failed"))??,
-        stderr: stderr_reader.join().map_err(|_| anyhow::anyhow!("stderr reader failed"))??,
+        stdout: stdout_reader
+            .join()
+            .map_err(|_| anyhow::anyhow!("stdout reader failed"))??,
+        stderr: stderr_reader
+            .join()
+            .map_err(|_| anyhow::anyhow!("stderr reader failed"))??,
     })
 }
 
@@ -495,10 +529,14 @@ fn preserve_cached_details(entries: &mut [PullRequest], cached: &[PullRequest]) 
             entry.base_branch.clone_from(&previous.base_branch);
         }
         if entry.author_avatar_url.is_empty() {
-            entry.author_avatar_url.clone_from(&previous.author_avatar_url);
+            entry
+                .author_avatar_url
+                .clone_from(&previous.author_avatar_url);
         }
         if entry.author_avatar_path.is_none() {
-            entry.author_avatar_path.clone_from(&previous.author_avatar_path);
+            entry
+                .author_avatar_path
+                .clone_from(&previous.author_avatar_path);
         }
         if entry.additions == 0 {
             entry.additions = previous.additions;
@@ -737,9 +775,10 @@ fn load_pull_request_body(request: &PullRequest) -> anyhow::Result<LoadedPullReq
             .as_ref()
             .map(|author| author.avatar_url.clone())
             .unwrap_or_default(),
-        author_avatar_path: detail.author.as_ref().and_then(|author| {
-            cache_github_avatar(&author.login, &author.avatar_url)
-        }),
+        author_avatar_path: detail
+            .author
+            .as_ref()
+            .and_then(|author| cache_github_avatar(&author.login, &author.avatar_url)),
         author: detail.author.map(|a| a.login).unwrap_or_default(),
         reviewers,
         comments_count: detail.comments.len(),
@@ -750,12 +789,8 @@ fn load_pull_request_body(request: &PullRequest) -> anyhow::Result<LoadedPullReq
 
 fn load_pull_request_diff(request: &PullRequest) -> anyhow::Result<(ReviewDiffSnapshot, String)> {
     if let Some(patch) = request.cached_diff.as_ref() {
-        let snapshot = crate::review_diff::parse_collected(
-            ReviewDiffSource::Committed,
-            "",
-            patch,
-            true,
-        );
+        let snapshot =
+            crate::review_diff::parse_collected(ReviewDiffSource::Committed, "", patch, true);
         if !snapshot.files.is_empty() {
             return Ok((snapshot, patch.clone()));
         }
@@ -1002,18 +1037,15 @@ fn html_tag_src(tag: &str) -> Option<&str> {
     while index < bytes.len() {
         // Find a case-insensitive `src` word boundary.
         let remaining = &tag[index..];
-        let Some(pos) = remaining
-            .to_ascii_lowercase()
-            .find("src")
-        else {
+        let Some(pos) = remaining.to_ascii_lowercase().find("src") else {
             return None;
         };
         let key = index + pos;
-        let before_ok = key == 0
-            || !(bytes[key - 1].is_ascii_alphanumeric() || bytes[key - 1] == b'-');
+        let before_ok =
+            key == 0 || !(bytes[key - 1].is_ascii_alphanumeric() || bytes[key - 1] == b'-');
         let after = key + 3;
-        let after_ok = after >= bytes.len()
-            || !(bytes[after].is_ascii_alphanumeric() || bytes[after] == b'-');
+        let after_ok =
+            after >= bytes.len() || !(bytes[after].is_ascii_alphanumeric() || bytes[after] == b'-');
         index = after;
         if !(before_ok && after_ok) {
             continue;
@@ -1101,8 +1133,14 @@ fn load_pull_request_comments(request: &PullRequest) -> anyhow::Result<Vec<PullR
         Ok(pages.into_iter().flatten().collect())
     }
 
-    let issue_endpoint = format!("repos/{}/issues/{}/comments", request.repository, request.number);
-    let review_endpoint = format!("repos/{}/pulls/{}/comments", request.repository, request.number);
+    let issue_endpoint = format!(
+        "repos/{}/issues/{}/comments",
+        request.repository, request.number
+    );
+    let review_endpoint = format!(
+        "repos/{}/pulls/{}/comments",
+        request.repository, request.number
+    );
     let mut comments = load_endpoint(&issue_endpoint)?;
     comments.extend(load_endpoint(&review_endpoint)?);
     comments.sort_by(|left, right| left.created_at.cmp(&right.created_at));
@@ -1294,7 +1332,9 @@ struct GhGraphQlResponse {
     data: Option<GhGraphQlData>,
 }
 
-fn load_pull_requests_page(cursor: Option<&str>) -> anyhow::Result<(Vec<PullRequest>, Option<String>)> {
+fn load_pull_requests_page(
+    cursor: Option<&str>,
+) -> anyhow::Result<(Vec<PullRequest>, Option<String>)> {
     const QUERY: &str = "query($search:String!,$after:String){search(query:$search,type:ISSUE,first:50,after:$after){nodes{... on PullRequest{number,title,author{login,avatarUrl},body,state,url,repository{nameWithOwner},updatedAt,createdAt,mergedAt}}pageInfo{hasNextPage,endCursor}}}";
     let login = gh_output(&["api", "user", "--jq", ".login"])?;
     if !login.status.success() {
@@ -1312,7 +1352,14 @@ fn load_pull_requests_page(cursor: Option<&str>) -> anyhow::Result<(Vec<PullRequ
         }
         let search_arg = format!("search={search}");
         let query_arg = format!("query={QUERY}");
-        let mut args = vec!["api", "graphql", "-f", query_arg.as_str(), "-f", search_arg.as_str()];
+        let mut args = vec![
+            "api",
+            "graphql",
+            "-f",
+            query_arg.as_str(),
+            "-f",
+            search_arg.as_str(),
+        ];
         let cursor_arg;
         if let Some(cursor) = cursor {
             cursor_arg = format!("after={cursor}");
@@ -1322,14 +1369,28 @@ fn load_pull_requests_page(cursor: Option<&str>) -> anyhow::Result<(Vec<PullRequ
         }
         let output = gh_output(&args)?;
         if !output.status.success() {
-            anyhow::bail!("GitHub pull-request page lookup failed: {}", String::from_utf8_lossy(&output.stderr).trim());
+            anyhow::bail!(
+                "GitHub pull-request page lookup failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
         }
         let response: GhGraphQlResponse = serde_json::from_slice(&output.stdout)?;
-        Ok(Some(response.data.ok_or_else(|| anyhow::anyhow!("GitHub returned no pull-request page"))?.search))
+        Ok(Some(
+            response
+                .data
+                .ok_or_else(|| anyhow::anyhow!("GitHub returned no pull-request page"))?
+                .search,
+        ))
     };
 
-    let author_page = fetch(format!("author:{login} is:pr sort:created-desc"), author_cursor)?;
-    let owner_page = fetch(format!("user:{login} is:pr sort:created-desc"), owner_cursor)?;
+    let author_page = fetch(
+        format!("author:{login} is:pr sort:created-desc"),
+        author_cursor,
+    )?;
+    let owner_page = fetch(
+        format!("user:{login} is:pr sort:created-desc"),
+        owner_cursor,
+    )?;
     let author_next = author_page
         .as_ref()
         .filter(|page| page.page_info.has_next_page)
@@ -1358,7 +1419,11 @@ fn load_pull_requests_page(cursor: Option<&str>) -> anyhow::Result<(Vec<PullRequ
                 body: request.body.unwrap_or_default(),
                 body_loaded: false,
                 repository: request.repository.name_with_owner,
-                state: if request.merged_at.is_some() { "merged".into() } else { request.state.to_ascii_lowercase() },
+                state: if request.merged_at.is_some() {
+                    "merged".into()
+                } else {
+                    request.state.to_ascii_lowercase()
+                },
                 url: request.url,
                 updated_at: request.updated_at.unwrap_or_default(),
                 created_at: request.created_at.unwrap_or_default(),
@@ -1368,8 +1433,8 @@ fn load_pull_requests_page(cursor: Option<&str>) -> anyhow::Result<(Vec<PullRequ
             unique.insert((entry.repository.clone(), entry.number), entry);
         }
     }
-    let next_cursor = (author_next != "-" || owner_next != "-")
-        .then(|| format!("{author_next}|{owner_next}"));
+    let next_cursor =
+        (author_next != "-" || owner_next != "-").then(|| format!("{author_next}|{owner_next}"));
     let mut entries = unique.into_values().collect::<Vec<_>>();
     sort_pull_requests(&mut entries);
     Ok((entries, next_cursor))
@@ -1597,8 +1662,7 @@ impl Insulator {
                     missing
                         .into_iter()
                         .filter_map(|(login, url)| {
-                            cache_github_avatar(&login, &url)
-                                .map(|path| (login.clone(), path))
+                            cache_github_avatar(&login, &url).map(|path| (login.clone(), path))
                         })
                         .collect::<Vec<_>>()
                 })
@@ -1665,9 +1729,11 @@ impl Insulator {
                     Ok(loaded) => {
                         this.pull_request_body_error.remove(&key);
                         this.ensure_pull_request_media(&loaded.body, cx);
-                        if let Some(entry) = this.pull_requests.iter_mut().find(|entry| {
-                            entry.repository == key.0 && entry.number == key.1
-                        }) {
+                        if let Some(entry) = this
+                            .pull_requests
+                            .iter_mut()
+                            .find(|entry| entry.repository == key.0 && entry.number == key.1)
+                        {
                             entry.body = loaded.body.clone();
                             entry.body_loaded = true;
                             entry.url = loaded.url.clone();
@@ -1695,8 +1761,10 @@ impl Insulator {
                             entry.author_avatar_path = loaded.author_avatar_path.clone();
                             save_cached_pull_requests(&this.pull_requests);
                         }
-                        if !loaded.checks.is_empty() && !this.pull_request_checks.contains_key(&key) {
-                            this.pull_request_checks.insert(key.clone(), loaded.checks.clone());
+                        if !loaded.checks.is_empty() && !this.pull_request_checks.contains_key(&key)
+                        {
+                            this.pull_request_checks
+                                .insert(key.clone(), loaded.checks.clone());
                         }
                         if let Some(detail) = this.pull_request_detail.as_mut()
                             && detail.repository == key.0
@@ -1766,7 +1834,8 @@ impl Insulator {
                         this.pull_request_checks_error.remove(&request_key);
                     }
                     Err(error) => {
-                        this.pull_request_checks_error.insert(request_key.clone(), error.to_string());
+                        this.pull_request_checks_error
+                            .insert(request_key.clone(), error.to_string());
                     }
                 }
                 this.maybe_run_pending_fix(request_key, cx);
@@ -1801,12 +1870,11 @@ impl Insulator {
                     Ok(comments) => {
                         let comments_count = comments.len();
                         for (index, _) in comments.iter().enumerate() {
-                            this.pull_request_collapsed_comments.insert(format!(
-                                "{}:{}:{index}",
-                                request_key.0, request_key.1
-                            ));
+                            this.pull_request_collapsed_comments
+                                .insert(format!("{}:{}:{index}", request_key.0, request_key.1));
                         }
-                        this.pull_request_comments.insert(request_key.clone(), comments);
+                        this.pull_request_comments
+                            .insert(request_key.clone(), comments);
                         if let Some(entry) = this.pull_requests.iter_mut().find(|entry| {
                             entry.repository == request_key.0 && entry.number == request_key.1
                         }) {
@@ -1837,7 +1905,12 @@ impl Insulator {
         request: PullRequest,
         cx: &mut Context<Self>,
     ) {
-        let body = self.pull_request_comment_input.read(cx).content().trim().to_owned();
+        let body = self
+            .pull_request_comment_input
+            .read(cx)
+            .content()
+            .trim()
+            .to_owned();
         let request_key = (request.repository.clone(), request.number);
         if body.is_empty()
             || self.pull_request_comment_posting.contains(&request_key)
@@ -1846,7 +1919,8 @@ impl Insulator {
             return;
         }
         self.pull_request_comment_post_errors.remove(&request_key);
-        self.pull_request_comment_posting.insert(request_key.clone());
+        self.pull_request_comment_posting
+            .insert(request_key.clone());
         let submitted_body = body.clone();
         let submitted_key = request_key.clone();
         let entity = cx.entity().downgrade();
@@ -1859,15 +1933,18 @@ impl Insulator {
             let _ = entity.update(cx, |this, cx| {
                 this.pull_request_comment_posting.remove(&submitted_key);
                 if result.is_ok() {
-                    let still_current_pr = this
-                        .pull_request_detail
-                        .as_ref()
-                        .is_some_and(|detail| (detail.repository.clone(), detail.number) == submitted_key);
-                    let still_submitted = this.pull_request_comment_input.read(cx).content().trim() == submitted_body;
+                    let still_current_pr =
+                        this.pull_request_detail.as_ref().is_some_and(|detail| {
+                            (detail.repository.clone(), detail.number) == submitted_key
+                        });
+                    let still_submitted =
+                        this.pull_request_comment_input.read(cx).content().trim() == submitted_body;
                     if still_current_pr && still_submitted {
-                        this.pull_request_comment_input.update(cx, |input, cx| input.clear(cx));
+                        this.pull_request_comment_input
+                            .update(cx, |input, cx| input.clear(cx));
                     }
-                    this.pull_request_comments.remove(&(request.repository.clone(), request.number));
+                    this.pull_request_comments
+                        .remove(&(request.repository.clone(), request.number));
                     this.ensure_pull_request_comments(request.clone(), cx);
                 } else if let Err(error) = result {
                     this.pull_request_comment_post_errors
@@ -1902,19 +1979,19 @@ impl Insulator {
                 this.pull_request_diffs_loading.remove(&request_key);
                 match result {
                     Ok(diff) => {
-                        if let Some(entry) = this
-                            .pull_requests
-                            .iter_mut()
-                            .find(|entry| entry.repository == request_key.0 && entry.number == request_key.1)
-                        {
+                        if let Some(entry) = this.pull_requests.iter_mut().find(|entry| {
+                            entry.repository == request_key.0 && entry.number == request_key.1
+                        }) {
                             entry.cached_diff = Some(diff.1.clone());
                             save_cached_pull_requests(&this.pull_requests);
                         }
-                        this.pull_request_diffs.insert(request_key.clone(), Arc::new(diff.0));
+                        this.pull_request_diffs
+                            .insert(request_key.clone(), Arc::new(diff.0));
                         this.pull_request_diffs_error.remove(&request_key);
                     }
                     Err(error) => {
-                        this.pull_request_diffs_error.insert(request_key, error.to_string());
+                        this.pull_request_diffs_error
+                            .insert(request_key, error.to_string());
                     }
                 }
                 cx.notify();
@@ -1946,19 +2023,19 @@ impl Insulator {
                 this.pull_request_commits_loading.remove(&request_key);
                 match result {
                     Ok(commits) => {
-                        if let Some(entry) = this
-                            .pull_requests
-                            .iter_mut()
-                            .find(|entry| entry.repository == request_key.0 && entry.number == request_key.1)
-                        {
+                        if let Some(entry) = this.pull_requests.iter_mut().find(|entry| {
+                            entry.repository == request_key.0 && entry.number == request_key.1
+                        }) {
                             entry.cached_commits = commits.clone();
                             save_cached_pull_requests(&this.pull_requests);
                         }
-                        this.pull_request_commits.insert(request_key.clone(), commits);
+                        this.pull_request_commits
+                            .insert(request_key.clone(), commits);
                         this.pull_request_commits_error.remove(&request_key);
                     }
                     Err(error) => {
-                        this.pull_request_commits_error.insert(request_key, error.to_string());
+                        this.pull_request_commits_error
+                            .insert(request_key, error.to_string());
                     }
                 }
                 cx.notify();
@@ -1986,7 +2063,8 @@ impl Insulator {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let is_loading = self.pull_request_checks_loading.contains(key)
-            || (!self.pull_request_checks.contains_key(key) && !self.pull_request_checks_error.contains_key(key));
+            || (!self.pull_request_checks.contains_key(key)
+                && !self.pull_request_checks_error.contains_key(key));
         let checks = self.pull_request_checks.get(key);
         let checks_count = checks.map_or(0, Vec::len);
         let collapsed = self.is_pr_section_collapsed(key, "checks");
@@ -2014,7 +2092,11 @@ impl Insulator {
                     .child("Checks"),
             )
             .child(icon(
-                if collapsed { "icons/chevron-right.svg" } else { "icons/chevron-down.svg" },
+                if collapsed {
+                    "icons/chevron-right.svg"
+                } else {
+                    "icons/chevron-down.svg"
+                },
                 13.0,
                 theme.text_secondary,
             ))
@@ -2030,12 +2112,24 @@ impl Insulator {
         let mut section = div().flex().flex_col().gap(px(8.0)).child(header);
         if !collapsed {
             let content = if is_loading {
-                div().text_color(theme.text_secondary).text_size(sp(13.0)).child("Loading checks…").into_any_element()
+                div()
+                    .text_color(theme.text_secondary)
+                    .text_size(sp(13.0))
+                    .child("Loading checks…")
+                    .into_any_element()
             } else if let Some(error) = self.pull_request_checks_error.get(key) {
-                div().text_color(theme.danger).text_size(sp(13.0)).child(SharedString::from(error.clone())).into_any_element()
+                div()
+                    .text_color(theme.danger)
+                    .text_size(sp(13.0))
+                    .child(SharedString::from(error.clone()))
+                    .into_any_element()
             } else if let Some(checks) = checks {
                 if checks.is_empty() {
-                    div().text_color(theme.text_secondary).text_size(sp(13.0)).child("No checks reported.").into_any_element()
+                    div()
+                        .text_color(theme.text_secondary)
+                        .text_size(sp(13.0))
+                        .child("No checks reported.")
+                        .into_any_element()
                 } else {
                     div()
                         .flex()
@@ -2095,7 +2189,11 @@ impl Insulator {
                         .into_any_element()
                 }
             } else {
-                div().text_color(theme.text_secondary).text_size(sp(13.0)).child("No checks reported.").into_any_element()
+                div()
+                    .text_color(theme.text_secondary)
+                    .text_size(sp(13.0))
+                    .child("No checks reported.")
+                    .into_any_element()
             };
             section = section.child(content);
         }
@@ -2110,7 +2208,8 @@ impl Insulator {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let is_loading = self.pull_request_comments_loading.contains(key)
-            || (!self.pull_request_comments.contains_key(key) && !self.pull_request_comments_error.contains_key(key));
+            || (!self.pull_request_comments.contains_key(key)
+                && !self.pull_request_comments_error.contains_key(key));
         let comments = self.pull_request_comments.get(key);
         let comments_count = comments.map_or(0, Vec::len);
         let section_collapsed = self.is_pr_section_collapsed(key, "comments");
@@ -2138,7 +2237,11 @@ impl Insulator {
                     .child("Comments"),
             )
             .child(icon(
-                if section_collapsed { "icons/chevron-right.svg" } else { "icons/chevron-down.svg" },
+                if section_collapsed {
+                    "icons/chevron-right.svg"
+                } else {
+                    "icons/chevron-down.svg"
+                },
                 13.0,
                 theme.text_secondary,
             ))
@@ -2154,12 +2257,24 @@ impl Insulator {
         let mut section = div().flex().flex_col().gap(px(8.0)).child(header);
         if !section_collapsed {
             let comments_body = if is_loading {
-                div().text_color(theme.text_secondary).text_size(sp(13.0)).child("Loading comments…").into_any_element()
+                div()
+                    .text_color(theme.text_secondary)
+                    .text_size(sp(13.0))
+                    .child("Loading comments…")
+                    .into_any_element()
             } else if let Some(error) = self.pull_request_comments_error.get(key) {
-                div().text_color(theme.danger).text_size(sp(13.0)).child(SharedString::from(error.clone())).into_any_element()
+                div()
+                    .text_color(theme.danger)
+                    .text_size(sp(13.0))
+                    .child(SharedString::from(error.clone()))
+                    .into_any_element()
             } else if let Some(comments) = comments {
                 if comments.is_empty() {
-                    div().text_color(theme.text_secondary).text_size(sp(13.0)).child("No comments yet.").into_any_element()
+                    div()
+                        .text_color(theme.text_secondary)
+                        .text_size(sp(13.0))
+                        .child("No comments yet.")
+                        .into_any_element()
                 } else {
                     let palette = MarkdownPalette::from_theme(theme);
                     div()
@@ -2168,14 +2283,17 @@ impl Insulator {
                         .gap(px(8.0))
                         .children(comments.iter().enumerate().map(|(index, comment)| {
                             let comment_key = format!("{}:{}:{index}", key.0, key.1);
-                            let collapsed = self.pull_request_collapsed_comments.contains(&comment_key);
+                            let collapsed =
+                                self.pull_request_collapsed_comments.contains(&comment_key);
                             let entity = cx.entity().downgrade();
                             let toggle_comment_key = comment_key.clone();
                             let author = comment.author.clone();
                             let reply_entity = entity.clone();
 
                             let item_header = div()
-                                .id(SharedString::from(format!("pull-request-comment-header-{index}")))
+                                .id(SharedString::from(format!(
+                                    "pull-request-comment-header-{index}"
+                                )))
                                 .w_full()
                                 .px(px(8.0))
                                 .py(px(6.0))
@@ -2188,8 +2306,12 @@ impl Insulator {
                                 .hover(|el| el.bg(theme.overlay_strong))
                                 .on_click(move |_, _, cx| {
                                     let _ = entity.update(cx, |this, cx| {
-                                        if !this.pull_request_collapsed_comments.remove(&toggle_comment_key) {
-                                            this.pull_request_collapsed_comments.insert(toggle_comment_key.clone());
+                                        if !this
+                                            .pull_request_collapsed_comments
+                                            .remove(&toggle_comment_key)
+                                        {
+                                            this.pull_request_collapsed_comments
+                                                .insert(toggle_comment_key.clone());
                                         }
                                         cx.notify();
                                     });
@@ -2223,16 +2345,28 @@ impl Insulator {
                                             div()
                                                 .text_size(sp(12.0))
                                                 .text_color(theme.text_secondary)
-                                                .child(SharedString::from(format_relative_time_compact(&comment.created_at))),
+                                                .child(SharedString::from(
+                                                    format_relative_time_compact(
+                                                        &comment.created_at,
+                                                    ),
+                                                )),
                                         )
                                         .child(icon(
-                                            if collapsed { "icons/chevron-right.svg" } else { "icons/chevron-down.svg" },
+                                            if collapsed {
+                                                "icons/chevron-right.svg"
+                                            } else {
+                                                "icons/chevron-down.svg"
+                                            },
                                             12.0,
                                             theme.text_tertiary,
                                         )),
                                 );
 
-                            let mut card = div().w_full().rounded(px(8.0)).bg(theme.overlay).child(item_header);
+                            let mut card = div()
+                                .w_full()
+                                .rounded(px(8.0))
+                                .bg(theme.overlay)
+                                .child(item_header);
                             if !collapsed {
                                 if let Some(location) = comment.location.as_ref() {
                                     card = card.child(
@@ -2254,19 +2388,16 @@ impl Insulator {
                                     };
                                     if !tag_text.is_empty() {
                                         card = card.child(
-                                            div()
-                                                .px(px(12.0))
-                                                .pt(px(6.0))
-                                                .child(
-                                                    div()
-                                                        .px(px(6.0))
-                                                        .py(px(2.0))
-                                                        .rounded(px(4.0))
-                                                        .bg(theme.overlay_strong)
-                                                        .text_size(sp(11.5))
-                                                        .text_color(theme.text)
-                                                        .child(tag_text),
-                                                ),
+                                            div().px(px(12.0)).pt(px(6.0)).child(
+                                                div()
+                                                    .px(px(6.0))
+                                                    .py(px(2.0))
+                                                    .rounded(px(4.0))
+                                                    .bg(theme.overlay_strong)
+                                                    .text_size(sp(11.5))
+                                                    .text_color(theme.text)
+                                                    .child(tag_text),
+                                            ),
                                         );
                                     }
                                 }
@@ -2276,57 +2407,74 @@ impl Insulator {
                                 let context = MarkdownCtx::new(
                                     format!("pull-request-comment-{}-{index}", key.1),
                                     &palette,
-                                    MarkdownMetrics::document(self.state.ui_font_size, self.state.code_font_size),
+                                    MarkdownMetrics::document(
+                                        self.state.ui_font_size,
+                                        self.state.code_font_size,
+                                    ),
                                     self.pull_request_detail_selection.clone(),
                                 )
                                 .with_math_enabled(self.state.render_math)
                                 .with_link_handler(self.markdown_link_handler.clone());
-                                let rendered = md::render::markdown(&view, &context).unwrap_or_else(|| {
-                                    md::render::plain_text(
-                                        body,
-                                        crate::theme::active_ui_font_family(),
-                                        FontWeight::NORMAL,
-                                        theme.text_secondary,
-                                        &context,
-                                    )
-                                });
+                                let rendered = md::render::markdown(&view, &context)
+                                    .unwrap_or_else(|| {
+                                        md::render::plain_text(
+                                            body,
+                                            crate::theme::active_ui_font_family(),
+                                            FontWeight::NORMAL,
+                                            theme.text_secondary,
+                                            &context,
+                                        )
+                                    });
                                 card = card.child(div().px(px(12.0)).py(px(8.0)).child(rendered));
-                                card = card.child(
-                                    div()
-                                        .w_full()
-                                        .px(px(12.0))
-                                        .pb(px(8.0))
-                                        .flex()
-                                        .justify_end()
-                                        .child(
-                                            div()
-                                                .id(SharedString::from(format!("reply-comment-{index}")))
-                                                .cursor_pointer()
-                                                .text_size(sp(12.0))
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .text_color(theme.text_secondary)
-                                                .hover(|el| el.text_color(theme.text))
-                                                .child("Reply")
-                                                .on_click(move |_, window, cx| {
-                                                    let author = author.clone();
-                                                    if let Ok(focus) = reply_entity.update(cx, |this, cx| {
-                                                        this.pull_request_comment_input.update(cx, |input, cx| {
-                                                            input.set_content(format!("@{author} "), cx);
-                                                            input.focus()
-                                                        })
-                                                    }) {
-                                                        window.focus(&focus, cx);
-                                                    }
-                                                }),
-                                        ),
-                                );
+                                card =
+                                    card.child(
+                                        div()
+                                            .w_full()
+                                            .px(px(12.0))
+                                            .pb(px(8.0))
+                                            .flex()
+                                            .justify_end()
+                                            .child(
+                                                div()
+                                                    .id(SharedString::from(format!(
+                                                        "reply-comment-{index}"
+                                                    )))
+                                                    .cursor_pointer()
+                                                    .text_size(sp(12.0))
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(theme.text_secondary)
+                                                    .hover(|el| el.text_color(theme.text))
+                                                    .child("Reply")
+                                                    .on_click(move |_, window, cx| {
+                                                        let author = author.clone();
+                                                        if let Ok(focus) =
+                                                            reply_entity.update(cx, |this, cx| {
+                                                                this.pull_request_comment_input
+                                                                    .update(cx, |input, cx| {
+                                                                        input.set_content(
+                                                                            format!("@{author} "),
+                                                                            cx,
+                                                                        );
+                                                                        input.focus()
+                                                                    })
+                                                            })
+                                                        {
+                                                            window.focus(&focus, cx);
+                                                        }
+                                                    }),
+                                            ),
+                                    );
                             }
                             card
                         }))
                         .into_any_element()
                 }
             } else {
-                div().text_color(theme.text_secondary).text_size(sp(13.0)).child("No comments yet.").into_any_element()
+                div()
+                    .text_color(theme.text_secondary)
+                    .text_size(sp(13.0))
+                    .child("No comments yet.")
+                    .into_any_element()
             };
             section = section.child(comments_body);
         }
@@ -2367,7 +2515,12 @@ impl Insulator {
                     .items_center()
                     .gap(px(8.0))
                     .child(icon("icons/github.svg", 16.0, theme.text_secondary))
-                    .child(div().min_w_0().flex_1().child(self.pull_request_comment_input.clone()))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .child(self.pull_request_comment_input.clone()),
+                    )
                     .child(
                         div()
                             .id("pull-request-submit-comment")
@@ -2497,7 +2650,10 @@ impl Insulator {
             .collect::<Vec<_>>()
             .join(" ");
         if single_line.chars().count() > max_length {
-            let truncated: String = single_line.chars().take(max_length.saturating_sub(1)).collect();
+            let truncated: String = single_line
+                .chars()
+                .take(max_length.saturating_sub(1))
+                .collect();
             format!("{truncated}{ELLIPSIS}")
         } else {
             single_line
@@ -2551,7 +2707,10 @@ impl Insulator {
         if let Some(checks) = self.pull_request_checks.get(&key) {
             for check in checks.iter().filter(|check| check.bucket == "fail") {
                 let link = (!check.link.is_empty()).then(|| {
-                    format!(" at {}", Self::fix_prompt_field(&check.link, BODY_MAX_LENGTH))
+                    format!(
+                        " at {}",
+                        Self::fix_prompt_field(&check.link, BODY_MAX_LENGTH)
+                    )
                 });
                 findings.push((
                     format!(
@@ -2570,7 +2729,11 @@ impl Insulator {
             .enumerate()
             .map(|(index, (heading, body))| {
                 let body = Self::fix_prompt_field(&body, BODY_MAX_LENGTH);
-                format!("{}. {heading}:\n> {}", index + 1, body.replace('\n', "\n> "))
+                format!(
+                    "{}. {heading}:\n> {}",
+                    index + 1,
+                    body.replace('\n', "\n> ")
+                )
             })
             .collect::<Vec<_>>();
         let title = Self::fix_prompt_field(&request.title, BODY_MAX_LENGTH);
@@ -2767,14 +2930,7 @@ impl Insulator {
             if let Some(project_id) = self.find_fix_project_id(&repository) {
                 self.pull_request_fix_preparing.insert(key);
                 cx.notify();
-                self.spawn_fix_thread(
-                    project_id,
-                    destination,
-                    request,
-                    prompt,
-                    window_handle,
-                    cx,
-                );
+                self.spawn_fix_thread(project_id, destination, request, prompt, window_handle, cx);
             } else {
                 // Origin verification rejected the reuse candidate (wrong
                 // repo behind a colliding directory name); clear the
@@ -2800,10 +2956,7 @@ impl Insulator {
                     // missing parents, so `~/insulator/repos` must exist first.
                     if let Some(parent) = clone_destination.parent() {
                         std::fs::create_dir_all(parent).map_err(|error| {
-                            anyhow::anyhow!(
-                                "creating {} failed: {error}",
-                                parent.display()
-                            )
+                            anyhow::anyhow!("creating {} failed: {error}", parent.display())
                         })?;
                     }
                     let mut command = gh_command();
@@ -2973,12 +3126,15 @@ impl Insulator {
                 .into_any_element()
         } else {
             let entity = cx.entity().downgrade();
-            list(self.pull_requests_list_state.clone(), move |row, _window, cx| {
-                entity
-                    .upgrade()
-                    .map(|entity| entity.update(cx, |this, cx| this.pull_request_row(row, cx)))
-                    .unwrap_or_else(|| div().into_any_element())
-            })
+            list(
+                self.pull_requests_list_state.clone(),
+                move |row, _window, cx| {
+                    entity
+                        .upgrade()
+                        .map(|entity| entity.update(cx, |this, cx| this.pull_request_row(row, cx)))
+                        .unwrap_or_else(|| div().into_any_element())
+                },
+            )
             .size_full()
             .into_any_element()
         };
@@ -3124,8 +3280,8 @@ impl Insulator {
                     .w_full()
                     .child(body)
                     .when(self.pull_requests_loading_more, |el| {
-                            el.child(
-                                div()
+                        el.child(
+                            div()
                                 .absolute()
                                 .left(px(12.0))
                                 .right(px(12.0))
@@ -3146,9 +3302,8 @@ impl Insulator {
                                         .text_size(sp(12.0))
                                         .text_color(theme.text_secondary),
                                 ),
-                            )
-                        }
-                    )
+                        )
+                    })
                     .when_some(self.pull_requests_page_error.clone(), |el, error| {
                         let entity = pull_requests.clone();
                         el.child(
@@ -3259,20 +3414,18 @@ fn render_pull_request_row(
             element
                 .border_1()
                 .border_color(gpui::transparent_black())
-                .hover(|element| {
-                    element
-                        .bg(theme.overlay)
-                        .border_color(theme.border)
-                })
+                .hover(|element| element.bg(theme.overlay).border_color(theme.border))
                 .active(|element| element.bg(theme.overlay_strong))
         })
         .on_click(move |_, _, cx| {
             let _ = insulator.update(cx, |this, cx| {
                 this.pull_request_detail = Some(request.clone());
                 this.pull_request_detail_selection.clear();
-                this.pull_request_comment_input.update(cx, |input, cx| input.clear(cx));
+                this.pull_request_comment_input
+                    .update(cx, |input, cx| input.clear(cx));
                 this.pull_request_detail_tab = PullRequestDetailTab::Summary;
-                this.pull_request_detail_scroll_handle.set_offset(Point::default());
+                this.pull_request_detail_scroll_handle
+                    .set_offset(Point::default());
                 this.ensure_pull_request_media(&request.body, cx);
                 this.ensure_pull_request_body(request.clone(), cx);
                 this.ensure_pull_request_commits(request.clone(), cx);
@@ -3281,9 +3434,8 @@ fn render_pull_request_row(
                 let comment_key = (request.repository.clone(), request.number);
                 if let Some(comments) = this.pull_request_comments.get(&comment_key) {
                     for (index, _) in comments.iter().enumerate() {
-                        this.pull_request_collapsed_comments.insert(format!(
-                            "{}:{}:{index}", comment_key.0, comment_key.1
-                        ));
+                        this.pull_request_collapsed_comments
+                            .insert(format!("{}:{}:{index}", comment_key.0, comment_key.1));
                     }
                 }
                 this.set_right_panel_visible(true, cx);
@@ -3492,8 +3644,7 @@ impl Insulator {
                             return;
                         };
                         // Discard deferred work if selection moved to another PR.
-                        if detail.repository != detail_key.0 || detail.number != detail_key.1
-                        {
+                        if detail.repository != detail_key.0 || detail.number != detail_key.1 {
                             return;
                         }
                         // Re-derive the live video set so a body load that
@@ -3509,9 +3660,7 @@ impl Insulator {
                             let Some(detail) = this.pull_request_detail.as_ref() else {
                                 return;
                             };
-                            if detail.repository != detail_key.0
-                                || detail.number != detail_key.1
-                            {
+                            if detail.repository != detail_key.0 || detail.number != detail_key.1 {
                                 return;
                             }
                             if !current_urls.contains(url) {
@@ -3594,7 +3743,9 @@ impl Insulator {
                 })
             }))
             .with_video_renderer(std::rc::Rc::new(move |url| {
-                players.get(url).map(|player| player.clone().into_any_element())
+                players
+                    .get(url)
+                    .map(|player| player.clone().into_any_element())
             }));
             md::render::markdown(view, &markdown_context).unwrap_or_else(|| {
                 md::render::plain_text(
@@ -4179,13 +4330,9 @@ impl Insulator {
                                 let fix_entity = close.clone();
                                 let key_fix_request = request.clone();
                                 let key_fix_entity = close.clone();
-                                let fix_key = (
-                                    request.repository.clone(),
-                                    request.number,
-                                );
-                                let is_preparing = self
-                                    .pull_request_fix_preparing
-                                    .contains(&fix_key);
+                                let fix_key = (request.repository.clone(), request.number);
+                                let is_preparing =
+                                    self.pull_request_fix_preparing.contains(&fix_key);
                                 el.child(
                                     div()
                                         .id("fix-pull-request-findings")
@@ -4205,9 +4352,8 @@ impl Insulator {
                                         .bg(theme.overlay)
                                         .cursor_pointer()
                                         .when(!is_preparing, |element| {
-                                            element.hover(|element| {
-                                                element.bg(theme.overlay_strong)
-                                            })
+                                            element
+                                                .hover(|element| element.bg(theme.overlay_strong))
                                         })
                                         .when(is_preparing, |element| element.opacity(0.5))
                                         .tooltip(Tooltip::text(if is_preparing {
@@ -4227,11 +4373,7 @@ impl Insulator {
                                             icon("icons/wrench.svg", 13.0, theme.accent)
                                                 .into_any_element()
                                         })
-                                        .child(if is_preparing {
-                                            "Preparing…"
-                                        } else {
-                                            "Fix"
-                                        })
+                                        .child(if is_preparing { "Preparing…" } else { "Fix" })
                                         .when(!is_preparing, |element| {
                                             element
                                                 .on_click(move |_, window, cx| {
@@ -4243,24 +4385,26 @@ impl Insulator {
                                                         );
                                                     });
                                                 })
-                                                .on_key_down(move |event: &KeyDownEvent,
-                                                                   window,
-                                                                   cx| {
-                                                    if matches!(
-                                                        event.keystroke.key.as_str(),
-                                                        "enter" | "space"
-                                                    ) {
-                                                        let _ =
-                                                            key_fix_entity.update(cx, |this, cx| {
-                                                                this.fix_pull_request_findings(
-                                                                    key_fix_request.clone(),
-                                                                    window,
-                                                                    cx,
-                                                                );
-                                                            });
-                                                        cx.stop_propagation();
-                                                    }
-                                                })
+                                                .on_key_down(
+                                                    move |event: &KeyDownEvent, window, cx| {
+                                                        if matches!(
+                                                            event.keystroke.key.as_str(),
+                                                            "enter" | "space"
+                                                        ) {
+                                                            let _ = key_fix_entity.update(
+                                                                cx,
+                                                                |this, cx| {
+                                                                    this.fix_pull_request_findings(
+                                                                        key_fix_request.clone(),
+                                                                        window,
+                                                                        cx,
+                                                                    );
+                                                                },
+                                                            );
+                                                            cx.stop_propagation();
+                                                        }
+                                                    },
+                                                )
                                         }),
                                 )
                             })
@@ -4351,7 +4495,8 @@ impl Insulator {
                             .on_click(move |_, _, cx| {
                                 let _ = detail_entity.update(cx, |this, cx| {
                                     this.pull_request_detail_tab = tab;
-                                    this.pull_request_detail_scroll_handle.set_offset(Point::default());
+                                    this.pull_request_detail_scroll_handle
+                                        .set_offset(Point::default());
                                     if tab == PullRequestDetailTab::Commits {
                                         this.ensure_pull_request_commits(
                                             request_for_tab.clone(),
@@ -4412,7 +4557,8 @@ impl Insulator {
                                     |bounds, _, _| bounds,
                                     move |bounds, _, window, cx| {
                                         if selection.selection.borrow().is_dragging() {
-                                            if let Some((x, y)) = selection.last_drag_position.get() {
+                                            if let Some((x, y)) = selection.last_drag_position.get()
+                                            {
                                                 let position = point(px(x), px(y));
                                                 if scroll_pull_request_selection_at_edge(
                                                     &scroll, bounds, position,
@@ -4482,11 +4628,23 @@ mod tests {
     #[test]
     fn selection_autoscroll_moves_toward_each_edge_and_clamps() {
         assert_eq!(
-            super::pull_request_selection_offset(px(-100.0), px(500.0), px(0.0), px(400.0), px(0.0)),
+            super::pull_request_selection_offset(
+                px(-100.0),
+                px(500.0),
+                px(0.0),
+                px(400.0),
+                px(0.0)
+            ),
             px(-80.0)
         );
         assert_eq!(
-            super::pull_request_selection_offset(px(-100.0), px(500.0), px(0.0), px(400.0), px(400.0)),
+            super::pull_request_selection_offset(
+                px(-100.0),
+                px(500.0),
+                px(0.0),
+                px(400.0),
+                px(400.0)
+            ),
             px(-120.0)
         );
         assert_eq!(
@@ -4494,7 +4652,13 @@ mod tests {
             px(0.0)
         );
         assert_eq!(
-            super::pull_request_selection_offset(px(-500.0), px(500.0), px(0.0), px(400.0), px(400.0)),
+            super::pull_request_selection_offset(
+                px(-500.0),
+                px(500.0),
+                px(0.0),
+                px(400.0),
+                px(400.0)
+            ),
             px(-500.0)
         );
     }
@@ -4545,10 +4709,7 @@ mod tests {
             ),
         ];
         super::sort_pull_requests(&mut entries);
-        let order = entries
-            .iter()
-            .map(|entry| entry.number)
-            .collect::<Vec<_>>();
+        let order = entries.iter().map(|entry| entry.number).collect::<Vec<_>>();
         // Newest `created_at` first; ties break by newest `updated_at`.
         // A cache saved in `updated_at` order (or none) must not survive.
         assert_eq!(order, vec![3, 2, 1]);
@@ -4577,10 +4738,7 @@ mod tests {
                 "2026-09-01T00:00:00Z",
             ),
         ]);
-        let order = merged
-            .iter()
-            .map(|entry| entry.number)
-            .collect::<Vec<_>>();
+        let order = merged.iter().map(|entry| entry.number).collect::<Vec<_>>();
         assert_eq!(order, vec![2, 1]);
     }
 
@@ -4618,7 +4776,10 @@ mod tests {
             "{extensionless}"
         );
         assert!(extensionless.ends_with("after"), "{extensionless}");
-        assert_eq!(super::html_media_to_markdown("ordinary text"), "ordinary text");
+        assert_eq!(
+            super::html_media_to_markdown("ordinary text"),
+            "ordinary text"
+        );
 
         let bare_video = super::without_html_comments(
             "#### Video\n\nhttps://github.com/user-attachments/assets/clip-id",

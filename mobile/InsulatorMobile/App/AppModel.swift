@@ -15,6 +15,8 @@ final class AppModel {
     var isLoading = false
     var transcriptRevision = 0
     var connectedAddress: String?
+    var githubAvatar: UIImage?
+    var projectGitHubURLs: [UUID: URL] = [:]
     /// Host of the Mac saved in the Keychain. Non-nil means this iPhone has
     /// paired before, so a disconnect shows the reconnect screen instead of the
     /// first-time entry form.
@@ -109,6 +111,8 @@ final class AppModel {
         runtimes = [:]
         activityIDs = [:]
         connectedAddress = nil
+        githubAvatar = nil
+        projectGitHubURLs = [:]
         if forget {
             CredentialStore.clear()
             savedPayload = nil
@@ -120,6 +124,7 @@ final class AppModel {
         guard isConnected else { return }
         do {
             try await loadTaskState()
+            await loadProjectPresentation()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -228,6 +233,7 @@ final class AppModel {
             guard let submission = Self.submission(prompt: prompt, attachments: attachments) else { return }
             let messageID = UUID()
             let turnID = UUID()
+            let titlePrompt = prompt.isEmpty ? attachments.map(\.name).joined(separator: " ") : prompt
             appendOptimisticMessage(Message(
                 id: messageID,
                 turnID: turnID,
@@ -237,7 +243,7 @@ final class AppModel {
                 attachments: attachments,
                 createdAt: UInt64(Date().timeIntervalSince1970),
                 streaming: false
-            ))
+            ), titlePrompt: titlePrompt)
             try await saveSession(session.id)
             _ = try await client.request(
                 sessionID: session.id,
@@ -421,6 +427,43 @@ final class AppModel {
         }
     }
 
+    func renameProject(_ projectID: UUID, name: String) async {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty,
+              let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
+        let current = projects[index]
+        let renamed = Project(id: current.id, name: name, path: current.path, createdAt: current.createdAt)
+        projects[index] = renamed
+        do {
+            _ = try await client.request(command: .object([
+                "type": .string("saveTaskState"),
+                "projects": .array([try JSONValue.decode(renamed)]),
+                "liveSessionIds": .array([]),
+                "sessions": .array([]),
+            ]))
+        } catch {
+            projects[index] = current
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func removeProject(_ projectID: UUID) async {
+        do {
+            _ = try await client.request(command: .object([
+                "type": .string("removeProject"),
+                "projectId": .uuid(projectID),
+            ]))
+            projects.removeAll { $0.id == projectID }
+            sessions.removeAll { $0.projectID == projectID }
+            projectGitHubURLs[projectID] = nil
+            if selectedSession?.projectID == projectID {
+                selectedSession = nil
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func updateSessionProject(_ sessionID: UUID, projectID: UUID) async {
         guard var session = session(withID: sessionID) else { return }
         session.projectID = projectID
@@ -576,24 +619,11 @@ final class AppModel {
     }
 
     var allAvailableProviders: [ProviderKind] {
-        var providers: [ProviderKind] = []
-        for probe in installedProbes {
-            providers.append(probe.provider)
-        }
-        for kind in [ProviderKind.claude, .codex, .deepSeek, .grok, .pi, .cursor, .kimi, .devin, .openCode, .openCode2, .fx, .ohMyPi, .amp] {
-            if !providers.contains(kind) {
-                providers.append(kind)
-            }
-        }
-        return providers
+        installedProbes.map(\.provider)
     }
 
     func models(for provider: ProviderKind) -> [ProviderModel] {
-        let discovered = probes[provider]?.models ?? []
-        if !discovered.isEmpty {
-            return discovered
-        }
-        return Self.fallbackModels(for: provider)
+        probes[provider]?.models ?? []
     }
 
     static let standardReasoning: [ProviderModelOption] = [
@@ -694,8 +724,8 @@ final class AppModel {
             connectedAddress = payload.url.absoluteString
             if remember { try CredentialStore.save(payload) }
             rememberedHost = payload.url.host
-            connectionState = .connected(version: version)
             try await loadInitialState()
+            connectionState = .connected(version: version)
         } catch {
             client.disconnect()
             let message = Self.describeConnectionError(error, url: payload.url)
@@ -725,6 +755,7 @@ final class AppModel {
         defer { isLoading = false }
         try await loadSettings()
         try await loadTaskState()
+        await loadProjectPresentation()
         try await probeProviders()
     }
 
@@ -772,6 +803,27 @@ final class AppModel {
             }
             selectedSession = merged
         }
+    }
+
+    private func loadProjectPresentation() async {
+        if githubAvatar == nil,
+           let payload = try? await client.request(command: .object(["type": .string("readGitHubAvatar")])),
+           let encoded = payload["bytes"]?.string,
+           let data = Data(base64Encoded: encoded) {
+            githubAvatar = UIImage(data: data)
+        }
+
+        var urls: [UUID: URL] = [:]
+        for project in projects {
+            guard let payload = try? await client.request(command: .object([
+                "type": .string("resolveProjectGitHubUrl"),
+                "path": .string(project.path),
+            ])),
+            let rawURL = payload["url"]?.string,
+            let url = URL(string: rawURL) else { continue }
+            urls[project.id] = url
+        }
+        projectGitHubURLs = urls
     }
 
     private func probeProviders() async throws {
@@ -1012,8 +1064,9 @@ final class AppModel {
         }
     }
 
-    private func appendOptimisticMessage(_ message: Message) {
+    private func appendOptimisticMessage(_ message: Message, titlePrompt: String) {
         guard var session = selectedSession else { return }
+        session.setTitleFromFirstPrompt(titlePrompt)
         session.messages.append(message)
         if let turnID = message.turnID,
            !session.turns.contains(where: { $0.id == turnID }) {

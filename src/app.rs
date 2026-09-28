@@ -11,13 +11,11 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use gpui::{
     Animation, AnimationExt, AnyElement, App, Bounds, ClipboardEntry, ClipboardItem, Context, Div,
     Entity, ExternalPaths, FocusHandle, Focusable, FontWeight, Hsla, IntoElement, KeyDownEvent,
-    KeystrokeEvent,
-    ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, NavigationDirection, ObjectFit, PathPromptOptions, Pixels, Render, ScrollHandle,
-    SharedString, Stateful, StyleRefinement, Subscription, TextRun, WeakEntity, Window,
-    WindowBounds, canvas,
-    div, ease_out_quint, fill, font, img, linear_color_stop, linear_gradient, list, point,
-    prelude::*, pulsating_between, px, rgb,
+    KeystrokeEvent, ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, NavigationDirection, ObjectFit, PathPromptOptions, Pixels,
+    Render, ScrollHandle, SharedString, Stateful, StyleRefinement, Subscription, TextRun,
+    WeakEntity, Window, WindowBounds, canvas, div, ease_out_quint, fill, font, img,
+    linear_color_stop, linear_gradient, list, point, prelude::*, pulsating_between, px, rgb,
 };
 use uuid::Uuid;
 
@@ -73,11 +71,11 @@ use crate::ui::{
 use crate::{
     CancelTaskSwitch, CancelTurn, CloseActiveTab, CloseFind, CloseWindow, ConfirmTaskSwitch,
     CopySelection, FindNext, FindPrevious, FocusComposer, NavigateBack, NavigateForward,
-    NewProject, NewSession, NewTab, NextMainTab, OpenFind, OpenFindReplace, OpenResumePicker, OpenReview,
-    OpenSettings, PreviousMainTab, ReplaceAllMatches, SaveFile, SelectFirstTask, SelectLastTask,
-    SwitchTaskBackward, SwitchTaskForward, ToggleCommandPalette, ToggleFindCaseSensitive,
-    ToggleFindRegex, ToggleFindWholeWord, ToggleFpsCounter, ToggleModelPicker, TogglePullRequests,
-    ToggleRightPanel, ToggleSidebar, ToggleUsagePanel,
+    NewProject, NewSession, NewTab, NextMainTab, OpenFind, OpenFindReplace, OpenResumePicker,
+    OpenReview, OpenSettings, PreviousMainTab, ReplaceAllMatches, SaveFile, SelectFirstTask,
+    SelectLastTask, SwitchTaskBackward, SwitchTaskForward, ToggleCommandPalette,
+    ToggleFindCaseSensitive, ToggleFindRegex, ToggleFindWholeWord, ToggleFpsCounter,
+    ToggleModelPicker, TogglePullRequests, ToggleRightPanel, ToggleSidebar, ToggleUsagePanel,
 };
 use insulator_protocol::theme::WindowStyle;
 

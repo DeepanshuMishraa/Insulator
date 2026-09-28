@@ -467,6 +467,19 @@ struct AgentSession: Codable, Hashable, Identifiable, Sendable {
         return autoTitle?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "New thread"
     }
 
+    mutating func setTitleFromFirstPrompt(_ prompt: String) {
+        guard messages.count <= 1,
+              title == "New task" || title == "New thread",
+              autoTitle == nil else { return }
+
+        var generated = prompt.split(whereSeparator: { $0.isWhitespace }).prefix(7).joined(separator: " ")
+        guard !generated.isEmpty else { return }
+        if generated.count > 54 {
+            generated = "\(generated.prefix(53))…"
+        }
+        autoTitle = generated
+    }
+
     enum CodingKeys: String, CodingKey {
         case id, title, provider, model, status, messages
         case autoTitle = "auto_title"

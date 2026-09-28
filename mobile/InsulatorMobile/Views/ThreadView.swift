@@ -3,6 +3,21 @@ import PhotosUI
 import Textual
 import UIKit
 
+enum TranscriptScrollPosition {
+    static func distanceFromBottom(contentHeight: CGFloat, visibleMaxY: CGFloat) -> CGFloat {
+        max(0, contentHeight - visibleMaxY)
+    }
+}
+
+enum TranscriptScrollOwnership: Equatable {
+    case app
+    case user
+
+    static func afterUserInteraction(isAtBottom: Bool) -> Self {
+        isAtBottom ? .app : .user
+    }
+}
+
 enum ActiveInputPopup: Identifiable {
     case plus
     case permissions
@@ -31,19 +46,14 @@ struct ThreadView: View {
     @State private var renameText = ""
     @State private var confirmsDelete = false
     @State private var viewerTarget: ImageViewerTarget?
-    /// Whether the transcript is being held at the live edge. Only while this is
-    /// true does new content keep the bottom where it is.
-    @State private var isPinnedToBottom = true
-    /// A finger is on the scroll view, so where the bottom sits is the user's
-    /// call until they return to the edge.
-    @State private var isUserScrolling = false
-    /// Set while a jump to the live edge is animating, so the sticky pin does
-    /// not fight the animation frame by frame.
-    @State private var jumpInFlight = false
+    /// Layout may report temporary drift while a streaming row grows. Only a
+    /// real user gesture transfers control away from the live edge.
+    @State private var scrollOwnership = TranscriptScrollOwnership.app
+    @State private var isAtBottom = true
+    @State private var isUserTouchingScroll = false
 
     private static let bottomAnchor = "thread-bottom"
-    /// Close enough to the edge to count as still reading the newest line.
-    private static let pinThreshold: CGFloat = 56
+    private static let pinThreshold: CGFloat = 12
 
     private var session: AgentSession? {
         if app.selectedSession?.id == sessionID { return app.selectedSession }
@@ -59,9 +69,8 @@ struct ThreadView: View {
                         Button {
                             dismiss()
                         } label: {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(.white)
+                            ReiconIcon(.arrowLeft, size: 16)
+                                .foregroundStyle(AppTheme.primary)
                                 .frame(width: 44, height: 44)
                                 .background(AppTheme.raised, in: Circle())
                         }
@@ -72,11 +81,11 @@ struct ThreadView: View {
 
                         VStack(spacing: 2) {
                             Text(session.displayTitle)
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(.white)
+                                .font(AppTheme.font(size: 17, weight: .semibold))
+                                .foregroundStyle(AppTheme.primary)
                                 .lineLimit(1)
                             Text(app.displayHost ?? "Mac")
-                                .font(.caption2)
+                                .font(AppTheme.font(.caption2))
                                 .foregroundStyle(AppTheme.secondary)
                                 .lineLimit(1)
                         }
@@ -88,17 +97,16 @@ struct ThreadView: View {
                                 renameText = session.displayTitle
                                 showsRename = true
                             } label: {
-                                Label("Rename thread", systemImage: "pencil")
+                                Label("Rename thread", image: Reicon.edit.rawValue)
                             }
                             Button(role: .destructive) {
                                 confirmsDelete = true
                             } label: {
-                                Label("Delete thread", systemImage: "trash")
+                                Label("Delete thread", image: Reicon.trash.rawValue)
                             }
                         } label: {
-                            Image(systemName: "ellipsis")
-                                .font(.system(size: 17, weight: .medium))
-                                .foregroundStyle(.white)
+                            ReiconIcon(.more, size: 17)
+                                .foregroundStyle(AppTheme.primary)
                                 .frame(width: 44, height: 44)
                                 .background(AppTheme.raised, in: Circle())
                         }
@@ -112,6 +120,7 @@ struct ThreadView: View {
                     transcript(for: session)
                 }
                 .toolbar(.hidden, for: .navigationBar)
+                .background(SwipeBackEnabler())
                 .sheet(item: permissionBinding) { permission in
                     PermissionSheet(app: app, permission: permission)
                         .presentationDetents([.medium])
@@ -189,6 +198,11 @@ struct ThreadView: View {
                 }
             }
             .scrollIndicators(.hidden)
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            // Match Remodex's native content-growth behavior: the scroll view
+            // itself follows a growing streaming row instead of chasing every
+            // token with a new scroll animation.
+            .defaultScrollAnchor(sizeChangeScrollAnchor, for: .sizeChanges)
             .overlay {
                 // Tap barrier while a popup is open. Sits above the transcript and
                 // below the jump control, which stays reachable.
@@ -201,34 +215,37 @@ struct ThreadView: View {
                         }
                 }
             }
-            .overlay(alignment: .bottomTrailing) {
+            .overlay(alignment: .bottom) {
                 jumpToLiveEdge(using: proxy, isStreaming: session.status.isBusy)
             }
             .onScrollGeometryChange(for: CGFloat.self, of: Self.distanceFromBottom) { _, distance in
-                guard !jumpInFlight else {
-                    // Our own jump is in flight; the pin resumes once it lands.
-                    if distance <= 1 { jumpInFlight = false }
-                    return
-                }
-                if isUserScrolling {
-                    isPinnedToBottom = distance <= Self.pinThreshold
-                    return
-                }
-                // Content grew while we were following. Hold the edge with an
-                // unanimated scroll: an eased scroll restarted on every token is
-                // what made streaming feel like a fight with the scroll view.
-                if isPinnedToBottom, distance > 1 {
+                let nextIsAtBottom = distance <= Self.pinThreshold
+                isAtBottom = nextIsAtBottom
+
+                // Native size-change anchoring handles streaming. This repairs
+                // any layout pass that still lands short without surrendering
+                // app ownership merely because geometry changed.
+                if scrollOwnership == .app, !isUserTouchingScroll, !nextIsAtBottom {
                     proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
                 }
             }
-            .onScrollPhaseChange { _, phase in
-                switch phase {
-                case .tracking, .interacting, .decelerating:
-                    jumpInFlight = false
-                    isUserScrolling = true
+            .onScrollPhaseChange { oldPhase, newPhase in
+                switch newPhase {
+                case .tracking:
+                    isUserTouchingScroll = true
+                case .interacting:
+                    isUserTouchingScroll = true
+                    scrollOwnership = .user
+                case .decelerating:
+                    if oldPhase == .tracking {
+                        scrollOwnership = .user
+                    }
+                    isUserTouchingScroll = false
                 case .idle:
-                    isUserScrolling = false
-                    jumpInFlight = false
+                    isUserTouchingScroll = false
+                    if oldPhase == .tracking || oldPhase == .interacting || oldPhase == .decelerating {
+                        scrollOwnership = .afterUserInteraction(isAtBottom: isAtBottom)
+                    }
                 case .animating:
                     break
                 @unknown default:
@@ -239,17 +256,24 @@ struct ThreadView: View {
                 composerArea(for: session, using: proxy)
             }
             .task {
-                // Backstop for the first layout: the geometry handler pins from
-                // here on, but a long thread can open before it has a size.
+                // Backstop for the first layout; native initial anchoring owns
+                // subsequent thread opens and content-size changes.
                 await Task.yield()
-                guard !isUserScrolling else { return }
+                guard scrollOwnership == .app else { return }
                 proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
             }
         }
     }
 
     private static func distanceFromBottom(_ geometry: ScrollGeometry) -> CGFloat {
-        max(0, geometry.contentSize.height + geometry.contentOffset.y - geometry.containerSize.height)
+        TranscriptScrollPosition.distanceFromBottom(
+            contentHeight: geometry.contentSize.height,
+            visibleMaxY: geometry.visibleRect.maxY
+        )
+    }
+
+    private var sizeChangeScrollAnchor: UnitPoint {
+        scrollOwnership == .app && !isUserTouchingScroll ? .bottom : .top
     }
 
     private func jumpToLiveEdge(using proxy: ScrollViewProxy, isStreaming: Bool) -> some View {
@@ -261,10 +285,9 @@ struct ThreadView: View {
                 Circle()
                     .fill(.ultraThinMaterial)
                 Circle()
-                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
-                Image(systemName: "arrow.down")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .strokeBorder(AppTheme.primary.opacity(0.14), lineWidth: 1)
+                ReiconIcon(.arrowDown, size: 16)
+                    .foregroundStyle(AppTheme.primary)
             }
             .frame(width: 46, height: 46)
             .overlay(alignment: .bottomTrailing) {
@@ -283,23 +306,24 @@ struct ThreadView: View {
         }
         .buttonStyle(BouncyButtonStyle(scale: 0.9))
         .accessibilityLabel("Jump to the latest line")
-        .padding(.trailing, 16)
         .padding(.bottom, 12)
-        .opacity(isPinnedToBottom ? 0 : 1)
-        .scaleEffect(isPinnedToBottom ? 0.8 : 1)
-        .animation(.spring(response: 0.3, dampingFraction: 0.78), value: isPinnedToBottom)
-        .allowsHitTesting(!isPinnedToBottom)
-        .accessibilityHidden(isPinnedToBottom)
+        .opacity(showsJumpToLiveEdge ? 1 : 0)
+        .scaleEffect(showsJumpToLiveEdge ? 1 : 0.8)
+        .animation(.spring(response: 0.3, dampingFraction: 0.78), value: showsJumpToLiveEdge)
+        .allowsHitTesting(showsJumpToLiveEdge)
+        .accessibilityHidden(!showsJumpToLiveEdge)
+    }
+
+    private var showsJumpToLiveEdge: Bool {
+        scrollOwnership == .user && !isAtBottom
     }
 
     /// Re-arms following and animates to the newest line.
     private func followLiveEdge(using proxy: ScrollViewProxy) {
-        isPinnedToBottom = true
-        // A finger may still be lifting: the jump owns the position until the
-        // scroll view reports itself idle again.
-        isUserScrolling = false
-        jumpInFlight = true
-        withAnimation(.easeOut(duration: 0.32)) {
+        scrollOwnership = .app
+        isUserTouchingScroll = false
+        isAtBottom = true
+        withAnimation(.easeOut(duration: 0.2)) {
             proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
         }
     }
@@ -363,21 +387,19 @@ struct ThreadView: View {
                             HStack {
                                 Text(project.name)
                                 if project.id == session.projectID {
-                                    Image(systemName: "checkmark")
+                                    ReiconIcon(.check, size: 14)
                                 }
                             }
                         }
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: "folder")
-                            .font(.subheadline)
+                        ReiconIcon(.folder, size: 15)
                         Text(app.project(for: session)?.name ?? "Quick Chat")
-                            .font(.subheadline.weight(.medium))
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 11, weight: .bold))
+                            .font(AppTheme.font(.subheadline, weight: .medium))
+                        ReiconIcon(.sort, size: 11)
                     }
-                    .foregroundStyle(Color.white.opacity(0.85))
+                    .foregroundStyle(AppTheme.primary.opacity(0.85))
                 }
                 Spacer()
             }
@@ -414,7 +436,6 @@ struct ThreadView: View {
         attachedImages.removeAll()
         // The user just acted at the bottom; follow their own turn even if they
         // had scrolled up to read something.
-        isPinnedToBottom = true
         followLiveEdge(using: proxy)
         Task { await app.send(text, images: images) }
     }
@@ -481,7 +502,7 @@ private struct ComposerCard: View {
                                     .clipShape(RoundedRectangle(cornerRadius: 12))
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 12)
-                                            .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                                            .stroke(AppTheme.primary.opacity(0.15), lineWidth: 1)
                                     )
 
                                 Button {
@@ -489,10 +510,9 @@ private struct ComposerCard: View {
                                         _ = attachedImages.remove(at: index)
                                     }
                                 } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .font(.system(size: 18))
-                                        .foregroundStyle(Color.white, Color(red: 0.15, green: 0.15, blue: 0.17))
-                                        .background(Circle().fill(Color.black.opacity(0.4)))
+                                    ReiconIcon(.closeCircle, size: 18)
+                                        .foregroundStyle(AppTheme.primary, AppTheme.raised)
+                                        .background(Circle().fill(AppTheme.background.opacity(0.4)))
                                 }
                                 .offset(x: 5, y: -5)
                             }
@@ -509,8 +529,8 @@ private struct ComposerCard: View {
                 .lineLimit(2...7)
                 .frame(minHeight: 46)
                 .focused($focused)
-                .foregroundStyle(.white)
-                .tint(.white)
+                .foregroundStyle(AppTheme.primary)
+                .tint(AppTheme.primary)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
 
@@ -522,9 +542,8 @@ private struct ComposerCard: View {
                         activePopup = (activePopup == .plus ? nil : .plus)
                     }
                 } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 19, weight: .regular))
-                        .foregroundStyle(activePopup == .plus ? .white : Color.white.opacity(0.8))
+                    ReiconIcon(.plus, size: 19)
+                        .foregroundStyle(activePopup == .plus ? AppTheme.primary : AppTheme.primary.opacity(0.8))
                         .frame(width: 32, height: 32)
                 }
                 .buttonStyle(.plain)
@@ -536,9 +555,8 @@ private struct ComposerCard: View {
                         activePopup = (activePopup == .permissions ? nil : .permissions)
                     }
                 } label: {
-                    Image(systemName: permissionIconName)
-                        .font(.system(size: 18, weight: .regular))
-                        .foregroundStyle(activePopup == .permissions ? .white : Color.white.opacity(0.8))
+                    ReiconIcon(permissionIcon, size: 18)
+                        .foregroundStyle(activePopup == .permissions ? AppTheme.primary : AppTheme.primary.opacity(0.8))
                         .frame(width: 32, height: 32)
                 }
                 .buttonStyle(.plain)
@@ -554,17 +572,17 @@ private struct ComposerCard: View {
                 } label: {
                     HStack(spacing: 6) {
                         Circle()
-                            .strokeBorder(Color.white.opacity(0.35), lineWidth: 1.5)
+                            .strokeBorder(AppTheme.primary.opacity(0.35), lineWidth: 1.5)
                             .frame(width: 14, height: 14)
 
                         Text(modelDisplayName)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(.white)
+                            .font(AppTheme.font(size: 14, weight: .medium))
+                            .foregroundStyle(AppTheme.primary)
                             .lineLimit(1)
 
                         if let reasoning = session.reasoningEffort, !reasoning.isEmpty {
                             Text(reasoning.capitalized)
-                                .font(.system(size: 14))
+                                .font(AppTheme.font(size: 14))
                                 .foregroundStyle(AppTheme.secondary)
                         }
                     }
@@ -580,11 +598,10 @@ private struct ComposerCard: View {
                         activePopup = nil
                         onCancel()
                     } label: {
-                        Image(systemName: "stop.fill")
-                            .font(.system(size: 13, weight: .bold))
+                        ReiconIcon(.stop, size: 13)
                             .frame(width: 36, height: 36)
                             .background(AppTheme.raised, in: Circle())
-                            .foregroundStyle(.white)
+                            .foregroundStyle(AppTheme.primary)
                     }
                     .accessibilityLabel("Stop agent")
 
@@ -594,11 +611,10 @@ private struct ComposerCard: View {
                             activePopup = nil
                             onSteer(text, attachedImages)
                         } label: {
-                            Image(systemName: "arrow.turn.up.right")
-                                .font(.system(size: 13, weight: .bold))
+                            ReiconIcon(.steer, size: 13)
                                 .frame(width: 36, height: 36)
-                                .background(.white, in: Circle())
-                                .foregroundStyle(.black)
+                                .background(AppTheme.primary, in: Circle())
+                                .foregroundStyle(AppTheme.background)
                         }
                         .accessibilityLabel("Steer agent")
                     }
@@ -608,11 +624,10 @@ private struct ComposerCard: View {
                         activePopup = nil
                         onSend(text, attachedImages)
                     } label: {
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 15, weight: .bold))
+                        ReiconIcon(.arrowUp, size: 15)
                             .frame(width: 36, height: 36)
-                            .background(canSend ? Color.white : AppTheme.raised, in: Circle())
-                            .foregroundStyle(canSend ? Color.black : AppTheme.secondary)
+                            .background(canSend ? AppTheme.primary : AppTheme.raised, in: Circle())
+                            .foregroundStyle(canSend ? AppTheme.background : AppTheme.secondary)
                     }
                     .disabled(!canSend)
                     .accessibilityLabel("Send message")
@@ -621,16 +636,16 @@ private struct ComposerCard: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .background(Color(red: 0.12, green: 0.12, blue: 0.14), in: RoundedRectangle(cornerRadius: 24))
+        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 24))
         .overlay(RoundedRectangle(cornerRadius: 24).stroke(AppTheme.border))
         .padding(.horizontal, 12)
     }
 
-    private var permissionIconName: String {
+    private var permissionIcon: Reicon {
         switch session.runtimeMode {
-        case .ask: return "hand.raised"
-        case .autoAcceptEdits, .auto: return "chevron.left.forwardslash.chevron.right"
-        case .fullAccess: return "exclamationmark.octagon"
+        case .ask: .hand
+        case .autoAcceptEdits, .auto: .code
+        case .fullAccess: .shieldAlert
         }
     }
 }
@@ -647,7 +662,7 @@ private struct EffortPopupView: View {
     @Bindable var app: AppModel
     let onSelectEffort: (EffortOption) -> Void
 
-    @State private var showingModelList = false
+    @State private var showingModelList = true
     @State private var selectedProviderTab: ProviderKind
 
     init(session: AgentSession, app: AppModel, onSelectEffort: @escaping (EffortOption) -> Void) {
@@ -699,20 +714,19 @@ private struct EffortPopupView: View {
                             }
                         } label: {
                             HStack(spacing: 5) {
-                                Image(systemName: "chevron.left")
-                                    .font(.system(size: 14, weight: .bold))
+                                ReiconIcon(.arrowLeft, size: 14)
                                 Text("Effort")
-                                    .font(.system(size: 15))
+                                    .font(AppTheme.font(size: 15))
                             }
-                            .foregroundStyle(.white)
+                            .foregroundStyle(AppTheme.primary)
                         }
                         .buttonStyle(.plain)
 
                         Spacer()
 
                         Text("Select Model")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .font(AppTheme.font(size: 16, weight: .semibold))
+                            .foregroundStyle(AppTheme.primary)
 
                         Spacer()
 
@@ -735,15 +749,15 @@ private struct EffortPopupView: View {
                                             .aspectRatio(contentMode: .fit)
                                             .frame(width: 16, height: 16)
                                         Text(provider.name)
-                                            .font(.system(size: 13, weight: .medium))
+                                            .font(AppTheme.font(size: 13, weight: .medium))
                                     }
                                     .padding(.horizontal, 14)
                                     .padding(.vertical, 7)
                                     .background(
-                                        selectedProviderTab == provider ? Color.white : AppTheme.raised,
+                                        selectedProviderTab == provider ? AppTheme.primary : AppTheme.raised,
                                         in: Capsule()
                                     )
-                                    .foregroundStyle(selectedProviderTab == provider ? Color.black : Color.white.opacity(0.85))
+                                    .foregroundStyle(selectedProviderTab == provider ? AppTheme.background : AppTheme.primary.opacity(0.85))
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -773,14 +787,14 @@ private struct EffortPopupView: View {
                                         VStack(alignment: .leading, spacing: 3) {
                                             HStack(spacing: 6) {
                                                 Text(model.name)
-                                                    .font(.system(size: 15, weight: .medium))
-                                                    .foregroundStyle(.white)
+                                                    .font(AppTheme.font(size: 15, weight: .medium))
+                                                    .foregroundStyle(AppTheme.primary)
                                                 if model.isDefault {
                                                     Text("DEFAULT")
-                                                        .font(.system(size: 10, weight: .bold))
+                                                        .font(AppTheme.font(size: 10, weight: .bold))
                                                         .padding(.horizontal, 6)
                                                         .padding(.vertical, 2)
-                                                        .background(Color.white.opacity(0.12), in: Capsule())
+                                                        .background(AppTheme.primary.opacity(0.12), in: Capsule())
                                                         .foregroundStyle(AppTheme.secondary)
                                                 }
                                             }
@@ -793,22 +807,21 @@ private struct EffortPopupView: View {
                                                     Text("· Reasoning")
                                                 }
                                             }
-                                            .font(.caption)
+                                            .font(AppTheme.font(.caption))
                                             .foregroundStyle(AppTheme.secondary)
                                         }
 
                                         Spacer()
 
                                         if isSelected {
-                                            Image(systemName: "checkmark")
-                                                .font(.system(size: 14, weight: .bold))
+                                            ReiconIcon(.check, size: 14)
                                                 .foregroundStyle(AppTheme.accent)
                                         }
                                     }
                                     .padding(.horizontal, 14)
                                     .padding(.vertical, 10)
                                     .background(
-                                        isSelected ? Color.white.opacity(0.10) : Color.white.opacity(0.04),
+                                        isSelected ? AppTheme.primary.opacity(0.10) : AppTheme.primary.opacity(0.04),
                                         in: RoundedRectangle(cornerRadius: 12)
                                     )
                                     .overlay(
@@ -835,21 +848,19 @@ private struct EffortPopupView: View {
                         }
                     } label: {
                         HStack(spacing: 8) {
-                            Image(systemName: "bolt")
-                                .font(.system(size: 16, weight: .regular))
-                                .foregroundStyle(.white)
+                            ReiconIcon(.bolt, size: 16)
+                                .foregroundStyle(AppTheme.primary)
 
                             Text(modelShortName)
-                                .font(.system(size: 16, weight: .bold, design: .monospaced))
-                                .foregroundStyle(.white)
+                                .font(AppTheme.font(size: 16, weight: .bold, monospaced: true))
+                                .foregroundStyle(AppTheme.primary)
 
                             Text(currentEffortLabel)
-                                .font(.system(size: 16, weight: .regular, design: .monospaced))
-                                .foregroundStyle(Color.white.opacity(0.6))
+                                .font(AppTheme.font(size: 16, weight: .regular, monospaced: true))
+                                .foregroundStyle(AppTheme.primary.opacity(0.6))
 
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(Color.white.opacity(0.5))
+                            ReiconIcon(.chevronRight, size: 13)
+                                .foregroundStyle(AppTheme.primary.opacity(0.5))
                         }
                         .frame(maxWidth: .infinity)
                     }
@@ -868,9 +879,9 @@ private struct EffortPopupView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .background(Color(red: 0.16, green: 0.16, blue: 0.18), in: RoundedRectangle(cornerRadius: 24))
-        .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.white.opacity(0.12), lineWidth: 1))
-        .shadow(color: Color.black.opacity(0.5), radius: 24, y: 8)
+        .background(AppTheme.raised, in: RoundedRectangle(cornerRadius: 24))
+        .overlay(RoundedRectangle(cornerRadius: 24).stroke(AppTheme.border, lineWidth: 1))
+        .shadow(color: AppTheme.shadow, radius: 24, y: 8)
     }
 }
 
@@ -908,12 +919,12 @@ private struct EffortSliderView: View {
             ZStack(alignment: .leading) {
                 // 1. Dark capsule track
                 Capsule()
-                    .fill(Color(red: 0.10, green: 0.10, blue: 0.12))
+                    .fill(AppTheme.surface)
                     .frame(height: trackHeight)
 
                 // 2. White filled pill extending from left to current step
                 Capsule()
-                    .fill(Color.white)
+                    .fill(AppTheme.primary)
                     .frame(width: max(pillWidth, thumbHeight), height: thumbHeight)
                     .offset(x: inset)
 
@@ -923,19 +934,19 @@ private struct EffortSliderView: View {
                     if i == activeIndex {
                         // Black circular knob at current active position
                         Circle()
-                            .fill(Color.black)
+                            .fill(AppTheme.background)
                             .frame(width: 36, height: 36)
                             .position(x: cx, y: trackHeight / 2)
                     } else if i < activeIndex {
                         // Subtle dark dot inside white pill
                         Circle()
-                            .fill(Color.black.opacity(0.25))
+                            .fill(AppTheme.background.opacity(0.25))
                             .frame(width: 6, height: 6)
                             .position(x: cx, y: trackHeight / 2)
                     } else {
                         // Subtle light dot on dark track
                         Circle()
-                            .fill(Color.white.opacity(0.35))
+                            .fill(AppTheme.primary.opacity(0.35))
                             .frame(width: 6, height: 6)
                             .position(x: cx, y: trackHeight / 2)
                     }
@@ -1006,27 +1017,25 @@ private struct PermissionPopupView: View {
                     onSelect(.ask)
                 } label: {
                     HStack(alignment: .top, spacing: 14) {
-                        Image(systemName: "hand.raised")
-                            .font(.system(size: 17))
-                            .foregroundStyle(.white)
+                        ReiconIcon(.hand, size: 17)
+                            .foregroundStyle(AppTheme.primary)
                             .frame(width: 22, alignment: .center)
 
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Ask for approval")
-                                .font(.system(size: 15, weight: .regular, design: .monospaced))
-                                .foregroundStyle(.white)
+                                .font(AppTheme.font(size: 15, weight: .regular, monospaced: true))
+                                .foregroundStyle(AppTheme.primary)
                             Text("Always ask to edit external files and use the internet")
-                                .font(.system(size: 13))
-                                .foregroundStyle(Color.white.opacity(0.55))
+                                .font(AppTheme.font(size: 13))
+                                .foregroundStyle(AppTheme.primary.opacity(0.55))
                                 .fixedSize(horizontal: false, vertical: true)
                         }
 
                         Spacer(minLength: 8)
 
                         if currentMode == .ask {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(.white)
+                            ReiconIcon(.check, size: 15)
+                                .foregroundStyle(AppTheme.primary)
                         }
                     }
                 }
@@ -1037,27 +1046,25 @@ private struct PermissionPopupView: View {
                     onSelect(.auto)
                 } label: {
                     HStack(alignment: .top, spacing: 14) {
-                        Image(systemName: "chevron.left.forwardslash.chevron.right")
-                            .font(.system(size: 15))
-                            .foregroundStyle(.white)
+                        ReiconIcon(.code, size: 15)
+                            .foregroundStyle(AppTheme.primary)
                             .frame(width: 22, alignment: .center)
 
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Approve for me")
-                                .font(.system(size: 15, weight: .regular, design: .monospaced))
-                                .foregroundStyle(.white)
+                                .font(AppTheme.font(size: 15, weight: .regular, monospaced: true))
+                                .foregroundStyle(AppTheme.primary)
                             Text("Only ask for actions detected as potentially unsafe")
-                                .font(.system(size: 13))
-                                .foregroundStyle(Color.white.opacity(0.55))
+                                .font(AppTheme.font(size: 13))
+                                .foregroundStyle(AppTheme.primary.opacity(0.55))
                                 .fixedSize(horizontal: false, vertical: true)
                         }
 
                         Spacer(minLength: 8)
 
                         if currentMode == .auto || currentMode == .autoAcceptEdits {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(.white)
+                            ReiconIcon(.check, size: 15)
+                                .foregroundStyle(AppTheme.primary)
                         }
                     }
                 }
@@ -1068,27 +1075,25 @@ private struct PermissionPopupView: View {
                     onSelect(.fullAccess)
                 } label: {
                     HStack(alignment: .top, spacing: 14) {
-                        Image(systemName: "exclamationmark.octagon")
-                            .font(.system(size: 17))
-                            .foregroundStyle(.white)
+                        ReiconIcon(.shieldAlert, size: 17)
+                            .foregroundStyle(AppTheme.primary)
                             .frame(width: 22, alignment: .center)
 
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Full access")
-                                .font(.system(size: 15, weight: .regular, design: .monospaced))
-                                .foregroundStyle(.white)
+                                .font(AppTheme.font(size: 15, weight: .regular, monospaced: true))
+                                .foregroundStyle(AppTheme.primary)
                             Text("Full computer access (elevated risk)")
-                                .font(.system(size: 13))
-                                .foregroundStyle(Color.white.opacity(0.55))
+                                .font(AppTheme.font(size: 13))
+                                .foregroundStyle(AppTheme.primary.opacity(0.55))
                                 .fixedSize(horizontal: false, vertical: true)
                         }
 
                         Spacer(minLength: 8)
 
                         if currentMode == .fullAccess {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(.white)
+                            ReiconIcon(.check, size: 15)
+                                .foregroundStyle(AppTheme.primary)
                         }
                     }
                 }
@@ -1097,13 +1102,13 @@ private struct PermissionPopupView: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 18)
             .frame(maxWidth: 320)
-            .background(Color(red: 0.17, green: 0.17, blue: 0.19), in: RoundedRectangle(cornerRadius: 22))
-            .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.white.opacity(0.12), lineWidth: 1))
-            .shadow(color: Color.black.opacity(0.5), radius: 20, y: 8)
+            .background(AppTheme.raised, in: RoundedRectangle(cornerRadius: 22))
+            .overlay(RoundedRectangle(cornerRadius: 22).stroke(AppTheme.border, lineWidth: 1))
+            .shadow(color: AppTheme.shadow, radius: 20, y: 8)
 
             // Pointer arrow pointing down to hand button
             TooltipArrow()
-                .fill(Color(red: 0.17, green: 0.17, blue: 0.19))
+                .fill(AppTheme.raised)
                 .frame(width: 18, height: 10)
                 .offset(x: 48, y: -1)
         }
@@ -1122,13 +1127,12 @@ private struct PlusPopupView: View {
                 // 1. Take a photo
                 Button(action: onTakePhoto) {
                     HStack(spacing: 14) {
-                        Image(systemName: "camera")
-                            .font(.system(size: 16))
-                            .foregroundStyle(.white)
+                        ReiconIcon(.camera, size: 16)
+                            .foregroundStyle(AppTheme.primary)
                             .frame(width: 20)
                         Text("Take a photo")
-                            .font(.system(size: 15, design: .monospaced))
-                            .foregroundStyle(.white)
+                            .font(AppTheme.font(size: 15, monospaced: true))
+                            .foregroundStyle(AppTheme.primary)
                     }
                 }
                 .buttonStyle(.plain)
@@ -1136,13 +1140,12 @@ private struct PlusPopupView: View {
                 // 2. Photo library
                 PhotosPicker(selection: $selectedPhotoItems, matching: .images) {
                     HStack(spacing: 14) {
-                        Image(systemName: "photo.on.rectangle")
-                            .font(.system(size: 16))
-                            .foregroundStyle(.white)
+                        ReiconIcon(.gallery, size: 16)
+                            .foregroundStyle(AppTheme.primary)
                             .frame(width: 20)
                         Text("Photo library")
-                            .font(.system(size: 15, design: .monospaced))
-                            .foregroundStyle(.white)
+                            .font(AppTheme.font(size: 15, monospaced: true))
+                            .foregroundStyle(AppTheme.primary)
                     }
                 }
                 .buttonStyle(.plain)
@@ -1150,13 +1153,13 @@ private struct PlusPopupView: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 16)
             .frame(width: 200)
-            .background(Color(red: 0.17, green: 0.17, blue: 0.19), in: RoundedRectangle(cornerRadius: 20))
-            .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.12), lineWidth: 1))
-            .shadow(color: Color.black.opacity(0.5), radius: 20, y: 8)
+            .background(AppTheme.raised, in: RoundedRectangle(cornerRadius: 20))
+            .overlay(RoundedRectangle(cornerRadius: 20).stroke(AppTheme.border, lineWidth: 1))
+            .shadow(color: AppTheme.shadow, radius: 20, y: 8)
 
             // Pointer arrow pointing down to plus button
             TooltipArrow()
-                .fill(Color(red: 0.17, green: 0.17, blue: 0.19))
+                .fill(AppTheme.raised)
                 .frame(width: 18, height: 10)
                 .offset(x: 16, y: -1)
         }
@@ -1276,8 +1279,8 @@ private struct MessageRow: View, Equatable {
                         // Typed text is shown verbatim: rendering a half-typed
                         // prompt as Markdown would rewrite what the user wrote.
                         Text(message.visibleContent)
-                            .font(.body)
-                            .foregroundStyle(.white)
+                            .font(AppTheme.font(.body))
+                            .foregroundStyle(AppTheme.primary)
                             .multilineTextAlignment(.trailing)
                             .textSelection(.enabled)
                             .padding(.horizontal, 15)
@@ -1323,15 +1326,14 @@ private struct AssistantMessageFooter: View {
                     copied = false
                 }
             } label: {
-                Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 13, weight: .medium))
+                ReiconIcon(copied ? .check : .copy, size: 13)
                     .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(copied ? "Copied" : "Copy response")
 
             Text("\(formattedTime) • \(tokensPerSecond) tok/s")
-                .font(.caption)
+                .font(AppTheme.font(.caption))
                 .foregroundStyle(AppTheme.secondary)
                 .monospacedDigit()
         }
@@ -1372,7 +1374,7 @@ private struct WorkingIndicator: View {
             HStack(spacing: 8) {
                 DotMatrixLoader(date: context.date, animated: !reduceMotion)
                 Text(label(at: context.date))
-                    .font(.subheadline)
+                    .font(AppTheme.font(.subheadline))
                     .foregroundStyle(AppTheme.secondary)
             }
             .padding(.vertical, 3)
@@ -1444,11 +1446,17 @@ struct MessageText: View {
 
     var body: some View {
         StructuredText(markdown: markdown)
-            .textual.structuredTextStyle(ChatMarkdownStyle())
+            .textual.structuredTextStyle(ChatMarkdownStyle(
+                primary: AppTheme.primary,
+                secondary: AppTheme.secondary,
+                code: AppTheme.code,
+                codeText: AppTheme.codeText,
+                link: AppTheme.link
+            ))
             .textual.highlighterTheme(.default)
             .textual.textSelection(.enabled)
-            .font(.body)
-            .foregroundStyle(Color.white)
+            .font(AppTheme.font(.body))
+            .foregroundStyle(AppTheme.primary)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -1456,21 +1464,27 @@ struct MessageText: View {
 /// Markdown styling tuned for a transcript: tighter than prose defaults, and
 /// every surface chosen against the near-black chat background.
 private struct ChatMarkdownStyle: StructuredText.Style {
+    let primary: Color
+    let secondary: Color
+    let code: Color
+    let codeText: Color
+    let link: Color
+
     var inlineStyle: InlineStyle {
         InlineStyle()
             .code(
                 .monospaced,
                 .fontScale(0.86),
-                .backgroundColor(Color.white.opacity(0.09)),
-                .foregroundColor(Color(red: 0.82, green: 0.90, blue: 1))
+                .backgroundColor(primary.opacity(0.09)),
+                .foregroundColor(codeText)
             )
             .strong(.fontWeight(.semibold))
             .emphasis(.italic)
-            .link(.foregroundColor(Color(red: 0.45, green: 0.76, blue: 1)))
+            .link(.foregroundColor(link))
     }
 
     var headingStyle: some StructuredText.HeadingStyle {
-        ChatHeadingStyle()
+        ChatHeadingStyle(primary: primary)
     }
 
     var paragraphStyle: some StructuredText.ParagraphStyle {
@@ -1478,11 +1492,11 @@ private struct ChatMarkdownStyle: StructuredText.Style {
     }
 
     var blockQuoteStyle: some StructuredText.BlockQuoteStyle {
-        ChatBlockQuoteStyle()
+        ChatBlockQuoteStyle(primary: primary, secondary: secondary)
     }
 
     var codeBlockStyle: some StructuredText.CodeBlockStyle {
-        ChatCodeBlockStyle()
+        ChatCodeBlockStyle(primary: primary, secondary: secondary, code: code)
     }
 
     var listItemStyle: some StructuredText.ListItemStyle {
@@ -1503,6 +1517,7 @@ private struct ChatMarkdownStyle: StructuredText.Style {
 /// Prose sizes rather than the document defaults: an H1 in a chat bubble should
 /// read as emphasis, not as a second title.
 private struct ChatHeadingStyle: StructuredText.HeadingStyle {
+    let primary: Color
     private static let fontScales: [CGFloat] = [1.6, 1.4, 1.22, 1.1, 1, 1]
 
     func makeBody(configuration: Configuration) -> some View {
@@ -1510,7 +1525,7 @@ private struct ChatHeadingStyle: StructuredText.HeadingStyle {
             .textual.fontScale(Self.fontScales[min(configuration.headingLevel, 6) - 1])
             .textual.blockSpacing(.fontScaled(top: 0.9, bottom: 0.4))
             .fontWeight(.semibold)
-            .foregroundStyle(Color.white)
+            .foregroundStyle(primary)
     }
 }
 
@@ -1523,39 +1538,46 @@ private struct ChatParagraphStyle: StructuredText.ParagraphStyle {
 }
 
 private struct ChatBlockQuoteStyle: StructuredText.BlockQuoteStyle {
+    let primary: Color
+    let secondary: Color
+
     func makeBody(configuration: Configuration) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Rectangle()
-                .fill(Color.white.opacity(0.22))
+                .fill(primary.opacity(0.22))
                 .frame(width: 3)
             configuration.label
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textual.lineSpacing(.fontScaled(0.2))
         }
         .textual.padding(.fontScaled(0.6))
-        .foregroundStyle(AppTheme.secondary)
+        .foregroundStyle(secondary)
     }
 }
 
 /// Code gets a labelled header with a copy button, the way a terminal does,
 /// instead of a bare grey slab with no way to lift the text out.
 private struct ChatCodeBlockStyle: StructuredText.CodeBlockStyle {
+    let primary: Color
+    let secondary: Color
+    let code: Color
+
     func makeBody(configuration: Configuration) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             if configuration.languageHint != nil {
                 HStack(spacing: 8) {
                     Text(configuration.languageHint ?? "")
                         .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(AppTheme.secondary)
+                        .foregroundStyle(secondary)
                     Spacer(minLength: 8)
                     CodeCopyButton(codeBlock: configuration.codeBlock)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
-                .background(Color.white.opacity(0.04))
+                .background(primary.opacity(0.04))
                 .overlay(alignment: .bottom) {
                     Rectangle()
-                        .fill(Color.white.opacity(0.07))
+                        .fill(primary.opacity(0.07))
                         .frame(height: 1)
                 }
             }
@@ -1565,16 +1587,16 @@ private struct ChatCodeBlockStyle: StructuredText.CodeBlockStyle {
                     .textual.lineSpacing(.fontScaled(0.32))
                     .textual.fontScale(0.86)
                     .fixedSize(horizontal: false, vertical: true)
-                    .monospaced()
+                    .font(.body.monospaced())
                     .padding(.vertical, 10)
                     .padding(.horizontal, 12)
             }
         }
-        .background(Color(red: 0.09, green: 0.09, blue: 0.11))
+        .background(code)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.09), lineWidth: 1)
+                .stroke(primary.opacity(0.09), lineWidth: 1)
         )
         .textual.blockSpacing(.fontScaled(top: 0.7, bottom: 0))
     }
@@ -1599,17 +1621,16 @@ private struct CodeCopyButton: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 10, weight: .medium))
+                ReiconIcon(copied ? .check : .copy, size: 10)
                 if copied {
                     Text("Copied")
-                        .font(.system(size: 10, weight: .medium))
+                        .font(AppTheme.font(size: 10, weight: .medium))
                 }
             }
             .foregroundStyle(copied ? AppTheme.accent : AppTheme.secondary)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(Color.white.opacity(0.06), in: Capsule())
+            .background(AppTheme.primary.opacity(0.06), in: Capsule())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(copied ? "Copied" : "Copy code")
@@ -1759,7 +1780,7 @@ private struct AttachmentThumbnail: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                        .stroke(AppTheme.primary.opacity(0.14), lineWidth: 1)
                 )
         } else {
             placeholder
@@ -1771,11 +1792,10 @@ private struct AttachmentThumbnail: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(AppTheme.raised)
             VStack(spacing: 5) {
-                Image(systemName: reference == nil ? "doc.text" : "photo")
-                    .font(.system(size: 18, weight: .regular))
+                ReiconIcon(reference == nil ? .fileText : .gallery, size: 18)
                     .foregroundStyle(AppTheme.secondary)
                 Text(attachment.name)
-                    .font(.system(size: 9.5))
+                    .font(AppTheme.font(size: 9.5))
                     .foregroundStyle(AppTheme.secondary)
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
@@ -1785,7 +1805,7 @@ private struct AttachmentThumbnail: View {
         .frame(width: minSide, height: minSide)
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                .stroke(AppTheme.primary.opacity(0.10), lineWidth: 1)
         )
     }
 }
@@ -1810,8 +1830,7 @@ struct AttachmentViewer: View {
             Button {
                 dismiss()
             } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 15, weight: .bold))
+                ReiconIcon(.close, size: 15)
                     .foregroundStyle(.white)
                     .frame(width: 44, height: 44)
                     .background(.ultraThinMaterial, in: Circle())
@@ -2018,24 +2037,24 @@ extension ActivityItem {
         }
     }
 
-    var iconName: String {
+    var icon: Reicon {
         let k = kind.lowercased()
         if k == "command" || k == "bash" {
-            return "terminal"
+            return .command
         } else if k == "file_read" || k == "fileread" || k == "read" {
-            return "doc.text"
+            return .fileText
         } else if k == "file_change" || k == "filechange" || k == "edit" {
-            return "pencil"
+            return .edit
         } else if k == "file_search" || k == "filesearch" || k == "search" {
-            return "magnifyingglass"
+            return .search
         } else if k == "file_list" || k == "filelist" || k == "list" {
-            return "folder"
+            return .folder
         } else if k == "reasoning" || k == "think" {
-            return "sparkles"
+            return .sparkles
         } else if k == "plan" {
-            return "list.bullet"
+            return .list
         } else {
-            return "wrench.and.screwdriver"
+            return .tools
         }
     }
 
@@ -2112,17 +2131,16 @@ private struct ActivityCopyButton: View {
             }
         } label: {
             HStack(spacing: 3) {
-                Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 10, weight: .medium))
+                ReiconIcon(copied ? .check : .copy, size: 10)
                 if copied {
                     Text("Copied")
-                        .font(.system(size: 9.5, weight: .medium))
+                        .font(AppTheme.font(size: 9.5, weight: .medium))
                 }
             }
-            .foregroundStyle(copied ? Color(red: 0.35, green: 0.85, blue: 0.45) : Color.white.opacity(0.45))
+            .foregroundStyle(copied ? AppTheme.success : AppTheme.primary.opacity(0.45))
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 5))
+            .background(AppTheme.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5))
         }
         .buttonStyle(.plain)
     }
@@ -2137,7 +2155,7 @@ private struct DiffLineRow: View {
 
     var body: some View {
         Text(line)
-            .font(.system(size: 11, design: .monospaced))
+            .font(AppTheme.font(size: 11, monospaced: true))
             .foregroundStyle(textColor)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 6)
@@ -2146,15 +2164,15 @@ private struct DiffLineRow: View {
     }
 
     private var textColor: Color {
-        if isAdd { return Color(red: 0.35, green: 0.9, blue: 0.5) }
-        if isDel { return Color(red: 0.95, green: 0.4, blue: 0.4) }
-        if isMeta { return Color.cyan.opacity(0.8) }
-        return Color.white.opacity(0.65)
+        if isAdd { return AppTheme.success }
+        if isDel { return AppTheme.danger }
+        if isMeta { return AppTheme.link }
+        return AppTheme.primary.opacity(0.65)
     }
 
     private var bgColor: Color {
-        if isAdd { return Color.green.opacity(0.12) }
-        if isDel { return Color.red.opacity(0.12) }
+        if isAdd { return AppTheme.success.opacity(0.12) }
+        if isDel { return AppTheme.danger.opacity(0.12) }
         return Color.clear
     }
 }
@@ -2169,8 +2187,8 @@ private struct ActivityDiffView: View {
             }
         }
         .padding(.vertical, 3)
-        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.05), lineWidth: 0.5))
+        .background(AppTheme.code, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.primary.opacity(0.05), lineWidth: 0.5))
     }
 }
 
@@ -2202,27 +2220,25 @@ private struct ReasoningBlockView: View {
                 }
             } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: "brain")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(isThinking ? AppTheme.accent : Color.white.opacity(0.5))
+                    ReiconIcon(.thinking, size: 12)
+                        .foregroundStyle(isThinking ? AppTheme.accent : AppTheme.primary.opacity(0.5))
 
                     if isThinking {
                         Text("Thinking…")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Color.white.opacity(0.75))
+                            .font(AppTheme.font(size: 13, weight: .medium))
+                            .foregroundStyle(AppTheme.primary.opacity(0.75))
                     } else if let dur = durationString {
                         Text("Thought for \(dur)")
-                            .font(.system(size: 13, weight: .regular))
-                            .foregroundStyle(Color.white.opacity(0.55))
+                            .font(AppTheme.font(size: 13, weight: .regular))
+                            .foregroundStyle(AppTheme.primary.opacity(0.55))
                     } else {
                         Text("Thought")
-                            .font(.system(size: 13, weight: .regular))
-                            .foregroundStyle(Color.white.opacity(0.55))
+                            .font(AppTheme.font(size: 13, weight: .regular))
+                            .foregroundStyle(AppTheme.primary.opacity(0.55))
                     }
 
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9.5, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.25))
+                    ReiconIcon(.chevronRight, size: 10)
+                        .foregroundStyle(AppTheme.primary.opacity(0.25))
                         .rotationEffect(.degrees(expanded ? 90 : 0))
                         .padding(.leading, 1)
 
@@ -2235,24 +2251,24 @@ private struct ReasoningBlockView: View {
             if expanded {
                 HStack(alignment: .top, spacing: 10) {
                     RoundedRectangle(cornerRadius: 1)
-                        .fill(Color.white.opacity(0.12))
+                        .fill(AppTheme.primary.opacity(0.12))
                         .frame(width: 2)
                         .padding(.vertical, 2)
 
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text("THINKING PROCESS")
-                                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(Color.white.opacity(0.35))
+                                .font(AppTheme.font(size: 9.5, weight: .semibold, monospaced: true))
+                                .foregroundStyle(AppTheme.primary.opacity(0.35))
                             Spacer()
                             ActivityCopyButton(text: reasoning.content)
                         }
 
                         ScrollView(showsIndicators: false) {
                             Text(reasoning.content)
-                                .font(.system(size: 13, weight: .regular))
+                                .font(AppTheme.font(size: 13, weight: .regular))
                                 .lineSpacing(3.5)
-                                .foregroundStyle(Color.white.opacity(0.65))
+                                .foregroundStyle(AppTheme.primary.opacity(0.65))
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -2292,12 +2308,11 @@ private struct ActivityRow: View {
             } label: {
                 HStack(spacing: 7) {
                     // Leading Icon
-                    Image(systemName: activity.failed ? "xmark.circle" : activity.iconName)
-                        .font(.system(size: 11.5, weight: .medium))
+                    ReiconIcon(activity.failed ? .error : activity.icon, size: 12)
                         .foregroundStyle(
-                            activity.failed ? Color(red: 0.95, green: 0.4, blue: 0.4) :
+                            activity.failed ? AppTheme.danger :
                             isRunning ? AppTheme.accent :
-                            Color.white.opacity(0.4)
+                            AppTheme.primary.opacity(0.4)
                         )
                         .frame(width: 14)
 
@@ -2306,28 +2321,28 @@ private struct ActivityRow: View {
                         let errorMsg = activity.output ?? activity.detail ?? activity.title
                         let firstLine = errorMsg.components(separatedBy: .newlines).first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) ?? errorMsg
                         Text("Failed: \(firstLine)")
-                            .font(.system(size: 13, weight: .regular))
-                            .foregroundStyle(Color(red: 0.95, green: 0.4, blue: 0.4))
+                            .font(AppTheme.font(size: 13, weight: .regular))
+                            .foregroundStyle(AppTheme.danger)
                             .lineLimit(1)
                             .truncationMode(.tail)
                     } else if isRunning {
                         let target = activity.displayParam ?? ""
                         Text(target.isEmpty ? "\(activity.actionActiveVerb)…" : "\(activity.actionActiveVerb) \(target)…")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Color.white.opacity(0.8))
+                            .font(AppTheme.font(size: 13, weight: .medium))
+                            .foregroundStyle(AppTheme.primary.opacity(0.8))
                             .lineLimit(1)
                             .truncationMode(.middle)
                     } else {
                         // Completed minimal inline summary
                         HStack(spacing: 5) {
                             Text(activity.actionPastVerb)
-                                .font(.system(size: 13, weight: .regular))
-                                .foregroundStyle(Color.white.opacity(0.5))
+                                .font(AppTheme.font(size: 13, weight: .regular))
+                                .foregroundStyle(AppTheme.primary.opacity(0.5))
 
                             if let param = activity.displayParam {
                                 Text(param)
-                                    .font(.system(size: 12.5, design: .monospaced))
-                                    .foregroundStyle(Color.white.opacity(0.85))
+                                    .font(AppTheme.font(size: 12.5, monospaced: true))
+                                    .foregroundStyle(AppTheme.primary.opacity(0.85))
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                             }
@@ -2336,13 +2351,13 @@ private struct ActivityRow: View {
                                 HStack(spacing: 3) {
                                     if stats.additions > 0 {
                                         Text("+\(stats.additions)")
-                                            .font(.system(size: 11.5, weight: .medium, design: .monospaced))
-                                            .foregroundStyle(Color(red: 0.35, green: 0.85, blue: 0.45))
+                                            .font(AppTheme.font(size: 11.5, weight: .medium, monospaced: true))
+                                            .foregroundStyle(AppTheme.success)
                                     }
                                     if stats.deletions > 0 {
                                         Text("-\(stats.deletions)")
-                                            .font(.system(size: 11.5, weight: .medium, design: .monospaced))
-                                            .foregroundStyle(Color(red: 0.95, green: 0.4, blue: 0.4))
+                                            .font(AppTheme.font(size: 11.5, weight: .medium, monospaced: true))
+                                            .foregroundStyle(AppTheme.danger)
                                     }
                                 }
                             }
@@ -2350,9 +2365,8 @@ private struct ActivityRow: View {
                     }
 
                     if hasDetail {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 9.5, weight: .semibold))
-                            .foregroundStyle(Color.white.opacity(0.25))
+                        ReiconIcon(.chevronRight, size: 10)
+                            .foregroundStyle(AppTheme.primary.opacity(0.25))
                             .rotationEffect(.degrees(expanded ? 90 : 0))
                             .padding(.leading, 1)
                     }
@@ -2367,7 +2381,7 @@ private struct ActivityRow: View {
             if expanded && hasDetail {
                 HStack(alignment: .top, spacing: 10) {
                     RoundedRectangle(cornerRadius: 1)
-                        .fill(Color.white.opacity(0.12))
+                        .fill(AppTheme.primary.opacity(0.12))
                         .frame(width: 2)
                         .padding(.vertical, 2)
 
@@ -2377,17 +2391,17 @@ private struct ActivityRow: View {
                             let errorMsg = activity.output ?? activity.detail ?? activity.title
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("ERROR")
-                                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(Color(red: 0.95, green: 0.4, blue: 0.4))
+                                    .font(AppTheme.font(size: 9.5, weight: .bold, monospaced: true))
+                                    .foregroundStyle(AppTheme.danger)
 
                                 Text(errorMsg)
-                                    .font(.system(size: 11.5, design: .monospaced))
-                                    .foregroundStyle(Color(red: 0.95, green: 0.65, blue: 0.65))
+                                    .font(AppTheme.font(size: 11.5, monospaced: true))
+                                    .foregroundStyle(AppTheme.danger.opacity(0.82))
                                     .textSelection(.enabled)
                                     .padding(8)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.red.opacity(0.18), lineWidth: 0.5))
+                                    .background(AppTheme.danger.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.danger.opacity(0.18), lineWidth: 0.5))
                             }
                         }
 
@@ -2397,8 +2411,8 @@ private struct ActivityRow: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack {
                                     Text("COMMAND")
-                                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                                        .foregroundStyle(Color.white.opacity(0.35))
+                                        .font(AppTheme.font(size: 9.5, weight: .semibold, monospaced: true))
+                                        .foregroundStyle(AppTheme.primary.opacity(0.35))
                                     Spacer()
                                     ActivityCopyButton(text: cmd)
                                 }
@@ -2406,19 +2420,19 @@ private struct ActivityRow: View {
                                 ScrollView(.horizontal, showsIndicators: false) {
                                     HStack(spacing: 5) {
                                         Text("$")
-                                            .font(.system(size: 11.5, weight: .bold, design: .monospaced))
-                                            .foregroundStyle(Color.white.opacity(0.35))
+                                            .font(AppTheme.font(size: 11.5, weight: .bold, monospaced: true))
+                                            .foregroundStyle(AppTheme.primary.opacity(0.35))
                                         Text(cmd)
-                                            .font(.system(size: 11.5, design: .monospaced))
-                                            .foregroundStyle(Color.white.opacity(0.85))
+                                            .font(AppTheme.font(size: 11.5, monospaced: true))
+                                            .foregroundStyle(AppTheme.primary.opacity(0.85))
                                             .textSelection(.enabled)
                                     }
                                     .padding(.horizontal, 8)
                                     .padding(.vertical, 6)
                                 }
                                 .scrollIndicators(.hidden)
-                                .background(Color.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 6))
-                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.06), lineWidth: 0.5))
+                                .background(AppTheme.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 6))
+                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.primary.opacity(0.06), lineWidth: 0.5))
                             }
                         }
 
@@ -2427,8 +2441,8 @@ private struct ActivityRow: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack {
                                     Text("CHANGES")
-                                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                                        .foregroundStyle(Color.white.opacity(0.35))
+                                        .font(AppTheme.font(size: 9.5, weight: .semibold, monospaced: true))
+                                        .foregroundStyle(AppTheme.primary.opacity(0.35))
                                     Spacer()
                                     ActivityCopyButton(text: diff)
                                 }
@@ -2446,24 +2460,24 @@ private struct ActivityRow: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack {
                                     Text("ARGUMENTS")
-                                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                                        .foregroundStyle(Color.white.opacity(0.35))
+                                        .font(AppTheme.font(size: 9.5, weight: .semibold, monospaced: true))
+                                        .foregroundStyle(AppTheme.primary.opacity(0.35))
                                     Spacer()
                                     ActivityCopyButton(text: args)
                                 }
 
                                 ScrollView([.horizontal, .vertical], showsIndicators: false) {
                                     Text(args)
-                                        .font(.system(size: 11.5, design: .monospaced))
-                                        .foregroundStyle(Color.white.opacity(0.7))
+                                        .font(AppTheme.font(size: 11.5, monospaced: true))
+                                        .foregroundStyle(AppTheme.primary.opacity(0.7))
                                         .textSelection(.enabled)
                                         .padding(8)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                 }
                                 .scrollIndicators(.hidden)
                                 .frame(maxHeight: 180)
-                                .background(Color.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 6))
-                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.06), lineWidth: 0.5))
+                                .background(AppTheme.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 6))
+                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.primary.opacity(0.06), lineWidth: 0.5))
                             }
                         }
 
@@ -2472,24 +2486,24 @@ private struct ActivityRow: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack {
                                     Text("OUTPUT")
-                                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                                        .foregroundStyle(Color.white.opacity(0.35))
+                                        .font(AppTheme.font(size: 9.5, weight: .semibold, monospaced: true))
+                                        .foregroundStyle(AppTheme.primary.opacity(0.35))
                                     Spacer()
                                     ActivityCopyButton(text: output)
                                 }
 
                                 ScrollView([.horizontal, .vertical], showsIndicators: false) {
                                     Text(output)
-                                        .font(.system(size: 11.5, design: .monospaced))
-                                        .foregroundStyle(Color.white.opacity(0.75))
+                                        .font(AppTheme.font(size: 11.5, monospaced: true))
+                                        .foregroundStyle(AppTheme.primary.opacity(0.75))
                                         .textSelection(.enabled)
                                         .padding(8)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                 }
                                 .scrollIndicators(.hidden)
                                 .frame(maxHeight: 220)
-                                .background(Color.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 6))
-                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.06), lineWidth: 0.5))
+                                .background(AppTheme.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 6))
+                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.primary.opacity(0.06), lineWidth: 0.5))
                             }
                         } else if !isCommand, activity.arguments == nil, let d = activity.detail,
                                   !d.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -2497,24 +2511,24 @@ private struct ActivityRow: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack {
                                     Text("DETAIL")
-                                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                                        .foregroundStyle(Color.white.opacity(0.35))
+                                        .font(AppTheme.font(size: 9.5, weight: .semibold, monospaced: true))
+                                        .foregroundStyle(AppTheme.primary.opacity(0.35))
                                     Spacer()
                                     ActivityCopyButton(text: d)
                                 }
 
                                 ScrollView([.horizontal, .vertical], showsIndicators: false) {
                                     Text(d)
-                                        .font(.system(size: 11.5, design: .monospaced))
-                                        .foregroundStyle(Color.white.opacity(0.75))
+                                        .font(AppTheme.font(size: 11.5, monospaced: true))
+                                        .foregroundStyle(AppTheme.primary.opacity(0.75))
                                         .textSelection(.enabled)
                                         .padding(8)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                 }
                                 .scrollIndicators(.hidden)
                                 .frame(maxHeight: 180)
-                                .background(Color.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 6))
-                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.06), lineWidth: 0.5))
+                                .background(AppTheme.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 6))
+                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.primary.opacity(0.06), lineWidth: 0.5))
                             }
                         }
                     }
@@ -2553,13 +2567,13 @@ private struct PermissionSheet: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 18) {
-                Label("Approval needed", systemImage: "hand.raised.fill")
-                    .font(.title2.bold())
+                Label("Approval needed", image: Reicon.hand.rawValue)
+                    .font(AppTheme.font(.title2, weight: .bold))
                 Text(permission.title)
-                    .font(.headline)
+                    .font(AppTheme.font(.headline))
                 if let detail = permission.detail {
                     Text(detail)
-                        .font(.callout.monospaced())
+                        .font(AppTheme.font(.callout, monospaced: true))
                         .foregroundStyle(AppTheme.secondary)
                         .textSelection(.enabled)
                 }
@@ -2572,7 +2586,7 @@ private struct PermissionSheet: View {
                             .frame(maxWidth: .infinity, minHeight: 48)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(option.allow ? .white : .red)
+                    .tint(option.allow ? AppTheme.accent : AppTheme.danger)
                 }
             }
             .padding(22)

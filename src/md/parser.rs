@@ -138,7 +138,9 @@ pub enum Block {
     },
     /// A standalone video. Rendered inline as a player affordance (GPUI has
     /// no native video element); clicking opens the source URL.
-    Video { url: String },
+    Video {
+        url: String,
+    },
     Heading {
         level: u8,
         runs: Vec<InlineRun>,

@@ -52,6 +52,17 @@ struct TranscriptTimelineTests {
         )
     }
 
+    @Test("first mobile prompt supplies a title fallback")
+    func firstPromptTitle() {
+        var newSession = session(messages: [])
+        newSession.title = "New thread"
+
+        newSession.setTitleFromFirstPrompt("fix mobile title generation after first message please")
+
+        #expect(newSession.autoTitle == "fix mobile title generation after first message")
+        #expect(newSession.displayTitle == "fix mobile title generation after first message")
+    }
+
     @Test("keeps messages and blocks in the order the Mac anchored them")
     func ordersEntries() {
         let turnID = UUID()
@@ -156,6 +167,22 @@ struct TranscriptTimelineTests {
             return
         }
         #expect(footerTime == nil)
+    }
+}
+
+@Suite("Transcript scrolling")
+struct TranscriptScrollPositionTests {
+    @Test("measures the remaining content below the viewport")
+    func distanceFromBottom() {
+        #expect(TranscriptScrollPosition.distanceFromBottom(contentHeight: 1_000, visibleMaxY: 700) == 300)
+        #expect(TranscriptScrollPosition.distanceFromBottom(contentHeight: 1_000, visibleMaxY: 1_000) == 0)
+        #expect(TranscriptScrollPosition.distanceFromBottom(contentHeight: 1_000, visibleMaxY: 1_020) == 0)
+    }
+
+    @Test("user ownership persists until the gesture ends at the live edge")
+    func scrollOwnership() {
+        #expect(TranscriptScrollOwnership.afterUserInteraction(isAtBottom: false) == .user)
+        #expect(TranscriptScrollOwnership.afterUserInteraction(isAtBottom: true) == .app)
     }
 }
 

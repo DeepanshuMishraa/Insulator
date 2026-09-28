@@ -5,7 +5,6 @@ import SwiftUI
 struct ReconnectView: View {
     @Bindable var app: AppModel
     @State private var showsSettings = false
-    @State private var showsManualPair = false
     @State private var confirmsForget = false
 
     private var isConnecting: Bool { app.connectionState == .connecting }
@@ -21,7 +20,7 @@ struct ReconnectView: View {
                             .frame(width: 7, height: 7)
                             .accessibilityHidden(true)
                         Text("Offline")
-                            .font(.subheadline.monospaced())
+                            .font(AppTheme.font(.subheadline, monospaced: true))
                             .foregroundStyle(AppTheme.secondary)
                     }
                     .padding(.horizontal, 14)
@@ -36,21 +35,20 @@ struct ReconnectView: View {
 
                 Spacer()
 
-                Image(systemName: "display")
-                    .font(.system(size: 34, weight: .light))
+                ReiconIcon(.display, size: 34)
                     .foregroundStyle(AppTheme.secondary)
                     .frame(width: 104, height: 104)
                     .background(AppTheme.raised.opacity(0.55), in: Circle())
                     .accessibilityHidden(true)
 
                 Text(host)
-                    .font(.title3.bold())
-                    .foregroundStyle(.white)
+                    .font(AppTheme.font(.title3, weight: .bold))
+                    .foregroundStyle(AppTheme.primary)
                     .lineLimit(1)
                     .padding(.top, 22)
 
                 Text("Trusted device")
-                    .font(.subheadline.monospaced())
+                    .font(AppTheme.font(.subheadline, monospaced: true))
                     .foregroundStyle(AppTheme.secondary)
                     .padding(.top, 6)
 
@@ -58,36 +56,24 @@ struct ReconnectView: View {
                     Task { await app.reconnect() }
                 } label: {
                     HStack {
-                        if isConnecting { ProgressView().tint(.black) }
+                        if isConnecting { ProgressView().tint(AppTheme.background) }
                         Text(isConnecting ? "Connecting…" : "Reconnect")
                             .fontWeight(.semibold)
                     }
                     .frame(maxWidth: .infinity, minHeight: 56)
-                    .foregroundStyle(.black)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 28))
+                    .foregroundStyle(AppTheme.background)
+                    .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 28))
                 }
                 .disabled(isConnecting)
                 .padding(.horizontal, 28)
                 .padding(.top, 30)
 
-                Button {
-                    showsManualPair = true
-                } label: {
-                    Label("Pair with Code", systemImage: "keyboard")
-                        .fontWeight(.medium)
-                        .frame(maxWidth: .infinity, minHeight: 52)
-                        .foregroundStyle(.white)
-                        .background(AppTheme.raised, in: RoundedRectangle(cornerRadius: 26))
-                        .overlay(RoundedRectangle(cornerRadius: 26).stroke(AppTheme.border))
-                }
-                .padding(.horizontal, 28)
-                .padding(.top, 12)
 
                 Button {
                     confirmsForget = true
                 } label: {
                     Text("Forget Mac")
-                        .font(.subheadline.monospaced())
+                        .font(AppTheme.font(.subheadline, monospaced: true))
                         .foregroundStyle(AppTheme.secondary)
                 }
                 .padding(.top, 26)
@@ -103,23 +89,15 @@ struct ReconnectView: View {
                     isConnected: false,
                     onGear: { showsSettings = true }
                 ) {
-                    Button {
-                        showsManualPair = true
-                    } label: {
-                        Label("Pair with Code", systemImage: "keyboard")
-                    }
                     Button(role: .destructive) {
                         confirmsForget = true
                     } label: {
-                        Label("Forget Mac", systemImage: "trash")
+                        Label("Forget Mac", image: Reicon.trash.rawValue)
                     }
                 }
             }
             .sheet(isPresented: $showsSettings) {
                 SettingsView(app: app)
-            }
-            .sheet(isPresented: $showsManualPair) {
-                ConnectionView(app: app)
             }
             .confirmationDialog("Forget this Mac?", isPresented: $confirmsForget, titleVisibility: .visible) {
                 Button("Forget Mac", role: .destructive) {
@@ -130,6 +108,6 @@ struct ReconnectView: View {
                 Text("You will need its Tailscale address and daemon token to connect again. Running tasks will continue on the Mac.")
             }
         }
-        .tint(.white)
+        .tint(AppTheme.primary)
     }
 }

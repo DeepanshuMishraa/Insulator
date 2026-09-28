@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum HomeTab: String, CaseIterable {
     case projects = "Projects"
@@ -14,6 +15,9 @@ struct MainView: View {
     @State private var isCreatingChat = false
     @State private var expandedProjects: Set<UUID> = []
     @State private var path: [UUID] = []
+    @State private var projectForRename: Project?
+    @State private var renameProjectText = ""
+    @State private var projectForRemoval: Project?
     @FocusState private var searchFocused: Bool
 
     private var filteredSessions: [AgentSession] {
@@ -48,9 +52,8 @@ struct MainView: View {
                     Button {
                         showsSettings = true
                     } label: {
-                        Image(systemName: "gearshape")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundStyle(.white)
+                        ReiconIcon(.settings, size: 18)
+                            .foregroundStyle(AppTheme.primary)
                             .frame(width: 44, height: 44)
                             .background(AppTheme.raised, in: Circle())
                     }
@@ -61,19 +64,18 @@ struct MainView: View {
 
                     VStack(spacing: 3) {
                         Text("Insulator")
-                            .font(.title3.bold())
-                            .foregroundStyle(.white)
+                            .font(AppTheme.font(.title3, weight: .bold))
+                            .foregroundStyle(AppTheme.primary)
                         HStack(spacing: 5) {
                             Circle()
                                 .fill(app.isConnected ? AppTheme.accent : Color.secondary)
                                 .frame(width: 6, height: 6)
                                 .accessibilityHidden(true)
-                            Image(systemName: "laptopcomputer")
-                                .font(.caption2)
+                            ReiconIcon(.laptop, size: 11)
                                 .foregroundStyle(AppTheme.secondary)
                                 .accessibilityHidden(true)
                             Text(app.displayHost ?? "No Mac paired")
-                                .font(.caption)
+                                .font(AppTheme.font(.caption))
                                 .foregroundStyle(AppTheme.secondary)
                                 .lineLimit(1)
                         }
@@ -85,17 +87,16 @@ struct MainView: View {
                         Button {
                             Task { await app.reconnect() }
                         } label: {
-                            Label("Reconnect", systemImage: "arrow.clockwise")
+                            Label("Reconnect", image: Reicon.refresh.rawValue)
                         }
                         Button(role: .destructive) {
                             confirmsForget = true
                         } label: {
-                            Label("Forget Mac", systemImage: "trash")
+                            Label("Forget Mac", image: Reicon.trash.rawValue)
                         }
                     } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 17, weight: .medium))
-                            .foregroundStyle(.white)
+                        ReiconIcon(.more, size: 17)
+                            .foregroundStyle(AppTheme.primary)
                             .frame(width: 44, height: 44)
                             .background(AppTheme.raised, in: Circle())
                     }
@@ -119,14 +120,14 @@ struct MainView: View {
                             }
                         } label: {
                             Text(tab.rawValue)
-                                .font(.system(size: 15, weight: .medium))
+                                .font(AppTheme.font(size: 15, weight: .medium))
                                 .padding(.horizontal, 18)
                                 .padding(.vertical, 8)
                                 .background(
-                                    selectedTab == tab ? Color.white : AppTheme.raised,
+                                    selectedTab == tab ? AppTheme.primary : AppTheme.raised,
                                     in: Capsule()
                                 )
-                                .foregroundStyle(selectedTab == tab ? Color.black : Color.white)
+                                .foregroundStyle(selectedTab == tab ? AppTheme.background : AppTheme.primary)
                         }
                         .buttonStyle(BouncyButtonStyle(scale: 0.96))
                     }
@@ -151,8 +152,7 @@ struct MainView: View {
                 // Bottom Bar: Search Chats capsule + New Chat button
                 HStack(spacing: 12) {
                     HStack(spacing: 10) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 16))
+                        ReiconIcon(.search, size: 16)
                             .foregroundStyle(AppTheme.secondary)
                         TextField(selectedTab == .projects ? "Search Projects" : "Search Chats", text: $search)
                             .focused($searchFocused)
@@ -160,7 +160,7 @@ struct MainView: View {
                             .autocorrectionDisabled()
                             .submitLabel(.search)
                             .onSubmit { searchFocused = false }
-                            .foregroundStyle(.white)
+                            .foregroundStyle(AppTheme.primary)
                     }
                     .padding(.horizontal, 16)
                     .frame(height: 52)
@@ -173,15 +173,14 @@ struct MainView: View {
                     } label: {
                         if isCreatingChat {
                             ProgressView()
-                                .tint(.black)
+                                .tint(AppTheme.background)
                                 .frame(width: 52, height: 52)
-                                .background(Color.white, in: Circle())
+                                .background(AppTheme.primary, in: Circle())
                         } else {
-                            Image(systemName: "square.and.pencil")
-                                .font(.system(size: 20, weight: .semibold))
-                                .foregroundStyle(.black)
+                            ReiconIcon(.compose, size: 20)
+                                .foregroundStyle(AppTheme.background)
                                 .frame(width: 52, height: 52)
-                                .background(Color.white, in: Circle())
+                                .background(AppTheme.primary, in: Circle())
                         }
                     }
                     .buttonStyle(BouncyButtonStyle(scale: 0.94))
@@ -194,6 +193,35 @@ struct MainView: View {
             }
             .background(AppTheme.background)
             .toolbar(.hidden, for: .navigationBar)
+            .alert("Rename Project", isPresented: Binding(
+                get: { projectForRename != nil },
+                set: { if !$0 { projectForRename = nil } }
+            )) {
+                TextField("Project name", text: $renameProjectText)
+                Button("Save") {
+                    guard let project = projectForRename else { return }
+                    Task { await app.renameProject(project.id, name: renameProjectText) }
+                    projectForRename = nil
+                }
+                Button("Cancel", role: .cancel) { projectForRename = nil }
+            }
+            .confirmationDialog(
+                "Remove this project?",
+                isPresented: Binding(
+                    get: { projectForRemoval != nil },
+                    set: { if !$0 { projectForRemoval = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Remove Project", role: .destructive) {
+                    guard let project = projectForRemoval else { return }
+                    Task { await app.removeProject(project.id) }
+                    projectForRemoval = nil
+                }
+                Button("Cancel", role: .cancel) { projectForRemoval = nil }
+            } message: {
+                Text("This removes the project and its chats from Insulator. Files on disk are not deleted.")
+            }
             .confirmationDialog("Forget this Mac?", isPresented: $confirmsForget, titleVisibility: .visible) {
                 Button("Forget Mac", role: .destructive) {
                     app.disconnect(forget: true)
@@ -213,7 +241,7 @@ struct MainView: View {
                 SettingsView(app: app)
             }
         }
-        .tint(.white)
+        .tint(AppTheme.primary)
     }
 
     @ViewBuilder
@@ -237,20 +265,44 @@ struct MainView: View {
                             ProjectRow(
                                 project: project,
                                 chatCount: sessions(for: project).count,
-                                isExpanded: expandedProjects.contains(project.id) || !searchQuery.isEmpty
+                                isExpanded: expandedProjects.contains(project.id) || !searchQuery.isEmpty,
+                                githubAvatar: app.githubAvatar
                             )
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            if let url = app.projectGitHubURLs[project.id] {
+                                Button {
+                                    UIApplication.shared.open(url)
+                                } label: {
+                                    Text("Open in GitHub")
+                                }
+                            }
+                            Button {
+                                renameProjectText = project.name
+                                projectForRename = project
+                            } label: {
+                                Label("Rename", image: Reicon.edit.rawValue)
+                            }
+                            Button(role: .destructive) {
+                                projectForRemoval = project
+                            } label: {
+                                Label("Remove", image: Reicon.trash.rawValue)
+                            }
+                        }
                         .listRowBackground(AppTheme.background)
                         .accessibilityValue(expandedProjects.contains(project.id) || !searchQuery.isEmpty ? "Expanded" : "Collapsed")
 
                         if expandedProjects.contains(project.id) || !searchQuery.isEmpty {
                             ForEach(visibleSessions(for: project)) { session in
-                                NavigationLink(value: session.id) {
+                                Button {
+                                    searchFocused = false
+                                    path.append(session.id)
+                                } label: {
                                     SessionRow(session: session, project: project)
                                         .padding(.leading, 16)
                                 }
-                                .simultaneousGesture(TapGesture().onEnded { searchFocused = false })
+                                .buttonStyle(.plain)
                                 .listRowBackground(AppTheme.background)
                             }
                         }
@@ -258,6 +310,7 @@ struct MainView: View {
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
             .scrollDismissesKeyboard(.immediately)
             .scrollIndicators(.hidden)
             .refreshable { await app.refresh() }
@@ -270,13 +323,17 @@ struct MainView: View {
             emptyState(title: search.isEmpty ? "No chats" : "No matching chats")
         } else {
             List(filteredSessions) { session in
-                NavigationLink(value: session.id) {
+                Button {
+                    searchFocused = false
+                    path.append(session.id)
+                } label: {
                     SessionRow(session: session, project: app.project(for: session))
                 }
-                .simultaneousGesture(TapGesture().onEnded { searchFocused = false })
+                .buttonStyle(.plain)
                 .listRowBackground(AppTheme.background)
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
             .scrollDismissesKeyboard(.immediately)
             .scrollIndicators(.hidden)
             .refreshable { await app.refresh() }
@@ -285,7 +342,7 @@ struct MainView: View {
 
     private func emptyState(title: String) -> some View {
         Text(title)
-            .font(.system(size: 15))
+            .font(AppTheme.font(size: 15))
             .foregroundStyle(AppTheme.secondary)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(16)
@@ -337,21 +394,33 @@ private struct ProjectRow: View {
     let project: Project
     let chatCount: Int
     let isExpanded: Bool
+    let githubAvatar: UIImage?
 
     var body: some View {
         HStack(spacing: 13) {
-            Image(systemName: "folder")
-                .font(.system(size: 17, weight: .medium))
-                .frame(width: 36, height: 36)
-                .background(AppTheme.raised, in: Circle())
-                .accessibilityHidden(true)
+            Group {
+                if let githubAvatar {
+                    Image(uiImage: githubAvatar)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Text(project.name.prefix(1).uppercased())
+                        .font(AppTheme.font(size: 14, weight: .bold))
+                        .foregroundStyle(AppTheme.background)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(AppTheme.accent)
+                }
+            }
+            .frame(width: 36, height: 36)
+            .clipShape(Circle())
+            .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(project.name)
-                    .font(.body.weight(.semibold))
+                    .font(AppTheme.font(.body, weight: .semibold))
                     .lineLimit(1)
                 Text(project.path)
-                    .font(.caption)
+                    .font(AppTheme.font(.caption))
                     .foregroundStyle(AppTheme.secondary)
                     .lineLimit(1)
             }
@@ -359,12 +428,12 @@ private struct ProjectRow: View {
             Spacer(minLength: 8)
 
             Text("\(chatCount)")
-                .font(.caption.monospacedDigit())
+                .font(AppTheme.font(.caption))
+                .monospacedDigit()
                 .foregroundStyle(AppTheme.secondary)
                 .accessibilityLabel("\(chatCount) chats")
 
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
+            ReiconIcon(.chevronRight, size: 12)
                 .foregroundStyle(AppTheme.secondary)
                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
         }
@@ -382,21 +451,21 @@ private struct SessionRow: View {
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 17, height: 17)
-                .foregroundStyle(.white)
+                .foregroundStyle(AppTheme.primary)
                 .frame(width: 36, height: 36)
                 .background(AppTheme.raised, in: Circle())
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(session.displayTitle)
-                    .font(.body.weight(.medium))
+                    .font(AppTheme.font(.body, weight: .medium))
                     .lineLimit(1)
                 HStack(spacing: 6) {
                     Text(project?.name ?? "Quick Chat")
                     Text("·")
                     Text(session.provider.name)
                 }
-                .font(.caption)
+                .font(AppTheme.font(.caption))
                 .foregroundStyle(AppTheme.secondary)
                 .lineLimit(1)
             }

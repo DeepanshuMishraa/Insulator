@@ -26,6 +26,21 @@ targets:
         NSLocalNetworkUsageDescription: Connect to your Insulator daemon over your private Tailscale network.
         NSCameraUsageDescription: Take photos to attach them to your chat with Insulator.
         NSPhotoLibraryUsageDescription: Select photos from your library to attach them to your chat with Insulator.
+        UIAppFonts:
+          - Geist[wght].ttf
+          - Geist-Italic[wght].ttf
+          - PaperMono[wght].ttf
+          - JetBrainsMono[wght].ttf
+          - JetBrainsMono-Italic[wght].ttf
+          - Manrope[wght].ttf
+          - Poppins-Regular.ttf
+          - Poppins-Italic.ttf
+          - Poppins-Medium.ttf
+          - Poppins-MediumItalic.ttf
+          - Poppins-SemiBold.ttf
+          - Poppins-SemiBoldItalic.ttf
+          - Poppins-Bold.ttf
+          - Poppins-BoldItalic.ttf
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
     settings:

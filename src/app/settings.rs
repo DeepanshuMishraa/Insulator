@@ -1249,18 +1249,6 @@ impl Insulator {
                         )
                         .child(
                             div()
-                                .px(px(10.0))
-                                .pb(px(2.0))
-                                .whitespace_normal()
-                                .text_size(sp(12.5))
-                                .line_height(sp(15.0))
-                                .text_color(theme.text_tertiary)
-                                .child(SharedString::from(
-                                    self.daemon_connection_hint(port),
-                                )),
-                        )
-                        .child(
-                            div()
                                 .py(px(8.0))
                                 .border_t_1()
                                 .border_color(theme.border)
@@ -1407,21 +1395,6 @@ impl Insulator {
         self.daemon_tailscale_ip
             .as_deref()
             .unwrap_or(&self.daemon_hostname)
-    }
-
-    /// Caption under the connection URL explaining which address is shown.
-    pub(super) fn daemon_connection_hint(&self, port: u16) -> String {
-        if self.daemon_tailscale_loading {
-            return tr!("daemon.tailscale_resolving");
-        }
-        if self.daemon_tailscale_ip.is_some() {
-            return tr!(
-                "daemon.tailscale_hint",
-                hostname = self.daemon_hostname.clone(),
-                port = port.to_string()
-            );
-        }
-        tr!("daemon.tailscale_missing")
     }
 
     /// Resolve the Tailscale IPv4 once, off the UI thread. Render reads only
@@ -3868,7 +3841,8 @@ impl Insulator {
             self.cancel_keybinding_capture(cx);
             return;
         }
-        if matches!(keystroke.key.as_str(), "backspace" | "delete") && !keystroke.modifiers.modified()
+        if matches!(keystroke.key.as_str(), "backspace" | "delete")
+            && !keystroke.modifiers.modified()
         {
             self.commit_keybinding(id, "", cx);
             return;
