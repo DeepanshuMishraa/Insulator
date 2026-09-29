@@ -16,6 +16,18 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.10]
+
+### Added
+
+- Connect another device from Settings: the daemon now shows a Tailscale address and access token so a phone or the web client can reach this Mac from any network on your Tailnet, with a LAN hostname fallback when Tailscale isn't installed
+- Let paired clients read your GitHub avatar, resolve a project's GitHub URL, and remove projects through the daemon
+
+### Changed
+
+- Rework pull request views and simulator streaming for smoother updates
+- Refine markdown rendering and the shimmer animation
+
 ## [0.1.9]
 
 ### Added
