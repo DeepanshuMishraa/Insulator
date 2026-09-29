@@ -20,6 +20,7 @@ the original feature bullet instead of adding separate entries for them.
 
 ### Added
 
+- Add Insulator Mobile, a native SwiftUI iPhone and iPad client for the desktop daemon. Pair it with your Mac over Tailscale to browse projects and tasks, follow live transcripts, reasoning, and tool activity, send prompts with image attachments, steer or stop runs, handle approvals, and start new tasks with any provider, model, and access, reasoning, speed-tier, and context option the desktop offers. Credentials live in the iOS Keychain. Agents and provider credentials stay on the Mac. The iOS app is built separately from Xcode and is not part of the desktop download
 - Connect another device from Settings: the daemon now shows a Tailscale address and access token so a phone or the web client can reach this Mac from any network on your Tailnet, with a LAN hostname fallback when Tailscale isn't installed
 - Let paired clients read your GitHub avatar, resolve a project's GitHub URL, and remove projects through the daemon
 
