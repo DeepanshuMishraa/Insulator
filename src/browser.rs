@@ -2467,13 +2467,7 @@ impl BrowserView {
                     move |_, _hitbox, _window, _| {
                         #[cfg(target_os = "windows")]
                         if let Some(host) = input {
-                            Self::forward_page_input(
-                                host,
-                                focus,
-                                parent_scroll,
-                                _hitbox,
-                                _window,
-                            );
+                            Self::forward_page_input(host, focus, parent_scroll, _hitbox, _window);
                         }
                     },
                 )
@@ -2711,7 +2705,9 @@ impl Render for BrowserView {
             .min_h_0()
             .flex()
             .flex_col()
-            .when(!self.embedded, |element| element.child(self.render_toolbar(cx)))
+            .when(!self.embedded, |element| {
+                element.child(self.render_toolbar(cx))
+            })
             .child(body)
     }
 }

@@ -213,13 +213,19 @@ daemon.apply:
 daemon.restarting:
   en: Restarting…
 daemon.credentials_title:
-  en: Connection details
+  en: Connect another device
 daemon.credentials_description:
-  en: Enter these in Insulator Web. The URL uses this machine’s local network hostname.
+  en: Enter this address and access token in Insulator Mobile or Web.
+daemon.tailscale_resolving:
+  en: Finding this Mac's Tailscale IP…
+daemon.tailscale_hint:
+  en: "Tailscale IP — reachable from any network on the same Tailnet. Same-network fallback: ws://%{hostname}:%{port}."
+daemon.tailscale_missing:
+  en: Tailscale not found — showing the LAN hostname instead, which only works on the same network. Install and log into Tailscale for cross-network access.
 daemon.websocket_url:
-  en: WebSocket URL
+  en: Address
 daemon.token:
-  en: Token
+  en: Access token
 daemon.reveal_token:
   en: Reveal token
 daemon.hide_token:

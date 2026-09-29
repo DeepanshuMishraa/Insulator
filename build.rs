@@ -17,7 +17,6 @@ fn main() {
     }
 }
 
-
 /// Republish `SUPublicEDKey` from the macOS Info.plist as a compile-time
 /// constant.
 ///

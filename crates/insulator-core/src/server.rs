@@ -1001,6 +1001,7 @@ fn task_catalog_action(command: &Command) -> TaskCatalogAction {
             projects: projects.clone(),
         },
         Command::RemoveSession
+        | Command::RemoveProject { .. }
         | Command::ForkSessionFromResponse { .. }
         | Command::RewindSessionToMessage { .. } => TaskCatalogAction::Changed,
         _ => TaskCatalogAction::None,

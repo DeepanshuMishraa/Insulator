@@ -42,6 +42,25 @@ fn trim_resident_transcripts(state: &mut PersistedState, pinned: &HashSet<Uuid>)
     state.trim_idle_transcripts(pinned, RESIDENT_TRANSCRIPT_WINDOW);
 }
 
+fn project_github_url(path: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .ok()?;
+    output.status.success().then_some(())?;
+    let remote = String::from_utf8(output.stdout).ok()?;
+    let remote = remote.trim().trim_end_matches(".git");
+    let repository = remote
+        .strip_prefix("git@github.com:")
+        .or_else(|| remote.strip_prefix("ssh://git@github.com/"))
+        .or_else(|| remote.strip_prefix("https://github.com/"))
+        .or_else(|| remote.strip_prefix("http://github.com/"))?
+        .trim_matches('/');
+    (!repository.is_empty()).then(|| format!("https://github.com/{repository}"))
+}
+
 pub struct InsulatorBackend {
     sessions: Mutex<HashMap<Uuid, (Uuid, DriverHandle)>>,
     terminals: Mutex<HashMap<Uuid, (Uuid, crate::terminal::DaemonTerminal)>>,
@@ -349,6 +368,42 @@ impl Backend for InsulatorBackend {
                     default_cwd: self.default_cwd.clone(),
                     projectless_root: crate::projectless::workspace_root(),
                 })
+            }
+            Command::ReadGitHubAvatar => {
+                let path = dirs::home_dir()
+                    .ok_or_else(|| anyhow!("home directory is unavailable"))?
+                    .join(".insulator/cache/github-avatar.png");
+                Ok(ResponsePayload::BlobData {
+                    bytes: std::fs::read(path).context("GitHub avatar is unavailable")?,
+                })
+            }
+            Command::ResolveProjectGitHubUrl { path } => Ok(ResponsePayload::ProjectGitHubUrl {
+                url: project_github_url(&path),
+            }),
+            Command::RemoveProject { project_id } => {
+                let session_ids = {
+                    let mut state = self.task_state.lock();
+                    let session_ids = state
+                        .sessions
+                        .iter()
+                        .filter(|session| session.project_id == project_id)
+                        .map(|session| session.id)
+                        .collect::<Vec<_>>();
+                    state.projects.retain(|project| project.id != project_id);
+                    state
+                        .sessions
+                        .retain(|session| session.project_id != project_id);
+                    self.task_store.save(&mut state)?;
+                    session_ids
+                };
+                self.removed_session_ids
+                    .lock()
+                    .extend(session_ids.iter().copied());
+                let mut runtimes = self.sessions.lock();
+                for session_id in session_ids {
+                    runtimes.remove(&session_id);
+                }
+                Ok(ResponsePayload::Ack)
             }
             Command::SaveTaskState {
                 projects,
@@ -1856,6 +1911,9 @@ fn handle_driver_command(
         | Command::SetSkillsEnabled { .. }
         | Command::TrashSkills { .. }
         | Command::LoadTaskState
+        | Command::ReadGitHubAvatar
+        | Command::ResolveProjectGitHubUrl { .. }
+        | Command::RemoveProject { .. }
         | Command::SaveTaskState { .. }
         | Command::RemoveSession
         | Command::HydrateSession { .. }

@@ -799,7 +799,7 @@ impl Insulator {
         let pending = self.daemon_reconfigure_pending;
         let fields_dirty = self.daemon_exposure_fields_dirty(cx);
         let port = self.state.daemon_exposure.port;
-        let websocket_url = format!("ws://{}:{port}", self.daemon_hostname);
+        let websocket_url = format!("ws://{}:{port}", self.daemon_connection_host());
         let token = self.state.daemon_exposure.token.clone();
 
         let exposure_toggle = toggle_switch(
@@ -1242,7 +1242,7 @@ impl Insulator {
                                         .text_color(theme.text)
                                         .child(SharedString::from(format!(
                                             "ws://{}:{port}",
-                                            self.daemon_hostname
+                                            self.daemon_connection_host()
                                         ))),
                                 )
                                 .child(copy_url_button),
@@ -1388,6 +1388,39 @@ impl Insulator {
         self.apply_daemon_exposure(settings, cx);
     }
 
+    /// Host shown in the Daemon settings connection URL. The Tailscale IPv4
+    /// wins because a phone on the same Tailnet reaches it from any network;
+    /// the LAN hostname is the fallback when Tailscale is unavailable.
+    pub(super) fn daemon_connection_host(&self) -> &str {
+        self.daemon_tailscale_ip
+            .as_deref()
+            .unwrap_or(&self.daemon_hostname)
+    }
+
+    /// Resolve the Tailscale IPv4 once, off the UI thread. Render reads only
+    /// the cached store; a miss while loading means "not known yet".
+    /// Call sites are discrete (app launch, Daemon page opened) — never from
+    /// a render frame — so each call spawns at most one subprocess.
+    pub(super) fn ensure_daemon_tailscale_ip(&mut self, cx: &mut Context<Self>) {
+        if self.daemon_tailscale_ip.is_some() || self.daemon_tailscale_loading {
+            return;
+        }
+        self.daemon_tailscale_loading = true;
+        cx.notify();
+        let entity = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let address = cx
+                .background_executor()
+                .spawn(async move { crate::daemon::tailscale_ipv4() })
+                .await;
+            let _ = entity.update(cx, |this, cx| {
+                this.daemon_tailscale_ip = address;
+                this.daemon_tailscale_loading = false;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
     fn apply_daemon_exposure(
         &mut self,
         settings: insulator_client::DaemonExposureSettings,
@@ -3808,7 +3841,8 @@ impl Insulator {
             self.cancel_keybinding_capture(cx);
             return;
         }
-        if matches!(keystroke.key.as_str(), "backspace" | "delete") && !keystroke.modifiers.modified()
+        if matches!(keystroke.key.as_str(), "backspace" | "delete")
+            && !keystroke.modifiers.modified()
         {
             self.commit_keybinding(id, "", cx);
             return;

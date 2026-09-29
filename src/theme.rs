@@ -125,7 +125,6 @@ impl Theme {
             Self::dark()
         }
     }
-
 }
 
 pub trait ActiveTheme {
@@ -145,7 +144,6 @@ impl<T> ActiveTheme for Context<'_, T> {
 }
 
 impl Theme {
-
     pub fn from_color_theme(color_theme: ColorTheme) -> Self {
         // Preserve the original Insulator graphite palettes as selectable themes,
         // including their native sidebar, overlay, and semantic colors.

@@ -2471,9 +2471,7 @@ impl Insulator {
         // would restore the mode before the *latest* toggle. The entry
         // is cleared when the switch is confirmed (`ExtensionStatus`,
         // `PlanApproved`) or consumed by a failure.
-        self.plan_mode_fallback
-            .entry(session_id)
-            .or_insert(current);
+        self.plan_mode_fallback.entry(session_id).or_insert(current);
         self.plan_modes.insert(session_id, target);
         if let Some(runtime) = self.runtimes.get(&session_id) {
             runtime.driver.provider_control(commands);

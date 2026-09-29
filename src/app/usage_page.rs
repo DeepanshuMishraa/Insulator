@@ -57,6 +57,11 @@ impl Insulator {
         if page == SettingsPage::Skills {
             self.ensure_skills_catalog(false, cx);
         }
+        if page == SettingsPage::Daemon {
+            // A previous launch-time probe may have settled without an
+            // address (Tailscale started later); retry on explicit visit.
+            self.ensure_daemon_tailscale_ip(cx);
+        }
         cx.notify();
     }
 

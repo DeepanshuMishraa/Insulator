@@ -417,7 +417,8 @@ impl Insulator {
                 .is_some_and(|surface| matches!(surface, RightPanelSurface::BackgroundWork { .. }));
         let reviewing_pull_request = self.right_panel_visible
             && self.pull_request_detail.is_some()
-            && self.pull_request_detail_tab == crate::app::pull_requests::PullRequestDetailTab::Summary;
+            && self.pull_request_detail_tab
+                == crate::app::pull_requests::PullRequestDetailTab::Summary;
         let selected = reviewing_diff
             .then(|| {
                 self.right_panel_diff_selection
@@ -2677,7 +2678,11 @@ impl Insulator {
                         .image_for_reference(image_url, None, None, cx)
                         .or_else(|| self.legacy_activity_image(image_url, cx));
                     detail_card = detail_card.child(render_activity_image(
-                        image_url, image, id, image_index, theme,
+                        image_url,
+                        image,
+                        id,
+                        image_index,
+                        theme,
                     ));
                 }
                 item = item.child(detail_card);

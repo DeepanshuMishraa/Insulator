@@ -1,0 +1,71 @@
+name: InsulatorMobile
+options:
+  bundleIdPrefix: com.dipxsy
+  deploymentTarget:
+    iOS: "18.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+packages:
+  Textual:
+    url: https://github.com/gonzalezreal/textual
+    exactVersion: 0.5.0
+targets:
+  InsulatorMobile:
+    type: application
+    platform: iOS
+    sources:
+      - InsulatorMobile
+    dependencies:
+      - package: Textual
+    info:
+      path: InsulatorMobile/Info.plist
+      properties:
+        CFBundleDisplayName: Insulator
+        NSLocalNetworkUsageDescription: Connect to your Insulator daemon over your private Tailscale network.
+        NSCameraUsageDescription: Take photos to attach them to your chat with Insulator.
+        NSPhotoLibraryUsageDescription: Select photos from your library to attach them to your chat with Insulator.
+        UIAppFonts:
+          - Geist[wght].ttf
+          - Geist-Italic[wght].ttf
+          - PaperMono[wght].ttf
+          - JetBrainsMono[wght].ttf
+          - JetBrainsMono-Italic[wght].ttf
+          - Manrope[wght].ttf
+          - Poppins-Regular.ttf
+          - Poppins-Italic.ttf
+          - Poppins-Medium.ttf
+          - Poppins-MediumItalic.ttf
+          - Poppins-SemiBold.ttf
+          - Poppins-SemiBoldItalic.ttf
+          - Poppins-Bold.ttf
+          - Poppins-BoldItalic.ttf
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dipxsy.insulatorMobile
+        PRODUCT_NAME: InsulatorMobile
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        TARGETED_DEVICE_FAMILY: "1,2"
+  InsulatorMobileTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - InsulatorMobileTests
+    dependencies:
+      - target: InsulatorMobile
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  InsulatorMobile:
+    build:
+      targets:
+        InsulatorMobile: all
+        InsulatorMobileTests: [test]
+    test:
+      targets:
+        - InsulatorMobileTests

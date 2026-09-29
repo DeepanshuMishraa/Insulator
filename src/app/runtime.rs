@@ -373,10 +373,7 @@ fn prepare_submission(
         request.and_then(|request| start_driver(request, project_path.to_path_buf()))
     });
 
-    Ok(PreparedSubmission {
-        workspace,
-        driver,
-    })
+    Ok(PreparedSubmission { workspace, driver })
 }
 
 /// Everything a past-message resend needs after the UI accepts it.
@@ -3095,10 +3092,7 @@ impl Insulator {
                 return;
             }
         };
-        let PreparedSubmission {
-            workspace,
-            driver,
-        } = prepared;
+        let PreparedSubmission { workspace, driver } = prepared;
         if !self
             .state
             .sessions

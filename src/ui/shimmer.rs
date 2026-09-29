@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use gpui::{
     Animation, AnimationExt as _, App, Bounds, ContentMask, Div, Element, ElementId,
-    GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, LineLayout, ParentElement as _,
-    Pixels, Point, RenderOnce, SharedString, StyleRefinement, Styled, StyledText, TextAlign, Window,
-    WrapBoundary, div, point, px, size,
+    GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, LineLayout,
+    ParentElement as _, Pixels, Point, RenderOnce, SharedString, StyleRefinement, Styled,
+    StyledText, TextAlign, Window, WrapBoundary, div, point, px, size,
 };
 
 use crate::theme::Theme;
@@ -239,14 +239,10 @@ impl RenderOnce for ShimmerText {
                 spread,
                 phase: 0.,
             }
-            .with_animation(
-                id,
-                Animation::new(duration),
-                move |mut this, phase| {
-                    this.phase = if reverse { 1. - phase } else { phase };
-                    this
-                },
-            )
+            .with_animation(id, Animation::new(duration), move |mut this, phase| {
+                this.phase = if reverse { 1. - phase } else { phase };
+                this
+            })
             .into_any_element()
         } else {
             motion::pulse(duration, move |phase| {
@@ -400,7 +396,8 @@ impl Element for ShimmerGlyphs {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        self.text.request_layout(global_id, inspector_id, window, cx)
+        self.text
+            .request_layout(global_id, inspector_id, window, cx)
     }
 
     fn prepaint(

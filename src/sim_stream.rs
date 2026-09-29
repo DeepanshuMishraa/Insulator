@@ -67,21 +67,18 @@ pub enum SimStreamError {
     MissingTool(&'static str),
     InvalidUdid,
     NoDevices,
-    CommandFailed {
-        tool: &'static str,
-        detail: String,
-    },
-    ParseFailed {
-        tool: &'static str,
-        detail: String,
-    },
+    CommandFailed { tool: &'static str, detail: String },
+    ParseFailed { tool: &'static str, detail: String },
 }
 
 impl fmt::Display for SimStreamError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnsupportedPlatform => {
-                write!(f, "iOS Simulator streaming needs macOS with Xcode installed")
+                write!(
+                    f,
+                    "iOS Simulator streaming needs macOS with Xcode installed"
+                )
             }
             Self::UnsupportedArch => {
                 write!(
@@ -90,7 +87,10 @@ impl fmt::Display for SimStreamError {
                 )
             }
             Self::MissingTool(tool) => {
-                write!(f, "{tool} is not installed; install Xcode command-line tools and Node.js 20+")
+                write!(
+                    f,
+                    "{tool} is not installed; install Xcode command-line tools and Node.js 20+"
+                )
             }
             Self::InvalidUdid => write!(f, "invalid simulator UDID"),
             Self::NoDevices => write!(
@@ -159,11 +159,7 @@ pub fn validate_udid(udid: &str) -> Result<(), SimStreamError> {
 pub fn pick_preferred(devices: &[SimDevice]) -> Option<SimDevice> {
     /// Lower is better: iPhone 0, everything else 1 — iPads never win ties.
     fn family_rank(name: &str) -> u8 {
-        if name.starts_with("iPhone") {
-            0
-        } else {
-            1
-        }
+        if name.starts_with("iPhone") { 0 } else { 1 }
     }
     devices
         .iter()
@@ -205,12 +201,11 @@ struct SimctlDevice {
 /// unavailable devices are kept (caller filters) so "none available" can be
 /// distinguished from "none installed".
 pub fn parse_simctl_devices(stdout: &str) -> Result<Vec<SimDevice>, SimStreamError> {
-    let parsed: SimctlList = serde_json::from_str(stdout).map_err(|error| {
-        SimStreamError::ParseFailed {
+    let parsed: SimctlList =
+        serde_json::from_str(stdout).map_err(|error| SimStreamError::ParseFailed {
             tool: "simctl",
             detail: error.to_string(),
-        }
-    })?;
+        })?;
     let mut devices = Vec::new();
     for list in parsed.devices.values() {
         for device in list {
@@ -304,12 +299,11 @@ fn truncate_to_char_boundary(detail: &mut String, max_len: usize) {
 
 /// Parse `serve-sim --detach -q <udid>` stdout: one JSON object.
 pub fn parse_detach_output(stdout: &str) -> Result<SimStreamInfo, SimStreamError> {
-    let parsed: ServeSimInfo = serde_json::from_str(stdout.trim()).map_err(|error| {
-        SimStreamError::ParseFailed {
+    let parsed: ServeSimInfo =
+        serde_json::from_str(stdout.trim()).map_err(|error| SimStreamError::ParseFailed {
             tool: "serve-sim",
             detail: error.to_string(),
-        }
-    })?;
+        })?;
     to_info(parsed)
 }
 
@@ -398,7 +392,9 @@ fn command_failed(tool: &'static str, output: &std::process::Output) -> SimStrea
 }
 
 fn run(tool: &'static str, mut command: Command) -> Result<String, SimStreamError> {
-    let output = command.output().map_err(|_| SimStreamError::MissingTool(tool))?;
+    let output = command
+        .output()
+        .map_err(|_| SimStreamError::MissingTool(tool))?;
     if !output.status.success() {
         return Err(command_failed(tool, &output));
     }
@@ -428,11 +424,7 @@ pub fn boot_device_blocking(udid: &str) -> Result<(), SimStreamError> {
     command.args(["simctl", "boot", udid]);
     match run("simctl", command) {
         Ok(_) => Ok(()),
-        Err(SimStreamError::CommandFailed { detail, .. })
-            if is_already_booted(&detail) =>
-        {
-            Ok(())
-        }
+        Err(SimStreamError::CommandFailed { detail, .. }) if is_already_booted(&detail) => Ok(()),
         Err(error) => Err(error),
     }
 }
@@ -462,7 +454,10 @@ fn is_already_shutdown(detail: &str) -> bool {
 ///
 /// The preview opens minimal on purpose: no side panes, fitted to the
 /// viewport, themed like the app — the stream is the content, not a dashboard.
-pub fn start_detached_blocking(udid: &str, theme: SimTheme) -> Result<SimStreamInfo, SimStreamError> {
+pub fn start_detached_blocking(
+    udid: &str,
+    theme: SimTheme,
+) -> Result<SimStreamInfo, SimStreamError> {
     validate_udid(udid)?;
     let mut command = Command::new("npx");
     command.args([
@@ -515,11 +510,7 @@ pub fn shutdown_device_blocking(udid: &str) -> Result<(), SimStreamError> {
     command.args(["simctl", "shutdown", udid]);
     match run("simctl", command) {
         Ok(_) => Ok(()),
-        Err(SimStreamError::CommandFailed { detail, .. })
-            if is_already_shutdown(&detail) =>
-        {
-            Ok(())
-        }
+        Err(SimStreamError::CommandFailed { detail, .. }) if is_already_shutdown(&detail) => Ok(()),
         Err(error) => Err(error),
     }
 }
@@ -693,10 +684,12 @@ pub fn stop_all_blocking() -> Result<(), SimStreamError> {
                 }
             };
             if unverified && streams.is_empty() && booted.is_empty() {
-                return Err(first_error.clone().unwrap_or(SimStreamError::CommandFailed {
-                    tool: "serve-sim",
-                    detail: "could not verify Stop; retry Stop".to_owned(),
-                }));
+                return Err(first_error
+                    .clone()
+                    .unwrap_or(SimStreamError::CommandFailed {
+                        tool: "serve-sim",
+                        detail: "could not verify Stop; retry Stop".to_owned(),
+                    }));
             }
             if let Some(detail) = describe_remaining(&streams, &booted) {
                 return Err(SimStreamError::CommandFailed {
@@ -750,9 +743,7 @@ fn describe_remaining(streams: &[SimStreamInfo], booted: &[SimDevice]) -> Option
 
 /// Best-effort `SIGKILL`; a stale pid is fine (already gone is the goal).
 fn force_kill(pid: u32) {
-    let _ = Command::new("kill")
-        .args(["-9", &pid.to_string()])
-        .output();
+    let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
 }
 
 #[cfg(test)]
@@ -911,10 +902,7 @@ mod tests {
         // Cleanup: the same record stays killable by device and PID.
         let streams = parse_list_output_for_cleanup(json).expect("cleanup parse");
         assert_eq!(streams.len(), 1);
-        assert_eq!(
-            streams[0].device,
-            "31406148-6A0B-49E1-9CFA-4EDAB4D95F9A"
-        );
+        assert_eq!(streams[0].device, "31406148-6A0B-49E1-9CFA-4EDAB4D95F9A");
         assert_eq!(streams[0].pid, Some(4321));
     }
 
@@ -924,13 +912,17 @@ mod tests {
         // keep treating it as unverified.
         assert!(parse_list_output_for_cleanup("not json").is_err());
         assert!(parse_list_output_for_cleanup("").expect("empty").is_empty());
-        assert!(parse_list_output_for_cleanup("[]")
-            .expect("array")
-            .is_empty());
+        assert!(
+            parse_list_output_for_cleanup("[]")
+                .expect("array")
+                .is_empty()
+        );
         // Idle `{"running":false,...}` has no device to kill.
-        assert!(parse_list_output_for_cleanup(r#"{"running":false}"#)
-            .expect("idle")
-            .is_empty());
+        assert!(
+            parse_list_output_for_cleanup(r#"{"running":false}"#)
+                .expect("idle")
+                .is_empty()
+        );
     }
 
     #[test]

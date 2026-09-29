@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Insulator</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Take photos to attach them to your chat with Insulator.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Connect to your Insulator daemon over your private Tailscale network.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Select photos from your library to attach them to your chat with Insulator.</string>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Geist[wght].ttf</string>
+		<string>Geist-Italic[wght].ttf</string>
+		<string>PaperMono[wght].ttf</string>
+		<string>JetBrainsMono[wght].ttf</string>
+		<string>JetBrainsMono-Italic[wght].ttf</string>
+		<string>Manrope[wght].ttf</string>
+		<string>Poppins-Regular.ttf</string>
+		<string>Poppins-Italic.ttf</string>
+		<string>Poppins-Medium.ttf</string>
+		<string>Poppins-MediumItalic.ttf</string>
+		<string>Poppins-SemiBold.ttf</string>
+		<string>Poppins-SemiBoldItalic.ttf</string>
+		<string>Poppins-Bold.ttf</string>
+		<string>Poppins-BoldItalic.ttf</string>
+	</array>
+</dict>
+</plist>

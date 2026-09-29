@@ -3297,10 +3297,7 @@ impl Insulator {
         let is_files = matches!(self.right_panel_upper_tab, RightPanelUpperTab::Files);
         let is_changes = matches!(self.right_panel_upper_tab, RightPanelUpperTab::Changes);
         let is_browser = matches!(self.right_panel_upper_tab, RightPanelUpperTab::Browser);
-        let is_simulator = matches!(
-            self.right_panel_upper_tab,
-            RightPanelUpperTab::Simulator
-        );
+        let is_simulator = matches!(self.right_panel_upper_tab, RightPanelUpperTab::Simulator);
 
         let mut tabs = div()
             .id("right-panel-tabs")
