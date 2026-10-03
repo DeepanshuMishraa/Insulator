@@ -12,6 +12,12 @@ use serde::{Deserialize, Serialize};
 use super::*;
 
 const TERMINAL_TITLEBAR_HEIGHT: f32 = 48.0;
+const TERMINAL_FRAME_PADDING_X: f32 = 10.0;
+const TERMINAL_FRAME_PADDING_TOP: f32 = 2.0;
+const TERMINAL_FRAME_PADDING_BOTTOM: f32 = 10.0;
+const TERMINAL_FRAME_BORDER_WIDTH: f32 = 1.0;
+const TERMINAL_FRAME_RADIUS: f32 = 10.0;
+const TERMINAL_AGENT_POLL_INTERVAL: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -24,6 +30,8 @@ pub(super) enum AppMode {
 pub(super) struct TerminalTab {
     id: Uuid,
     view: Entity<TerminalView>,
+    /// CLI agent found running under the shell, refreshed by a poll.
+    agent: Option<TerminalAgent>,
 }
 
 /// What survives a quit. Shell processes do not; a restored tab starts a
@@ -67,13 +75,95 @@ fn resumable_program(name: &str) -> Option<&'static str> {
         .find(|program| *program == name)
 }
 
-/// For each shell pid, the resumable program running anywhere under it.
-/// One `ps` call covers every tab. Blocking, so callers run it off the UI
-/// thread.
+/// A CLI coding agent running in a terminal tab. Its mark replaces the
+/// generic terminal icon on the tab.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TerminalAgent {
+    Claude,
+    Codex,
+    OpenCode,
+    Pi,
+    Cline,
+    Copilot,
+    Gemini,
+    Cursor,
+    Amp,
+    Antigravity,
+}
+
+impl TerminalAgent {
+    /// Matches an executable or script name, e.g. `claude` or `gemini.js`.
+    fn from_program(name: &str) -> Option<Self> {
+        let stem = name.split('.').next().unwrap_or(name);
+        match stem {
+            "claude" => Some(Self::Claude),
+            "codex" => Some(Self::Codex),
+            "opencode" => Some(Self::OpenCode),
+            "pi" => Some(Self::Pi),
+            "cline" => Some(Self::Cline),
+            "copilot" => Some(Self::Copilot),
+            "gemini" => Some(Self::Gemini),
+            "cursor-agent" => Some(Self::Cursor),
+            "amp" => Some(Self::Amp),
+            "agy" => Some(Self::Antigravity),
+            _ => None,
+        }
+    }
+
+    /// Matches a full command line. Node-based agents run as
+    /// `node /path/to/gemini`, so the script name counts as well as the
+    /// executable. Claude's native install runs from a `claude/versions/`
+    /// directory, so its path components count too.
+    fn from_command(command: &str) -> Option<Self> {
+        let mut words = command.split_whitespace();
+        let program = words.next()?;
+        let file_name = |word: &str| {
+            Path::new(word)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(Self::from_program)
+        };
+        file_name(program)
+            .or_else(|| words.next().and_then(file_name))
+            .or_else(|| {
+                Path::new(program)
+                    .components()
+                    .any(|part| part.as_os_str() == "claude")
+                    .then_some(Self::Claude)
+            })
+    }
+
+    fn icon(self) -> TerminalAgentIcon {
+        match self {
+            Self::Claude => TerminalAgentIcon::Color("icons/agent-claude.svg"),
+            Self::Codex => TerminalAgentIcon::Mono("icons/provider-codex.svg"),
+            Self::Gemini => TerminalAgentIcon::Color("icons/agent-gemini.svg"),
+            Self::Antigravity => TerminalAgentIcon::Color("icons/agent-antigravity.svg"),
+            Self::OpenCode => TerminalAgentIcon::Mono("icons/provider-opencode.svg"),
+            Self::Pi => TerminalAgentIcon::Mono("icons/provider-pi.svg"),
+            Self::Cline => TerminalAgentIcon::Mono("icons/provider-cline.svg"),
+            Self::Copilot => TerminalAgentIcon::Mono("icons/provider-copilot.svg"),
+            Self::Cursor => TerminalAgentIcon::Mono("icons/provider-cursor.svg"),
+            Self::Amp => TerminalAgentIcon::Mono("icons/provider-amp.svg"),
+        }
+    }
+}
+
+/// Brand-coloured marks render as images. Single-colour marks render as a
+/// mask tinted with the tab's text colour, since black would vanish on a dark
+/// theme.
+enum TerminalAgentIcon {
+    Color(&'static str),
+    Mono(&'static str),
+}
+
+/// For each shell pid, the first program `pick` accepts among the commands
+/// running anywhere under it. One `ps` call covers every pid. Blocking, so
+/// callers run it off the UI thread.
 #[cfg(unix)]
-fn resumable_programs_under(roots: &[u32]) -> HashMap<u32, &'static str> {
+fn programs_under<T: Copy>(roots: &[u32], pick: impl Fn(&str) -> Option<T>) -> HashMap<u32, T> {
     let Ok(output) = std::process::Command::new("ps")
-        .args(["-A", "-o", "pid=,ppid=,comm="])
+        .args(["-A", "-o", "pid=,ppid=,command="])
         .output()
     else {
         return HashMap::new();
@@ -100,11 +190,7 @@ fn resumable_programs_under(roots: &[u32]) -> HashMap<u32, &'static str> {
         let mut pending = vec![*root];
         while let Some(pid) = pending.pop() {
             for (child, command) in children.get(&pid).into_iter().flatten() {
-                let name = Path::new(command)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or_default();
-                if let Some(program) = resumable_program(name) {
+                if let Some(program) = pick(command) {
                     found.insert(*root, program);
                 }
                 pending.push(*child);
@@ -115,8 +201,35 @@ fn resumable_programs_under(roots: &[u32]) -> HashMap<u32, &'static str> {
 }
 
 #[cfg(not(unix))]
-fn resumable_programs_under(_roots: &[u32]) -> HashMap<u32, &'static str> {
+fn programs_under<T: Copy>(_roots: &[u32], _pick: impl Fn(&str) -> Option<T>) -> HashMap<u32, T> {
     HashMap::new()
+}
+
+fn resumable_programs_under(roots: &[u32]) -> HashMap<u32, &'static str> {
+    programs_under(roots, |command| {
+        let name = command
+            .split_whitespace()
+            .next()
+            .and_then(|program| Path::new(program).file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        resumable_program(name)
+    })
+}
+
+/// The agent a process is, by its command line. Blocking: runs `ps`.
+#[cfg(unix)]
+fn agent_running_as(pid: u32) -> Option<TerminalAgent> {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    TerminalAgent::from_command(String::from_utf8_lossy(&output.stdout).trim())
+}
+
+#[cfg(not(unix))]
+fn agent_running_as(_pid: u32) -> Option<TerminalAgent> {
+    None
 }
 
 /// An agent event worth a toast while the terminal is on screen.
@@ -336,10 +449,64 @@ impl Insulator {
             },
         )
         .detach();
+        let id = Uuid::new_v4();
         self.terminal_tabs.push(TerminalTab {
-            id: Uuid::new_v4(),
+            id,
             view,
+            agent: None,
         });
+        self.watch_terminal_agent(id, cx);
+    }
+
+    /// Watches which program owns the tab's terminal so its icon follows the
+    /// agent running in it. The foreground check is a syscall, so it runs
+    /// often; the `ps` lookup runs only when the foreground program changes.
+    /// Stops once the tab is closed. Idle while Agents mode is up.
+    fn watch_terminal_agent(&self, tab_id: Uuid, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let mut last_foreground = None;
+            loop {
+                cx.background_executor()
+                    .timer(TERMINAL_AGENT_POLL_INTERVAL)
+                    .await;
+                let Ok(watch) = this.update(cx, |this, cx| {
+                    let tab = this.terminal_tabs.iter().find(|tab| tab.id == tab_id);
+                    tab.map(|tab| {
+                        let view = tab.view.read(cx);
+                        (this.app_mode == AppMode::Terminal)
+                            .then(|| (view.child_pid(), view.foreground_pgid()))
+                    })
+                }) else {
+                    return;
+                };
+                let Some(watch) = watch else { return };
+                let Some((Some(shell), Some(foreground))) = watch else {
+                    continue;
+                };
+                if last_foreground == Some(foreground) {
+                    continue;
+                }
+                last_foreground = Some(foreground);
+                let agent = if foreground == shell {
+                    None
+                } else {
+                    cx.background_executor()
+                        .spawn(async move { agent_running_as(foreground) })
+                        .await
+                };
+                let Ok(()) = this.update(cx, |this, cx| {
+                    if let Some(tab) = this.terminal_tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                        if tab.agent != agent {
+                            tab.agent = agent;
+                            cx.notify();
+                        }
+                    }
+                }) else {
+                    return;
+                };
+            }
+        })
+        .detach();
     }
 
     pub(super) fn new_terminal_tab(&mut self, cx: &mut Context<Self>) {
@@ -612,64 +779,135 @@ impl Insulator {
     fn render_terminal_tabs(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = Theme::current(cx);
         let solid = self.state.window_style == WindowStyle::Solid;
+        let terminal_icon = crate::assets::terminal_icon();
         let mut strip = div()
             .id("terminal-mode-tabs")
             .h_full()
             .min_w_0()
             .flex()
             .items_center()
-            .gap(px(3.0))
+            .gap(px(6.0))
             .overflow_x_scroll();
         for (index, tab) in self.terminal_tabs.iter().enumerate() {
             let selected = index == self.active_terminal_tab;
             let view = tab.view.read(cx);
+            // Agents prefix their title with a status glyph (Claude Code's
+            // spinner), which would sit next to the tab icon as a second one.
+            // Shells title the tab with the working directory; keep only
+            // the folder name.
             let title = view.title().trim();
-            let label = if !title.is_empty() {
+            let title = if title.contains('/') {
+                title
+                    .rsplit('/')
+                    .find(|part| !part.is_empty())
+                    .unwrap_or("~")
+            } else {
+                title
+            };
+            let title = title
+                .trim_start_matches(|c: char| !c.is_alphanumeric() && c != '~')
+                .trim();
+            let is_generic_shell = matches!(
+                title.to_ascii_lowercase().as_str(),
+                "" | "zsh" | "bash" | "sh" | "fish"
+            );
+            let label = if !is_generic_shell {
                 title.to_owned()
             } else {
                 let cwd = view.working_directory();
-                cwd.file_name()
-                    .and_then(|name| name.to_str())
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| format!("{} {}", tr!("right_panel.terminal"), index + 1))
+                if dirs::home_dir().is_some_and(|home| cwd == home) {
+                    "~".to_owned()
+                } else {
+                    cwd.file_name()
+                        .and_then(|name| name.to_str())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| format!("{} {}", tr!("right_panel.terminal"), index + 1))
+                }
             };
             let exited = view.is_exited();
             let tab_group = SharedString::from(format!("terminal-tab-{}", tab.id));
+            let icon_element = div()
+                .h(px(20.0))
+                .w(px(24.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(match tab.agent.map(TerminalAgent::icon) {
+                    Some(TerminalAgentIcon::Color(path)) => {
+                        file_icon(path, 16.0).into_any_element()
+                    }
+                    Some(TerminalAgentIcon::Mono(path)) => icon(
+                        path,
+                        15.0,
+                        if selected {
+                            theme.text
+                        } else {
+                            theme.text_tertiary
+                        },
+                    )
+                    .into_any_element(),
+                    None => img(terminal_icon.clone())
+                        .size_full()
+                        .object_fit(ObjectFit::Contain)
+                        .into_any_element(),
+                })
+                .when(!selected && tab.agent.is_none(), |el| el.opacity(0.60));
+
             strip = strip.child(
                 div()
                     .id(tab_group.clone())
                     .group(tab_group.clone())
                     .tab_index(0)
                     .focus_visible(|element| element.border_color(theme.accent))
-                    .h(px(28.0))
-                    .min_w(px(54.0))
-                    .max_w(px(160.0))
-                    .pl(px(8.0))
-                    .pr(px(6.0))
+                    .h(px(32.0))
+                    .min_w(px(80.0))
+                    .max_w(px(260.0))
+                    .pl(px(6.0))
+                    .pr(px(14.0))
                     .flex_none()
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
-                    .rounded(px(6.0))
+                    .gap(px(8.0))
+                    .rounded_full()
                     .cursor_pointer()
-                    .text_size(sp(12.0))
+                    .text_size(sp(13.0))
+                    .border_1()
                     .when(selected, |element| {
                         element
                             .bg(theme.raised)
+                            .border_color(theme.border_strong)
                             .text_color(theme.text)
                             .font_weight(FontWeight::MEDIUM)
-                            // A shadow shows through a translucent fill and
-                            // makes the tab read as solid on glass styles.
                             .when(solid, |element| element.shadow_xs())
                     })
                     .when(!selected, |element| {
                         element
                             .bg(gpui::transparent_black())
+                            .border_color(gpui::transparent_black())
                             .text_color(theme.text_tertiary)
+                            .font_weight(FontWeight::NORMAL)
                             .hover(|element| {
-                                element.bg(theme.overlay).text_color(theme.text_secondary)
+                                element
+                                    .bg(theme.overlay)
+                                    .border_color(theme.border)
+                                    .text_color(theme.text_secondary)
                             })
                     })
+                    .tooltip(Tooltip::text(format!(
+                        "{} ({}+{})",
+                        label,
+                        if cfg!(target_os = "macos") {
+                            "⌘"
+                        } else {
+                            "Ctrl"
+                        },
+                        if index < 9 {
+                            (index + 1).to_string()
+                        } else {
+                            "9".to_string()
+                        }
+                    )))
                     .on_mouse_down(
                         MouseButton::Middle,
                         cx.listener(move |this, _, _, cx| {
@@ -680,19 +918,7 @@ impl Insulator {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.select_terminal_tab(index, cx);
                     }))
-                    .child(
-                        div()
-                            .size(px(5.0))
-                            .rounded_full()
-                            .flex_none()
-                            .bg(if exited {
-                                theme.danger
-                            } else if selected {
-                                theme.accent
-                            } else {
-                                theme.text_ghost
-                            }),
-                    )
+                    .child(icon_element)
                     .child(
                         div()
                             .min_w_0()
@@ -700,19 +926,34 @@ impl Insulator {
                             .truncate()
                             .child(SharedString::from(label)),
                     )
+                    .when(exited, |element| {
+                        element.child(
+                            div()
+                                .size(px(6.0))
+                                .rounded_full()
+                                .flex_none()
+                                .bg(theme.danger),
+                        )
+                    })
                     .child(
                         div()
                             .id(SharedString::from(format!("close-terminal-tab-{}", tab.id)))
-                            .size(px(14.0))
+                            .size(px(16.0))
                             .flex_none()
-                            .rounded(px(3.0))
+                            .rounded_full()
                             .flex()
                             .items_center()
                             .justify_center()
+                            .cursor_pointer()
                             .opacity(0.0)
                             .group_hover(tab_group, |style| style.opacity(0.65))
-                            .hover(|element| element.opacity(1.0).bg(theme.overlay_strong))
-                            .child(icon("icons/x.svg", 8.0, theme.text_secondary))
+                            .hover(|element| {
+                                element
+                                    .opacity(1.0)
+                                    .bg(theme.overlay_strong)
+                                    .text_color(theme.text)
+                            })
+                            .child(icon("icons/x.svg", 9.0, theme.text_secondary))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
                                 this.close_terminal_tab(index, cx);
@@ -723,14 +964,16 @@ impl Insulator {
         strip.child(
             div()
                 .id("new-terminal-tab")
-                .size(px(24.0))
+                .size(px(28.0))
                 .flex_none()
-                .rounded(px(5.0))
+                .rounded_full()
                 .flex()
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                .hover(|element| element.bg(theme.overlay))
+                .border_1()
+                .border_color(gpui::transparent_black())
+                .hover(|element| element.bg(theme.overlay).border_color(theme.border))
                 .active(|element| element.bg(theme.overlay_strong))
                 .tooltip(Tooltip::text(format!(
                     "{} ({}+T)",
@@ -741,7 +984,7 @@ impl Insulator {
                         "Ctrl"
                     }
                 )))
-                .child(icon("icons/plus.svg", 12.0, theme.text_tertiary))
+                .child(icon("icons/plus.svg", 13.0, theme.text_secondary))
                 .on_click(cx.listener(|this, _, _, cx| {
                     cx.stop_propagation();
                     this.new_terminal_tab(cx);
@@ -797,8 +1040,16 @@ impl Insulator {
         self.ensure_terminal_tabs(cx);
         let theme = Theme::current(cx);
         let viewport = window.viewport_size();
-        let body_width = f32::from(viewport.width);
-        let body_height = (f32::from(viewport.height) - TERMINAL_TITLEBAR_HEIGHT).max(60.0);
+        let body_width = (f32::from(viewport.width)
+            - TERMINAL_FRAME_PADDING_X * 2.0
+            - TERMINAL_FRAME_BORDER_WIDTH * 2.0)
+            .max(100.0);
+        let body_height = (f32::from(viewport.height)
+            - TERMINAL_TITLEBAR_HEIGHT
+            - TERMINAL_FRAME_PADDING_TOP
+            - TERMINAL_FRAME_PADDING_BOTTOM
+            - TERMINAL_FRAME_BORDER_WIDTH * 2.0)
+            .max(60.0);
         let active = self
             .terminal_tabs
             .get(self.active_terminal_tab)
@@ -848,7 +1099,8 @@ impl Insulator {
                     a: 0.82,
                     ..theme.surface
                 },
-                _ => theme.terminal,
+                WindowStyle::Solid => theme.surface,
+                WindowStyle::Transparent => theme.surface,
             })
             .when_some(
                 (window_style == WindowStyle::Image)
@@ -870,8 +1122,25 @@ impl Insulator {
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .overflow_hidden()
-                    .children(active),
+                    .px(px(TERMINAL_FRAME_PADDING_X))
+                    .pt(px(TERMINAL_FRAME_PADDING_TOP))
+                    .pb(px(TERMINAL_FRAME_PADDING_BOTTOM))
+                    .child(
+                        div()
+                            .id("terminal-frame")
+                            .size_full()
+                            .min_h_0()
+                            .min_w_0()
+                            .rounded(px(TERMINAL_FRAME_RADIUS))
+                            .border_1()
+                            .border_color(theme.border_strong)
+                            .bg(theme.terminal)
+                            .overflow_hidden()
+                            .when(window_style == WindowStyle::Solid, |frame| {
+                                frame.shadow_md()
+                            })
+                            .children(active),
+                    ),
             )
             .children(toast);
 
@@ -895,6 +1164,26 @@ impl Insulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agents_are_recognised_from_command_lines() {
+        let cases = [
+            ("claude --resume", Some(TerminalAgent::Claude)),
+            (
+                "/Users/a/.local/share/claude/versions/2.1.5 --foo",
+                Some(TerminalAgent::Claude),
+            ),
+            ("node /opt/homebrew/bin/gemini", Some(TerminalAgent::Gemini)),
+            ("/usr/local/bin/codex", Some(TerminalAgent::Codex)),
+            ("opencode", Some(TerminalAgent::OpenCode)),
+            ("/usr/local/bin/agy", Some(TerminalAgent::Antigravity)),
+            ("-zsh", None),
+            ("/Applications/Claude.app/Contents/MacOS/Claude", None),
+        ];
+        for (command, expected) in cases {
+            assert_eq!(TerminalAgent::from_command(command), expected, "{command}");
+        }
+    }
 
     #[test]
     fn layout_round_trips_through_json() {

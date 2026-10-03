@@ -316,6 +316,28 @@ struct TerminalSession {
     url_regex: RegexSearch,
     /// The shell's process id, used to find what is running under it.
     child_pid: Option<u32>,
+    /// Our own handle on the pty, to ask which process group owns it.
+    #[cfg(unix)]
+    pty_fd: Option<std::os::fd::OwnedFd>,
+}
+
+impl TerminalSession {
+    /// Process group in the foreground of the pty: the shell when idle, the
+    /// program's group while one runs. A cheap syscall, safe on the UI thread.
+    #[cfg(unix)]
+    fn foreground_pgid(&self) -> Option<u32> {
+        use std::os::fd::AsRawFd;
+        let fd = self.pty_fd.as_ref()?.as_raw_fd();
+        // SAFETY: `fd` stays open for the duration of the call; the owning
+        // `OwnedFd` lives in `self`.
+        let pgid = unsafe { libc::tcgetpgrp(fd) };
+        u32::try_from(pgid).ok().filter(|pgid| *pgid > 0)
+    }
+
+    #[cfg(not(unix))]
+    fn foreground_pgid(&self) -> Option<u32> {
+        None
+    }
 }
 
 impl TerminalSession {
@@ -393,6 +415,8 @@ impl TerminalSession {
         let child_pid = Some(pty.child().id());
         #[cfg(not(unix))]
         let child_pid = None;
+        #[cfg(unix)]
+        let pty_fd = pty.file().try_clone().ok().map(std::os::fd::OwnedFd::from);
         let event_loop = EventLoop::new(term.clone(), proxy, pty, false, false)
             .context("create Alacritty PTY event loop")?;
         let sender = event_loop.channel();
@@ -408,6 +432,8 @@ impl TerminalSession {
             term,
             sender,
             child_pid,
+            #[cfg(unix)]
+            pty_fd,
             dirty,
             ui_events,
             window_size: shared_window_size,
@@ -966,6 +992,13 @@ impl TerminalView {
     /// Process id of the shell, for finding what runs under it.
     pub fn child_pid(&self) -> Option<u32> {
         self.session.as_ref().and_then(|session| session.child_pid)
+    }
+
+    /// Process group running in the foreground of this terminal.
+    pub fn foreground_pgid(&self) -> Option<u32> {
+        self.session
+            .as_ref()
+            .and_then(TerminalSession::foreground_pgid)
     }
 
     /// Latest terminal title, empty until the shell sets one.

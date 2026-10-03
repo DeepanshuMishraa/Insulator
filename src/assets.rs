@@ -17,6 +17,9 @@ macro_rules! icons {
 }
 
 const ICONS: &[(&str, &[u8])] = icons![
+    "agent-antigravity",
+    "agent-claude",
+    "agent-gemini",
     "alert",
     "appearance",
     "arrow-down",
@@ -183,6 +186,9 @@ const ICONS: &[(&str, &[u8])] = icons![
     "new-task",
     "provider-amp",
     "provider-claude",
+    "provider-cline",
+    "provider-codex",
+    "provider-copilot",
     "provider-cursor",
     "provider-deepseek",
     "provider-devin",
@@ -242,6 +248,7 @@ const SYMBOLS_FONT: &[u8] = include_bytes!("../assets/fonts/SymbolsNerdFontMono-
 static HOME_LOGO: OnceLock<Arc<gpui::Image>> = OnceLock::new();
 static LIGHT_HOME_LOGO: OnceLock<Arc<gpui::Image>> = OnceLock::new();
 static INSULATOR_MARK: OnceLock<Arc<gpui::Image>> = OnceLock::new();
+static TERMINAL_ICON: OnceLock<Arc<gpui::Image>> = OnceLock::new();
 
 /// Family name of [`SYMBOLS_FONT`] for `FontFallbacks` lists.
 pub const SYMBOLS_FONT_FAMILY: &str = "Symbols Nerd Font Mono";
@@ -274,6 +281,17 @@ pub fn insulator_mark() -> Arc<gpui::Image> {
             Arc::new(gpui::Image::from_bytes(
                 gpui::ImageFormat::Png,
                 include_bytes!("../assets/insulator-mark.png").to_vec(),
+            ))
+        })
+        .clone()
+}
+
+pub fn terminal_icon() -> Arc<gpui::Image> {
+    TERMINAL_ICON
+        .get_or_init(|| {
+            Arc::new(gpui::Image::from_bytes(
+                gpui::ImageFormat::Png,
+                include_bytes!("../assets/terminal-icon.png").to_vec(),
             ))
         })
         .clone()
