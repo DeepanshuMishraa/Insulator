@@ -36,6 +36,7 @@ enum Reicon: String {
     case list = "ReiconList"
     case tools = "ReiconTools"
     case sparkles = "ReiconSparkles"
+    case github = "ReiconGithub"
 }
 
 struct ReiconIcon: View {

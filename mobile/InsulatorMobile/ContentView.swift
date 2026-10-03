@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @State private var app = AppModel()
 
     var body: some View {
@@ -15,6 +16,9 @@ struct ContentView: View {
         }
         .background(AppTheme.background.ignoresSafeArea())
         .task { await app.connectSaved() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await app.recover() } }
+        }
         .alert("Insulator", isPresented: errorPresented) {
             Button("OK", role: .cancel) { app.errorMessage = nil }
         } message: {

@@ -115,6 +115,27 @@ pub const ALL: &[KeybindingDef] = &[
         context: None,
     },
     KeybindingDef {
+        id: "toggle_terminal_mode",
+        label: "Toggle terminal mode",
+        category: "Panels",
+        default: Some("secondary-j"),
+        context: None,
+    },
+    KeybindingDef {
+        id: "switch_to_terminal_mode",
+        label: "Switch to terminal mode",
+        category: "Panels",
+        default: Some("secondary-right"),
+        context: Some("Insulator && !TerminalMode && !Terminal"),
+    },
+    KeybindingDef {
+        id: "switch_to_agents_mode",
+        label: "Switch to agents mode",
+        category: "Panels",
+        default: Some("secondary-left"),
+        context: Some("TerminalMode"),
+    },
+    KeybindingDef {
         id: "command_palette",
         label: "Command palette",
         category: "Panels",

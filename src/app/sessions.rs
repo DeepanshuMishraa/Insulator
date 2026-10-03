@@ -576,6 +576,10 @@ impl Insulator {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.app_mode == super::terminal_mode::AppMode::Terminal {
+            self.new_terminal_tab(cx);
+            return;
+        }
         self.settings_page = None;
         self.main_tabs_open = true;
         self.active_main_file_tab = None;

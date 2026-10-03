@@ -18,6 +18,11 @@ menu.view: 表示
 menu.command_palette: コマンドパレット…
 menu.toggle_sidebar: サイドバーの表示を切り替える
 menu.toggle_right_panel: 右パネルの表示を切り替える
+menu.toggle_terminal_mode: ターミナルモードを切り替える
+terminal.mode_agents: エージェント
+terminal.mode_terminal: ターミナル
+terminal.new_tab: 新しいターミナルタブ
+terminal.needs_input: 回答が必要です
 menu.focus_composer: 入力欄にフォーカスを移動
 menu.toggle_model_picker: モデル選択の表示を切り替える
 menu.toggle_usage_panel: 使用状況パネルの表示を切り替える

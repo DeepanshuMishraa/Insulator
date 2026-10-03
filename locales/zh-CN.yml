@@ -18,6 +18,11 @@ menu.view: 显示
 menu.command_palette: 命令面板…
 menu.toggle_sidebar: 显示或隐藏侧边栏
 menu.toggle_right_panel: 显示或隐藏右侧面板
+menu.toggle_terminal_mode: 切换终端模式
+terminal.mode_agents: 智能体
+terminal.mode_terminal: 终端
+terminal.new_tab: 新建终端标签页
+terminal.needs_input: 需要你的回答
 menu.focus_composer: 将焦点移到输入框
 menu.toggle_model_picker: 打开或关闭模型选择器
 menu.toggle_usage_panel: 打开或关闭用量面板

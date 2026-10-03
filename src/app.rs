@@ -59,7 +59,7 @@ use crate::persistence::{
 };
 use crate::query::{Query, QueryCache};
 use crate::review_diff::{Snapshot as ReviewDiffSnapshot, Source as ReviewDiffSource};
-use crate::terminal::TerminalView;
+use crate::terminal::{TerminalExited, TerminalRestore, TerminalView};
 use crate::theme::{ColorTheme, Theme, ThemePreference, set_active_ui_font_family, sp};
 use crate::ui::text_field::TextField;
 use crate::ui::{
@@ -73,9 +73,10 @@ use crate::{
     CopySelection, FindNext, FindPrevious, FocusComposer, NavigateBack, NavigateForward,
     NewProject, NewSession, NewTab, NextMainTab, OpenFind, OpenFindReplace, OpenResumePicker,
     OpenReview, OpenSettings, PreviousMainTab, ReplaceAllMatches, SaveFile, SelectFirstTask,
-    SelectLastTask, SwitchTaskBackward, SwitchTaskForward, ToggleCommandPalette,
-    ToggleFindCaseSensitive, ToggleFindRegex, ToggleFindWholeWord, ToggleFpsCounter,
-    ToggleModelPicker, TogglePullRequests, ToggleRightPanel, ToggleSidebar, ToggleUsagePanel,
+    SelectLastTask, SelectTerminalTab, SwitchTaskBackward, SwitchTaskForward, SwitchToAgentsMode,
+    SwitchToTerminalMode, ToggleCommandPalette, ToggleFindCaseSensitive, ToggleFindRegex,
+    ToggleFindWholeWord, ToggleFpsCounter, ToggleModelPicker, TogglePullRequests, ToggleRightPanel,
+    ToggleSidebar, ToggleTerminalMode, ToggleUsagePanel,
 };
 use insulator_protocol::theme::WindowStyle;
 
@@ -1233,6 +1234,12 @@ pub struct Insulator {
     sound_volume_slider: Entity<SliderState>,
     sidebar_transparency_slider: Entity<SliderState>,
     settings_focus: FocusHandle,
+    /// Focus of last resort for the agent window. Key bindings and action
+    /// handlers hang off the root element, so with nothing focused (or a focus
+    /// left on a view that is no longer drawn, like a terminal after switching
+    /// modes) they never fire.
+    app_focus: FocusHandle,
+    agents_pending_focus: bool,
     window_style_restart_dialog: Option<WindowStyle>,
     onboarding_add_project_focus: FocusHandle,
     onboarding_github_project_focus: FocusHandle,
@@ -1664,6 +1671,18 @@ pub struct Insulator {
     /// since the event handler has no `Context` to refresh them itself.
     workspace_queries_stale: bool,
     right_panel_terminals: HashMap<Uuid, Entity<TerminalView>>,
+    /// Which workspace fills the window. Terminal mode is independent of any
+    /// agent session; see `terminal_mode`.
+    app_mode: terminal_mode::AppMode,
+    terminal_tabs: Vec<terminal_mode::TerminalTab>,
+    active_terminal_tab: usize,
+    /// Layout read at startup, opened the first time terminal mode is shown.
+    terminal_pending_restore: Option<terminal_mode::SavedTerminalLayout>,
+    terminal_pending_focus: bool,
+    /// Sessions that finished or asked a question while terminal mode was
+    /// up, oldest first. Drives the switcher badge.
+    terminal_attention: Vec<Uuid>,
+    terminal_mode_switch_generation: usize,
     right_panel_browsers: HashMap<Uuid, Entity<BrowserView>>,
     pull_request_video_views: HashMap<String, Entity<BrowserView>>,
     pull_request_media_paths: HashMap<String, PathBuf>,
@@ -1938,6 +1957,7 @@ mod sim_stream;
 mod skills_page;
 mod streaming;
 mod task_switcher;
+mod terminal_mode;
 mod transcript;
 mod transcript_search;
 mod transcript_view;
@@ -2266,6 +2286,10 @@ impl Insulator {
         let cached_pull_requests = pull_requests::load_cached_pull_requests();
         let cached_commits = pull_requests::cached_commits(&cached_pull_requests);
         let home_directory = crate::projectless::home_directory();
+        let saved_terminal_layout = terminal_mode::SavedTerminalLayout::load();
+        if let Some(size) = saved_terminal_layout.font_size {
+            crate::terminal::set_terminal_font_size(size);
+        }
         state.apply_daemon_settings(daemon.settings());
         if let Err(error) = daemon.update_settings(state.daemon_settings()) {
             eprintln!("could not normalize daemon settings after migration: {error:#}");
@@ -2687,6 +2711,7 @@ impl Insulator {
             .unwrap_or_default();
         let entity = cx.new(|cx| {
             let settings_focus = cx.focus_handle();
+            let app_focus = cx.focus_handle();
             let onboarding_add_project_focus = cx.focus_handle();
             let onboarding_github_project_focus = cx.focus_handle();
             let onboarding_projectless_focus = cx.focus_handle();
@@ -2892,6 +2917,20 @@ impl Insulator {
             cx.on_app_quit(|this, _| {
                 this.save();
                 async {}
+            })
+            .detach();
+
+            // Terminal tabs restore from a layout file. Capture here, on the
+            // UI thread, since the grids are gone once the app exits; the
+            // write itself runs in the background and quit waits for it.
+            cx.on_app_quit(|this, cx| {
+                let layout = this.terminal_layout_snapshot(cx);
+                let save = cx
+                    .background_executor()
+                    .spawn(async move { layout.write() });
+                async move {
+                    save.await;
+                }
             })
             .detach();
 
@@ -3245,6 +3284,8 @@ impl Insulator {
                 sound_volume_slider,
                 sidebar_transparency_slider,
                 settings_focus,
+                app_focus,
+                agents_pending_focus: false,
                 window_style_restart_dialog: None,
                 onboarding_add_project_focus,
                 onboarding_github_project_focus,
@@ -3506,6 +3547,13 @@ impl Insulator {
                 working_trees: QueryCache::new(MAX_CACHED_WORKSPACES),
                 workspace_queries_stale: false,
                 right_panel_terminals: HashMap::new(),
+                app_mode: saved_terminal_layout.mode,
+                terminal_tabs: Vec::new(),
+                active_terminal_tab: 0,
+                terminal_pending_restore: Some(saved_terminal_layout),
+                terminal_pending_focus: false,
+                terminal_attention: Vec::new(),
+                terminal_mode_switch_generation: 0,
                 right_panel_browsers: HashMap::new(),
                 pull_request_video_views: HashMap::new(),
                 pull_request_media_paths: HashMap::new(),

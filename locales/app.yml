@@ -36,6 +36,16 @@ menu.toggle_sidebar:
   en: Toggle Sidebar
 menu.toggle_right_panel:
   en: Toggle Right Panel
+menu.toggle_terminal_mode:
+  en: Toggle Terminal Mode
+terminal.mode_agents:
+  en: Agents
+terminal.mode_terminal:
+  en: Terminal
+terminal.new_tab:
+  en: New terminal tab
+terminal.needs_input:
+  en: Needs your answer
 menu.focus_composer:
   en: Focus Composer
 menu.toggle_model_picker:

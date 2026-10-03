@@ -15,7 +15,6 @@ struct HomeToolbar<RightMenu: View>: ToolbarContent {
                 ReiconIcon(.settings, size: 18)
                     .foregroundStyle(AppTheme.primary)
                     .frame(width: 40, height: 40)
-                    .background(AppTheme.raised, in: Circle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Settings")
@@ -49,7 +48,6 @@ struct HomeToolbar<RightMenu: View>: ToolbarContent {
                 ReiconIcon(.more, size: 17)
                     .foregroundStyle(AppTheme.primary)
                     .frame(width: 40, height: 40)
-                    .background(AppTheme.raised, in: Circle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("More actions")

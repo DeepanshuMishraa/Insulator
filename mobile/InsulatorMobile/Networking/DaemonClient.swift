@@ -84,6 +84,27 @@ final class DaemonClient {
         disconnect(notify: false)
     }
 
+    /// True when the socket answers a ping within `timeout`. iOS suspends the
+    /// app in the background and silently kills the socket, so a socket that
+    /// looks open after foregrounding may be dead.
+    func isAlive(timeout: Duration = .seconds(2)) async -> Bool {
+        guard let socket else { return false }
+        return await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await withCheckedContinuation { continuation in
+                    socket.sendPing { error in continuation.resume(returning: error == nil) }
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return false
+            }
+            let alive = await group.next() ?? false
+            group.cancelAll()
+            return alive
+        }
+    }
+
     private func disconnect(notify: Bool) {
         receiveTask?.cancel()
         receiveTask = nil

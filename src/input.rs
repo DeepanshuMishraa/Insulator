@@ -35,6 +35,7 @@ actions!(
         End,
         LineStart,
         LineEnd,
+        LineEndOrSwitchMode,
         ParagraphStart,
         ParagraphEnd,
         ParagraphBackward,
@@ -166,7 +167,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-p", Up, Some("TextInput")),
         KeyBinding::new("ctrl-n", Down, Some("TextInput")),
         KeyBinding::new("cmd-left", LineStart, Some("TextInput")),
-        KeyBinding::new("cmd-right", LineEnd, Some("TextInput")),
+        KeyBinding::new("cmd-right", LineEndOrSwitchMode, Some("TextInput")),
         KeyBinding::new("cmd-up", Home, Some("TextInput")),
         KeyBinding::new("cmd-down", End, Some("TextInput")),
         // Like the kills, ctrl-a/ctrl-e are paragraph motion in AppKit
@@ -1343,6 +1344,23 @@ impl TextInput {
     }
 
     fn line_end(&mut self, _: &LineEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_to_row_edge(true, false, cx);
+    }
+
+    /// Cmd-Right: the usual move to the end of the row, except with the caret
+    /// already at the very end of the text, where it would do nothing. There
+    /// it is the "go right" chord for terminal mode, so the chord still works
+    /// while the composer holds focus.
+    fn line_end_or_switch_mode(
+        &mut self,
+        _: &LineEndOrSwitchMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_range.is_empty() && self.cursor_offset() == self.content.len() {
+            window.dispatch_action(Box::new(crate::SwitchToTerminalMode), cx);
+            return;
+        }
         self.move_to_row_edge(true, false, cx);
     }
 
@@ -2862,6 +2880,7 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::end))
             .on_action(cx.listener(Self::line_start))
             .on_action(cx.listener(Self::line_end))
+            .on_action(cx.listener(Self::line_end_or_switch_mode))
             .on_action(cx.listener(Self::paragraph_start))
             .on_action(cx.listener(Self::paragraph_end))
             .on_action(cx.listener(Self::paragraph_backward))

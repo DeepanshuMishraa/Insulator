@@ -630,6 +630,7 @@ impl Insulator {
             }))
     }
 
+    #[allow(dead_code)]
     pub(super) fn render_history_button(
         &self,
         id: &'static str,
@@ -699,27 +700,6 @@ impl Insulator {
                         .child(self.render_resource_usage_button(cx)),
                 )
             })
-            .child(
-                div()
-                    .ml(px(6.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(2.0))
-                    .child(self.render_history_button(
-                        "navigate-back",
-                        "icons/arrow-left.svg",
-                        !self.session_navigation.back.is_empty(),
-                        true,
-                        cx,
-                    ))
-                    .child(self.render_history_button(
-                        "navigate-forward",
-                        "icons/arrow-right.svg",
-                        !self.session_navigation.forward.is_empty(),
-                        false,
-                        cx,
-                    )),
-            )
             .child(self.window_drag_region(
                 div().id("sidebar-titlebar-drag-region").h_full().flex_1(),
                 cx,
@@ -2733,26 +2713,7 @@ impl Insulator {
                             .when(self.state.show_resource_usage, |bar| {
                                 bar.child(self.render_resource_usage_button(cx))
                             })
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(2.0))
-                                    .child(self.render_history_button(
-                                        "navigate-back",
-                                        "icons/arrow-left.svg",
-                                        !self.session_navigation.back.is_empty(),
-                                        true,
-                                        cx,
-                                    ))
-                                    .child(self.render_history_button(
-                                        "navigate-forward",
-                                        "icons/arrow-right.svg",
-                                        !self.session_navigation.forward.is_empty(),
-                                        false,
-                                        cx,
-                                    )),
-                            ),
+                            .child(self.render_mode_switcher(cx)),
                     )
             })
             .when(show_tabs, |element| {
@@ -2792,13 +2753,20 @@ impl Insulator {
                     cx,
                 ),
             )
-            .child(self.render_background_work_summary(cx))
-            .when(self.fps_counter_visible, |element| {
-                element.child(self.render_fps_counter(cx))
-            })
-            .when(!self.right_panel_visible, |element| {
-                element.child(self.render_right_panel_toggle(cx))
-            })
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(self.render_mode_switcher(cx))
+                    .child(self.render_background_work_summary(cx))
+                    .when(self.fps_counter_visible, |element| {
+                        element.child(self.render_fps_counter(cx))
+                    })
+                    .when(!self.right_panel_visible, |element| {
+                        element.child(self.render_right_panel_toggle(cx))
+                    }),
+            )
             .children(right_window_controls)
     }
 

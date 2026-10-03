@@ -411,6 +411,10 @@ impl Render for Insulator {
                 .into_any_element();
             return self.render_window_frame(content, window, cx);
         }
+        if self.app_mode == super::terminal_mode::AppMode::Terminal {
+            let content = self.render_terminal_mode(window, cx);
+            return self.render_window_frame(content, window, cx);
+        }
         // Re-armed every frame this window shows time labels; parks while
         // settings covers them and while the window isn't drawing at all.
         self.schedule_time_label_wake(cx);
@@ -432,9 +436,11 @@ impl Render for Insulator {
         let project_dialog = self.render_project_dialog(cx);
         let rename_dialog = self.render_rename_dialog(cx);
         let goal_dialog = self.render_goal_dialog(window, cx);
+        self.restore_agents_focus(window, cx);
         let toast = self.render_active_toast(cx);
         let content = div()
             .key_context("Insulator")
+            .track_focus(&self.app_focus)
             .on_action(cx.listener(Self::close_window_or_right_panel_tab_action))
             .on_action(cx.listener(Self::new_session_action))
             .on_action(cx.listener(Self::new_tab_action))
@@ -442,6 +448,8 @@ impl Render for Insulator {
             .on_action(cx.listener(Self::open_settings_action))
             .on_action(cx.listener(Self::toggle_sidebar_action))
             .on_action(cx.listener(Self::toggle_right_panel_action))
+            .on_action(cx.listener(Self::toggle_terminal_mode_action))
+            .on_action(cx.listener(Self::switch_to_terminal_mode_action))
             .on_action(cx.listener(Self::toggle_command_palette_action))
             .on_action(cx.listener(Self::open_resume_picker_action))
             .on_action(cx.listener(Self::toggle_fps_counter_action))
@@ -612,8 +620,21 @@ impl Render for Insulator {
             .children(rename_dialog)
             .children(goal_dialog)
             .children(image_preview)
-            .children(task_switcher)
-            .into_any_element();
+            .children(task_switcher);
+        let generation = self.terminal_mode_switch_generation;
+        let content = if generation > 0 {
+            div()
+                .size_full()
+                .with_animation(
+                    SharedString::from(format!("agents-mode-switch-{generation}")),
+                    Animation::new(Duration::from_millis(160)).with_easing(ease_out_quint()),
+                    |element, delta| element.opacity(delta),
+                )
+                .child(content)
+                .into_any_element()
+        } else {
+            content.into_any_element()
+        };
 
         self.render_window_frame(content, window, cx)
     }
@@ -641,7 +662,7 @@ impl Insulator {
     /// is active. Every full-window surface (workspace and settings alike)
     /// must include this, or a toast raised there stays invisible until the
     /// user navigates away.
-    fn render_active_toast(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn render_active_toast(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         self.start_toast_dismiss_timer(cx);
         let toast = self
             .toast

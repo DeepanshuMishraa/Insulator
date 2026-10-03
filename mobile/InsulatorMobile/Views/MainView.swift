@@ -275,7 +275,7 @@ struct MainView: View {
                                 Button {
                                     UIApplication.shared.open(url)
                                 } label: {
-                                    Text("Open in GitHub")
+                                    Label("Open in GitHub", image: Reicon.github.rawValue)
                                 }
                             }
                             Button {

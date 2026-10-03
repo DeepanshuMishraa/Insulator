@@ -2482,6 +2482,10 @@ impl Insulator {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.app_mode == super::terminal_mode::AppMode::Terminal {
+            self.cycle_terminal_tabs(false, cx);
+            return;
+        }
         self.cycle_main_tabs(false, cx);
     }
 
@@ -2491,6 +2495,10 @@ impl Insulator {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.app_mode == super::terminal_mode::AppMode::Terminal {
+            self.cycle_terminal_tabs(true, cx);
+            return;
+        }
         self.cycle_main_tabs(true, cx);
     }
 
@@ -2500,6 +2508,10 @@ impl Insulator {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.app_mode == super::terminal_mode::AppMode::Terminal {
+            self.close_active_terminal_tab(cx);
+            return;
+        }
         // The Browser, Simulator and BackgroundWork tabs live outside
         // `right_panel_surfaces`, so without this the shortcut would sail
         // past the panel and close the main chat tab underneath them.
@@ -2602,6 +2614,10 @@ impl Insulator {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.app_mode == super::terminal_mode::AppMode::Terminal {
+            self.close_active_terminal_tab(cx);
+            return;
+        }
         if self.close_right_panel_upper_tab(window, cx) {
             return;
         }
@@ -3193,6 +3209,7 @@ impl Insulator {
         // not apply to it: shown mid-slide it would hang over the transcript
         // at full width. Keep it down until the panel has finished moving.
         let active_browser = if self.settings_page.is_none()
+            && self.app_mode == super::terminal_mode::AppMode::Agents
             && self.right_panel_visible
             && self.right_panel_slide.is_none()
         {

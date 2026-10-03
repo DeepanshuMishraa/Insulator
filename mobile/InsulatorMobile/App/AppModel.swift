@@ -6,6 +6,7 @@ import UIKit
 @Observable
 final class AppModel {
     var connectionState: ConnectionState = .disconnected
+    private var isRecovering = false
     var projects: [Project] = []
     var sessions: [AgentSession] = []
     var selectedSession: AgentSession?
@@ -83,6 +84,31 @@ final class AppModel {
     /// Reconnect to the remembered Mac from the reconnect screen.
     func reconnect() async {
         await connectSaved()
+    }
+
+    /// Called when the app returns to the foreground. iOS kills the socket
+    /// while suspended, so verify it and re-establish it without dropping the
+    /// user onto the reconnect screen.
+    func recover() async {
+        switch connectionState {
+        case .connected, .failed: break
+        case .connecting, .disconnected: return
+        }
+        guard !isRecovering, let payload = CredentialStore.load() else { return }
+        if isConnected, await client.isAlive() { return }
+        isRecovering = true
+        defer { isRecovering = false }
+        do {
+            let version = try await client.connect(to: payload)
+            connectedAddress = payload.url.absoluteString
+            try await loadInitialState()
+            connectionState = .connected(version: version)
+        } catch {
+            client.disconnect()
+            let message = Self.describeConnectionError(error, url: payload.url)
+            connectionState = .failed(message)
+            errorMessage = message
+        }
     }
 
     func connect(address: String, token: String) async {
@@ -918,9 +944,10 @@ final class AppModel {
         switch notice {
         case .taskStateChanged:
             Task { await refresh() }
-        case .disconnected(let message):
-            connectionState = .failed(message)
-            errorMessage = message
+        case .disconnected:
+            // Usually the socket died while suspended; try to restore it
+            // before surfacing an error.
+            Task { await recover() }
         case .event(let sessionID, let runtimeID, let kind, let payload):
             runtimes[sessionID] = runtimeID
             handleEvent(sessionID: sessionID, runtimeID: runtimeID, kind: kind, payload: payload)

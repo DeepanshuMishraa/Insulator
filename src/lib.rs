@@ -59,6 +59,13 @@ use gpui::{
 
 use crate::app::Insulator;
 use crate::identity::{APP_ID, APP_NAME};
+
+/// Jump to the nth terminal tab (zero-based). `usize::MAX` means the last
+/// tab, which is what Cmd-9 does in browsers.
+#[derive(Clone, PartialEq, gpui::Action)]
+#[action(namespace = insulator, no_json)]
+pub struct SelectTerminalTab(pub usize);
+
 actions!(
     insulator,
     [
@@ -72,6 +79,9 @@ actions!(
         CheckForUpdates,
         ToggleSidebar,
         ToggleRightPanel,
+        ToggleTerminalMode,
+        SwitchToTerminalMode,
+        SwitchToAgentsMode,
         ToggleCommandPalette,
         OpenResumePicker,
         ToggleFpsCounter,
@@ -392,6 +402,19 @@ fn bind_main_keys(cx: &mut App, overrides: &std::collections::HashMap<String, St
         // `secondary` is Command on macOS and Control elsewhere.
         KeyBinding::new("secondary-q", Quit, None),
         KeyBinding::new("secondary-alt-shift-f", ToggleFpsCounter, None),
+        KeyBinding::new("secondary-1", SelectTerminalTab(0), Some("TerminalMode")),
+        KeyBinding::new("secondary-2", SelectTerminalTab(1), Some("TerminalMode")),
+        KeyBinding::new("secondary-3", SelectTerminalTab(2), Some("TerminalMode")),
+        KeyBinding::new("secondary-4", SelectTerminalTab(3), Some("TerminalMode")),
+        KeyBinding::new("secondary-5", SelectTerminalTab(4), Some("TerminalMode")),
+        KeyBinding::new("secondary-6", SelectTerminalTab(5), Some("TerminalMode")),
+        KeyBinding::new("secondary-7", SelectTerminalTab(6), Some("TerminalMode")),
+        KeyBinding::new("secondary-8", SelectTerminalTab(7), Some("TerminalMode")),
+        KeyBinding::new(
+            "secondary-9",
+            SelectTerminalTab(usize::MAX),
+            Some("TerminalMode"),
+        ),
         KeyBinding::new("ctrl-escape", CancelTaskSwitch, Some("Insulator")),
         KeyBinding::new("ctrl-shift-escape", CancelTaskSwitch, Some("Insulator")),
         KeyBinding::new("down", SwitchTaskForward, Some("TaskSwitcher")),
@@ -458,6 +481,26 @@ fn bind_main_keys(cx: &mut App, overrides: &std::collections::HashMap<String, St
         "secondary-shift-b",
         ToggleRightPanel,
         None
+    );
+    single!(
+        "toggle_terminal_mode",
+        "secondary-j",
+        ToggleTerminalMode,
+        None
+    );
+    // Directional: a chord only fires in the mode it leaves, so Cmd-Right in
+    // a shell or Cmd-Left in an agent text field keeps its editing meaning.
+    single!(
+        "switch_to_terminal_mode",
+        "secondary-right",
+        SwitchToTerminalMode,
+        Some("Insulator && !TerminalMode && !Terminal")
+    );
+    single!(
+        "switch_to_agents_mode",
+        "secondary-left",
+        SwitchToAgentsMode,
+        Some("TerminalMode")
     );
     single!("command_palette", "secondary-k", ToggleCommandPalette, None);
     single!("focus_composer", "secondary-l", FocusComposer, None);
@@ -648,6 +691,7 @@ pub(crate) fn set_app_menus(cx: &mut App, updater_available: bool) {
                 MenuItem::separator(),
                 MenuItem::action(tr!("menu.toggle_sidebar"), ToggleSidebar),
                 MenuItem::action(tr!("menu.toggle_right_panel"), ToggleRightPanel),
+                MenuItem::action(tr!("menu.toggle_terminal_mode"), ToggleTerminalMode),
                 MenuItem::action(tr!("menu.focus_composer"), FocusComposer),
                 MenuItem::action(tr!("menu.toggle_model_picker"), ToggleModelPicker),
                 MenuItem::action(tr!("menu.toggle_usage_panel"), ToggleUsagePanel),

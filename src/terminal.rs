@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
 
@@ -17,7 +17,7 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::tty::{self, Shell};
-use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
+use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, Rgb};
 use anyhow::{Context as _, Result};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use gpui::{
@@ -38,6 +38,61 @@ use crate::ui::scrollbar::{self, ScrollbarState};
 const TERMINAL_CELL_WIDTH: f32 = 7.8;
 const TERMINAL_CELL_HEIGHT: f32 = 18.0;
 const TERMINAL_FONT_SIZE: f32 = 12.5;
+const TERMINAL_MIN_FONT_SIZE: f32 = 8.0;
+const TERMINAL_MAX_FONT_SIZE: f32 = 28.0;
+const TERMINAL_ZOOM_PILL_DURATION: Duration = Duration::from_millis(1200);
+
+/// Font size shared by every terminal view, in tenths of a point so it fits
+/// an atomic. Zoom is one setting for all tabs, not one per tab.
+static TERMINAL_FONT_SIZE_TENTHS: AtomicU32 = AtomicU32::new((TERMINAL_FONT_SIZE * 10.0) as u32);
+
+pub fn terminal_font_size() -> f32 {
+    TERMINAL_FONT_SIZE_TENTHS.load(Ordering::Relaxed) as f32 / 10.0
+}
+
+/// Rows keep the default font-to-row ratio at every zoom level.
+fn terminal_cell_height() -> f32 {
+    terminal_font_size() * (TERMINAL_CELL_HEIGHT / TERMINAL_FONT_SIZE)
+}
+
+pub fn set_terminal_font_size(size: f32) -> f32 {
+    let size = size.clamp(TERMINAL_MIN_FONT_SIZE, TERMINAL_MAX_FONT_SIZE);
+    TERMINAL_FONT_SIZE_TENTHS.store((size * 10.0).round() as u32, Ordering::Relaxed);
+    size
+}
+
+/// What a zoom keystroke asks for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalZoom {
+    In,
+    Out,
+    Reset,
+}
+
+impl TerminalZoom {
+    /// Cmd on macOS, Ctrl elsewhere. `=` stands in for `+`, which needs
+    /// Shift on most layouts.
+    fn from_keystroke(keystroke: &Keystroke) -> Option<Self> {
+        let modifiers = &keystroke.modifiers;
+        if !modifiers.secondary() || modifiers.alt {
+            return None;
+        }
+        match keystroke.key.as_str() {
+            "=" | "+" => Some(Self::In),
+            "-" | "_" => Some(Self::Out),
+            "0" => Some(Self::Reset),
+            _ => None,
+        }
+    }
+
+    fn apply(self, size: f32) -> f32 {
+        match self {
+            Self::In => size + 1.0,
+            Self::Out => size - 1.0,
+            Self::Reset => TERMINAL_FONT_SIZE,
+        }
+    }
+}
 
 #[inline]
 fn primary_modifier_pressed(modifiers: &Modifiers) -> bool {
@@ -59,6 +114,89 @@ const TERMINAL_TOOLBAR_HEIGHT: f32 = 34.0;
 const TERMINAL_MIN_COLUMNS: usize = 20;
 const TERMINAL_MIN_ROWS: usize = 8;
 const TERMINAL_SCROLLBACK_LINES: usize = 10_000;
+/// Lines of output saved when a terminal tab is restored on next launch.
+const RESTORED_HISTORY_LINES: usize = 500;
+
+/// Emitted once when the shell process ends, so an owner can close the tab.
+pub struct TerminalExited;
+
+/// Alpha multiplier for cell backgrounds that programs set explicitly (a TUI's
+/// tab strip, status bar, highlights), or `None` on a solid window.
+///
+/// The terminal's own background is already translucent on glass, image and
+/// transparent window styles, but a program that paints its own colors would
+/// otherwise draw opaque blocks over it. Glass and image styles have a fully
+/// transparent terminal background, so those get a fixed tint; the transparent
+/// style follows the terminal's own opacity.
+fn translucent_cell_alpha(theme: Theme) -> Option<f32> {
+    const GLASS_CELL_ALPHA: f32 = 0.32;
+    let terminal_alpha = theme.terminal.a;
+    if terminal_alpha >= 1.0 {
+        None
+    } else if terminal_alpha <= 0.0 {
+        Some(GLASS_CELL_ALPHA)
+    } else {
+        Some(terminal_alpha)
+    }
+}
+
+/// What a restored terminal tab starts with.
+#[derive(Clone, Debug, Default)]
+pub struct TerminalRestore {
+    /// Previous output, replayed dimmed above the first prompt.
+    pub history: Option<String>,
+    /// Typed into the new shell once it starts.
+    pub startup_command: Option<String>,
+}
+
+/// Herdr marks every process under its panes with `HERDR_*` variables and
+/// refuses to start when it sees them. Insulator launched from a Herdr pane
+/// (the dev watcher, `open` from a shell) carries them, and its terminals
+/// would otherwise report "nested herdr" although Herdr is not running in
+/// them. `alacritty_terminal` can add environment variables but not remove
+/// them, so on Unix the shell starts under `env -u`.
+fn shell_without_inherited_multiplexer_env(
+    program: String,
+    args: Vec<String>,
+    inherited: impl Iterator<Item = String>,
+) -> (String, Vec<String>) {
+    let mut unset = inherited
+        .filter(|name| name.starts_with("HERDR_"))
+        .collect::<Vec<_>>();
+    if cfg!(windows) || unset.is_empty() {
+        return (program, args);
+    }
+    unset.sort();
+    let mut wrapped = Vec::with_capacity(unset.len() * 2 + args.len() + 1);
+    for name in unset {
+        wrapped.push("-u".to_owned());
+        wrapped.push(name);
+    }
+    wrapped.push(program);
+    wrapped.extend(args);
+    ("/usr/bin/env".to_owned(), wrapped)
+}
+
+/// Dimmed replay of saved output, ending on a fresh line with attributes
+/// reset. Control characters are dropped so saved text cannot inject escape
+/// sequences into the new grid.
+fn restored_history_bytes(history: &str) -> Option<Vec<u8>> {
+    let text = history.trim_end();
+    if text.is_empty() {
+        return None;
+    }
+    let mut bytes = b"\x1b[2m".to_vec();
+    for line in text.lines() {
+        let clean = line
+            .chars()
+            .filter(|character| !character.is_control())
+            .collect::<String>();
+        bytes.extend_from_slice(clean.as_bytes());
+        bytes.extend_from_slice(b"\r\n");
+    }
+    bytes.extend_from_slice(b"\x1b[0m");
+    Some(bytes)
+}
 const TERMINAL_CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(500);
 const TERMINAL_CURSOR_BLINK_PAUSE: Duration = Duration::from_millis(300);
 
@@ -176,17 +314,27 @@ struct TerminalSession {
     grid_size: (usize, usize),
     dark_theme: Arc<AtomicBool>,
     url_regex: RegexSearch,
+    /// The shell's process id, used to find what is running under it.
+    child_pid: Option<u32>,
 }
 
 impl TerminalSession {
-    fn new(working_directory: &Path, columns: usize, rows: usize) -> Result<Self> {
+    /// `restore.history` is replayed dimmed into the grid before the shell
+    /// starts, so a restored tab shows its previous output above the fresh
+    /// prompt. `restore.startup_command` is typed into the new shell.
+    fn new(
+        working_directory: &Path,
+        columns: usize,
+        rows: usize,
+        restore: &TerminalRestore,
+    ) -> Result<Self> {
         let columns = columns.max(TERMINAL_MIN_COLUMNS);
         let rows = rows.max(TERMINAL_MIN_ROWS);
         let window_size = WindowSize {
             num_lines: rows.min(u16::MAX as usize) as u16,
             num_cols: columns.min(u16::MAX as usize) as u16,
             cell_width: TERMINAL_CELL_WIDTH.round() as u16,
-            cell_height: TERMINAL_CELL_HEIGHT.round() as u16,
+            cell_height: terminal_cell_height().round() as u16,
         };
         let shared_window_size = Arc::new(Mutex::new(window_size));
         let dirty = Arc::new(AtomicBool::new(true));
@@ -213,11 +361,20 @@ impl TerminalSession {
             &dimensions,
             proxy.clone(),
         )));
+        if let Some(bytes) = restore.history.as_deref().and_then(restored_history_bytes) {
+            let mut processor: Processor = Processor::new();
+            processor.advance(&mut *term.lock(), &bytes);
+        }
 
         let shell = crate::command_env::default_terminal_shell();
         let shell_args = crate::command_env::default_terminal_shell_args(&shell);
+        let (program, args) = shell_without_inherited_multiplexer_env(
+            shell.to_string_lossy().into_owned(),
+            shell_args,
+            std::env::vars_os().filter_map(|(name, _)| name.into_string().ok()),
+        );
         let mut options = tty::Options {
-            shell: Some(Shell::new(shell.to_string_lossy().into_owned(), shell_args)),
+            shell: Some(Shell::new(program, args)),
             working_directory: Some(working_directory.to_path_buf()),
             drain_on_exit: false,
             ..Default::default()
@@ -232,6 +389,10 @@ impl TerminalSession {
 
         let pty = tty::new(&options, window_size, 0)
             .with_context(|| format!("spawn terminal in {}", working_directory.display()))?;
+        #[cfg(unix)]
+        let child_pid = Some(pty.child().id());
+        #[cfg(not(unix))]
+        let child_pid = None;
         let event_loop = EventLoop::new(term.clone(), proxy, pty, false, false)
             .context("create Alacritty PTY event loop")?;
         let sender = event_loop.channel();
@@ -239,10 +400,14 @@ impl TerminalSession {
             .set(sender.clone())
             .map_err(|_| anyhow::anyhow!("initialize Alacritty PTY sender"))?;
         event_loop.spawn();
+        if let Some(command) = restore.startup_command.as_deref() {
+            let _ = sender.send(Msg::Input(format!("{command}\n").into_bytes().into()));
+        }
 
         Ok(Self {
             term,
             sender,
+            child_pid,
             dirty,
             ui_events,
             window_size: shared_window_size,
@@ -273,7 +438,7 @@ impl TerminalSession {
             num_lines: rows.min(u16::MAX as usize) as u16,
             num_cols: columns.min(u16::MAX as usize) as u16,
             cell_width: cell_width.round() as u16,
-            cell_height: TERMINAL_CELL_HEIGHT.round() as u16,
+            cell_height: terminal_cell_height().round() as u16,
         };
         *self.window_size.lock() = size;
         let _ = self.sender.send(Msg::Resize(size));
@@ -282,6 +447,30 @@ impl TerminalSession {
 
     fn mode(&self) -> TermMode {
         *self.term.lock().mode()
+    }
+
+    /// Plain text of the scrollback plus the visible screen, newest
+    /// `RESTORED_HISTORY_LINES` lines, trailing blanks trimmed.
+    fn history_text(&self) -> String {
+        let term = self.term.lock();
+        let grid = term.grid();
+        let first = grid.topmost_line().0;
+        let last = grid.bottommost_line().0;
+        let columns = grid.columns();
+        let mut lines = Vec::new();
+        for line in first..=last {
+            let row = &grid[Line(line)];
+            let text = (0..columns)
+                .map(|column| row[Column(column)].c)
+                .collect::<String>();
+            lines.push(text.trim_end().to_owned());
+        }
+        drop(term);
+        while lines.last().is_some_and(String::is_empty) {
+            lines.pop();
+        }
+        let skip = lines.len().saturating_sub(RESTORED_HISTORY_LINES);
+        lines.split_off(skip).join("\n")
     }
 
     fn scroll(&self, lines: i32) {
@@ -358,6 +547,11 @@ impl TerminalSession {
             let mut background = resolve_color(cell.bg, content.colors, theme, false);
             if cell.flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut foreground, &mut background);
+            }
+            if let Some(alpha) = translucent_cell_alpha(theme)
+                && background != theme.terminal
+            {
+                background.a *= alpha;
             }
             // `Flags::DIM_BOLD` and `Flags::BOLD_ITALIC` are unions of the
             // individual bits, so testing them with `intersects` would also
@@ -442,26 +636,26 @@ struct TerminalScrollbarTarget {
 
 impl scrollbar::Scrollable for TerminalScrollbarTarget {
     fn viewport_height(&self) -> Pixels {
-        px(self.viewport_rows as f32 * TERMINAL_CELL_HEIGHT)
+        px(self.viewport_rows as f32 * terminal_cell_height())
     }
 
     fn max_offset(&self) -> Pixels {
-        px(self.term.lock().grid().history_size() as f32 * TERMINAL_CELL_HEIGHT)
+        px(self.term.lock().grid().history_size() as f32 * terminal_cell_height())
     }
 
     fn scrolled(&self) -> Pixels {
         let term = self.term.lock();
         let grid = term.grid();
         let lines_above = grid.history_size().saturating_sub(grid.display_offset());
-        px(lines_above as f32 * TERMINAL_CELL_HEIGHT)
+        px(lines_above as f32 * terminal_cell_height())
     }
 
     fn scroll_to(&self, offset: Pixels) {
         let mut term = self.term.lock();
         let target_offset = (term.grid().history_size() as f32
-            - f32::from(offset) / TERMINAL_CELL_HEIGHT)
-            .round()
-            .max(0.0) as usize;
+            - f32::from(offset) / terminal_cell_height())
+        .round()
+        .max(0.0) as usize;
         let delta = target_offset as i32 - term.grid().display_offset() as i32;
         if delta != 0 {
             term.scroll_display(Scroll::Delta(delta));
@@ -634,6 +828,13 @@ pub struct TerminalView {
     /// Advance width of one grid cell, measured from the terminal font on
     /// first render so grid math matches what `StyledText` actually lays out.
     measured_cell_width: Option<f32>,
+    /// Font size `measured_cell_width` was taken at; a mismatch with the
+    /// shared size (after a zoom) forces a re-measure.
+    measured_font_size: f32,
+    /// Font size to show in the zoom pill while it is visible, plus a
+    /// counter so an older hide timer cannot dismiss a newer pill.
+    zoom_pill: Option<f32>,
+    zoom_pill_generation: usize,
     scrollbar_state: Rc<ScrollbarState>,
     grid_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     selecting: bool,
@@ -647,8 +848,20 @@ pub struct TerminalView {
     _subscriptions: Vec<Subscription>,
 }
 
+impl gpui::EventEmitter<TerminalExited> for TerminalView {}
+
 impl TerminalView {
     pub fn new(working_directory: PathBuf, cx: &mut Context<Self>) -> Self {
+        Self::restored(working_directory, TerminalRestore::default(), cx)
+    }
+
+    /// Like `new`, starting from saved state. Used to restore a terminal tab
+    /// after the app restarts.
+    pub fn restored(
+        working_directory: PathBuf,
+        restore: TerminalRestore,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let terminal_cwd = working_directory.clone();
         cx.spawn(async move |this, cx| {
             let generation = match this.update(cx, |this, _| this.poll_generation) {
@@ -657,7 +870,7 @@ impl TerminalView {
             };
             let started = cx
                 .background_executor()
-                .spawn(async move { TerminalSession::new(&terminal_cwd, 52, 36) })
+                .spawn(async move { TerminalSession::new(&terminal_cwd, 52, 36, &restore) })
                 .await;
             if this
                 .update(cx, |this, cx| {
@@ -714,6 +927,9 @@ impl TerminalView {
             panel_height: None,
             show_toolbar: true,
             measured_cell_width: None,
+            measured_font_size: terminal_font_size(),
+            zoom_pill: None,
+            zoom_pill_generation: 0,
             scrollbar_state: ScrollbarState::new(),
             grid_bounds: Rc::new(Cell::new(None)),
             selecting: false,
@@ -747,6 +963,21 @@ impl TerminalView {
         self.exited
     }
 
+    /// Process id of the shell, for finding what runs under it.
+    pub fn child_pid(&self) -> Option<u32> {
+        self.session.as_ref().and_then(|session| session.child_pid)
+    }
+
+    /// Latest terminal title, empty until the shell sets one.
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    /// Output worth saving for restore; `None` until the shell has started.
+    pub fn history_text(&self) -> Option<String> {
+        self.session.as_ref().map(TerminalSession::history_text)
+    }
+
     pub fn restart(&mut self, cx: &mut Context<Self>) {
         let terminal_cwd = self.working_directory.clone();
         self.session = None;
@@ -757,7 +988,9 @@ impl TerminalView {
         cx.spawn(async move |this, cx| {
             let started = cx
                 .background_executor()
-                .spawn(async move { TerminalSession::new(&terminal_cwd, 52, 36) })
+                .spawn(async move {
+                    TerminalSession::new(&terminal_cwd, 52, 36, &TerminalRestore::default())
+                })
                 .await;
             if this
                 .update(cx, |this, cx| {
@@ -825,15 +1058,48 @@ impl TerminalView {
                         .unwrap_or_default();
                     session.write(formatter(&text).into_bytes());
                 }
-                TerminalUiEvent::Exited => self.exited = true,
+                TerminalUiEvent::Exited => {
+                    if !self.exited {
+                        self.exited = true;
+                        cx.emit(TerminalExited);
+                    }
+                }
             }
         }
         changed
     }
 
+    /// Changes the shared font size and shows the pill for a moment. The
+    /// next render re-measures the glyph advance and resizes the PTY grid.
+    fn zoom(&mut self, zoom: TerminalZoom, cx: &mut Context<Self>) {
+        let size = set_terminal_font_size(zoom.apply(terminal_font_size()));
+        self.zoom_pill = Some(size);
+        self.zoom_pill_generation = self.zoom_pill_generation.wrapping_add(1);
+        let generation = self.zoom_pill_generation;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(TERMINAL_ZOOM_PILL_DURATION)
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.zoom_pill_generation == generation {
+                    this.zoom_pill = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.pause_cursor_blink(cx);
         let keystroke = &event.keystroke;
+        if let Some(zoom) = TerminalZoom::from_keystroke(keystroke) {
+            self.zoom(zoom, cx);
+            window.prevent_default();
+            cx.stop_propagation();
+            return;
+        }
         if terminal_clipboard_modifier_pressed(&keystroke.modifiers)
             && keystroke.key.eq_ignore_ascii_case("c")
         {
@@ -1087,7 +1353,7 @@ impl TerminalView {
             return;
         };
         let delta = match event.delta {
-            ScrollDelta::Pixels(delta) => f32::from(delta.y) / TERMINAL_CELL_HEIGHT,
+            ScrollDelta::Pixels(delta) => f32::from(delta.y) / terminal_cell_height(),
             ScrollDelta::Lines(delta) => delta.y,
         };
         self.scroll_accumulator += delta;
@@ -1163,17 +1429,22 @@ impl Render for TerminalView {
         // The rows are laid out by `StyledText` at the font's own advance, so
         // the grid must be sized from that same measured advance or the text
         // wraps short of (or past) the panel edge.
+        let font_size = terminal_font_size();
+        if self.measured_font_size != font_size {
+            self.measured_font_size = font_size;
+            self.measured_cell_width = None;
+        }
         let cell_width = *self.measured_cell_width.get_or_insert_with(|| {
             let text_system = cx.text_system();
             let font_id = text_system.resolve_font(&terminal_font());
             text_system
-                .advance(font_id, px(TERMINAL_FONT_SIZE), 'm')
+                .advance(font_id, px(font_size), 'm')
                 .map_or(TERMINAL_CELL_WIDTH, |advance| f32::from(advance.width))
         });
         let columns = ((panel_width - TERMINAL_PADDING_X * 2.0) / cell_width)
             .floor()
             .max(TERMINAL_MIN_COLUMNS as f32) as usize;
-        let rows = ((body_height - TERMINAL_PADDING_Y * 2.0) / TERMINAL_CELL_HEIGHT)
+        let rows = ((body_height - TERMINAL_PADDING_Y * 2.0) / terminal_cell_height())
             .floor()
             .max(TERMINAL_MIN_ROWS as f32) as usize;
 
@@ -1265,12 +1536,12 @@ impl Render for TerminalView {
                     .collect::<Vec<_>>();
                 screen = screen.child(
                     div()
-                        .h(px(TERMINAL_CELL_HEIGHT))
+                        .h(px(terminal_cell_height()))
                         .flex_none()
                         .overflow_hidden()
                         .whitespace_nowrap()
-                        .text_size(px(TERMINAL_FONT_SIZE))
-                        .line_height(px(TERMINAL_CELL_HEIGHT))
+                        .text_size(px(terminal_font_size()))
+                        .line_height(px(terminal_cell_height()))
                         .child(StyledText::new(row.text).with_runs(runs)),
                 );
             }
@@ -1279,9 +1550,9 @@ impl Render for TerminalView {
                     div()
                         .absolute()
                         .left(px(column as f32 * cell_width))
-                        .top(px(row as f32 * TERMINAL_CELL_HEIGHT))
+                        .top(px(row as f32 * terminal_cell_height()))
                         .w(px(cell_width))
-                        .h(px(TERMINAL_CELL_HEIGHT))
+                        .h(px(terminal_cell_height()))
                         .border_1()
                         .border_color(theme.text),
                 );
@@ -1378,7 +1649,33 @@ impl Render for TerminalView {
             .flex_col()
             .relative()
             .child(screen)
-            .children(scrollbar);
+            .children(scrollbar)
+            .children(self.zoom_pill.map(|size| {
+                let percent = (size / TERMINAL_FONT_SIZE * 100.0).round() as u32;
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom(px(16.0))
+                    .flex()
+                    .justify_center()
+                    .child(
+                        div()
+                            .h(px(24.0))
+                            .px(px(11.0))
+                            .rounded_full()
+                            .flex()
+                            .items_center()
+                            .bg(theme.raised)
+                            .border_1()
+                            .border_color(theme.border_strong)
+                            .shadow_xs()
+                            .text_size(sp(11.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text_secondary)
+                            .child(format!("{percent}%")),
+                    )
+            }));
 
         let mut terminal_root = div()
             .id("alacritty-terminal")
@@ -1465,11 +1762,11 @@ fn terminal_grid_point(
     let x = f32::from(position.x - bounds.origin.x);
     let y = f32::from(position.y - bounds.origin.y);
     let max_x = columns as f32 * cell_width;
-    let max_y = rows as f32 * TERMINAL_CELL_HEIGHT;
+    let max_y = rows as f32 * terminal_cell_height();
     let x = x.clamp(0.0, max_x);
     let y = y.clamp(0.0, max_y);
     let column = ((x / cell_width).floor() as usize).min(columns - 1);
-    let viewport_row = ((y / TERMINAL_CELL_HEIGHT).floor() as usize).min(rows - 1) as i32;
+    let viewport_row = ((y / terminal_cell_height()).floor() as usize).min(rows - 1) as i32;
     let side = if x >= max_x || x % cell_width >= cell_width / 2.0 {
         Side::Right
     } else {
@@ -1952,6 +2249,95 @@ mod tests {
             terminal_link_target("src/does-not-exist.rs", working_directory),
             None
         );
+    }
+
+    #[test]
+    fn explicit_cell_backgrounds_turn_translucent_only_off_solid_styles() {
+        use insulator_protocol::theme::WindowStyle;
+        let theme = |style| Theme::dark().for_window_style(style, 0.0);
+        assert_eq!(translucent_cell_alpha(theme(WindowStyle::Solid)), None);
+        assert_eq!(
+            translucent_cell_alpha(theme(WindowStyle::LiquidGlass)),
+            Some(0.32)
+        );
+        assert_eq!(
+            translucent_cell_alpha(theme(WindowStyle::Image)),
+            Some(0.32)
+        );
+        let transparent = translucent_cell_alpha(theme(WindowStyle::Transparent));
+        assert!(transparent.is_some_and(|alpha| alpha > 0.0 && alpha < 1.0));
+    }
+
+    #[test]
+    fn herdr_markers_are_unset_before_the_shell_starts() {
+        let inherited = ["PATH", "HERDR_ENV", "HOME", "HERDR_PANE_ID"]
+            .into_iter()
+            .map(str::to_owned);
+        let (program, args) = shell_without_inherited_multiplexer_env(
+            "/bin/zsh".into(),
+            vec!["-l".into()],
+            inherited,
+        );
+        if cfg!(windows) {
+            assert_eq!(program, "/bin/zsh");
+            return;
+        }
+        assert_eq!(program, "/usr/bin/env");
+        assert_eq!(
+            args,
+            ["-u", "HERDR_ENV", "-u", "HERDR_PANE_ID", "/bin/zsh", "-l"]
+        );
+        let (program, args) = shell_without_inherited_multiplexer_env(
+            "/bin/zsh".into(),
+            vec!["-l".into()],
+            ["PATH".to_owned()].into_iter(),
+        );
+        assert_eq!(
+            (program.as_str(), args),
+            ("/bin/zsh", vec!["-l".to_owned()])
+        );
+    }
+
+    #[test]
+    fn zoom_keys_step_clamp_and_reset_the_font_size() {
+        let zoom_key =
+            |key: &str| TerminalZoom::from_keystroke(&key_with(key, Modifiers::secondary_key()));
+        assert_eq!(zoom_key("="), Some(TerminalZoom::In));
+        assert_eq!(zoom_key("+"), Some(TerminalZoom::In));
+        assert_eq!(zoom_key("-"), Some(TerminalZoom::Out));
+        assert_eq!(zoom_key("0"), Some(TerminalZoom::Reset));
+        assert_eq!(zoom_key("a"), None);
+        assert_eq!(
+            TerminalZoom::from_keystroke(&key_with("=", Modifiers::none())),
+            None
+        );
+        assert_eq!(TerminalZoom::In.apply(12.5), 13.5);
+        assert_eq!(TerminalZoom::Out.apply(12.5), 11.5);
+        assert_eq!(TerminalZoom::Reset.apply(20.0), TERMINAL_FONT_SIZE);
+    }
+
+    fn key_with(key: &str, modifiers: Modifiers) -> Keystroke {
+        Keystroke {
+            key: key.into(),
+            key_char: None,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn restored_history_replays_text_and_drops_escape_sequences() {
+        let bytes = restored_history_bytes("$ ls\nfile\u{1b}[31m.txt\n\n").unwrap();
+        let term = parse_terminal(&bytes);
+        let row = |line: i32| {
+            (0..40)
+                .map(|column| term.grid()[Line(line)][Column(column)].c)
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        };
+        assert_eq!(row(0), "$ ls");
+        assert_eq!(row(1), "file[31m.txt");
+        assert!(restored_history_bytes("  \n").is_none());
     }
 
     #[test]
