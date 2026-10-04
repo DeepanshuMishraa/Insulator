@@ -16,6 +16,17 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.11]
+
+### Added
+
+- Add terminal mode: switch between agents and a full terminal workspace with tabs, each showing the icon of the CLI agent running inside it
+- Reconnect Insulator Mobile automatically when the app returns to the foreground
+
+### Changed
+
+- Polish terminal tab stacking and unfolding animations
+
 ## [0.1.10]
 
 ### Added
