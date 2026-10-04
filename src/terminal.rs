@@ -1393,6 +1393,24 @@ impl TerminalView {
         let lines = self.scroll_accumulator.trunc() as i32;
         if lines != 0 {
             self.scroll_accumulator -= lines as f32;
+            // Full-screen apps (herdr, vim, less) own the wheel: forward it
+            // instead of scrolling the empty scrollback behind them. Shift
+            // keeps the local scroll, like other terminals.
+            let mode = session.mode();
+            if !event.modifiers.shift {
+                if mode.intersects(TermMode::MOUSE_MODE) {
+                    if let Some((point, _)) = self.grid_point_for_position(event.position, false) {
+                        session.write(wheel_report(lines, point.column.0, point.line.0, mode));
+                        cx.stop_propagation();
+                    }
+                    return;
+                }
+                if mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
+                    session.write(wheel_arrows(lines, mode));
+                    cx.stop_propagation();
+                    return;
+                }
+            }
             session.scroll(lines);
             cx.stop_propagation();
             cx.notify();
@@ -1777,6 +1795,32 @@ fn terminal_cursor_style(focused: bool, blink_visible: bool) -> TerminalCursorSt
     } else {
         TerminalCursorStyle::Hidden
     }
+}
+
+/// Wheel reports for apps that enabled mouse tracking. Positive `lines`
+/// means wheel up. Coordinates are zero-based; the protocol is one-based.
+fn wheel_report(lines: i32, column: usize, row: i32, mode: TermMode) -> Vec<u8> {
+    let button: u8 = if lines > 0 { 64 } else { 65 };
+    let (column, row) = (column + 1, row.max(0) as usize + 1);
+    let one = if mode.contains(TermMode::SGR_MOUSE) {
+        format!("\x1b[<{button};{column};{row}M").into_bytes()
+    } else {
+        // Legacy X10 encoding: one byte per value, offset by 32, max 223.
+        let byte = |value: usize| (value.min(223) + 32) as u8;
+        vec![0x1b, b'[', b'M', 32 + button, byte(column), byte(row)]
+    };
+    one.repeat(lines.unsigned_abs() as usize)
+}
+
+/// Alternate-scroll mode: the wheel becomes arrow keys on the alt screen.
+fn wheel_arrows(lines: i32, mode: TermMode) -> Vec<u8> {
+    let key: &[u8] = match (lines > 0, mode.contains(TermMode::APP_CURSOR)) {
+        (true, true) => b"\x1bOA",
+        (true, false) => b"\x1b[A",
+        (false, true) => b"\x1bOB",
+        (false, false) => b"\x1b[B",
+    };
+    key.repeat(lines.unsigned_abs() as usize)
 }
 
 fn terminal_grid_point(

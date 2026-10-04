@@ -1683,6 +1683,16 @@ pub struct Insulator {
     /// up, oldest first. Drives the switcher badge.
     terminal_attention: Vec<Uuid>,
     terminal_mode_switch_generation: usize,
+    /// Idle terminal tabs fold into a card stack behind the active tab.
+    /// `generation` keys the fold/unfold animation (0 means none yet);
+    /// `idle_generation` invalidates a pending fold timer on new activity.
+    terminal_tabs_stacked: bool,
+    terminal_tabs_generation: usize,
+    terminal_tabs_idle_generation: usize,
+    terminal_tabs_just_unfolded: bool,
+    /// Painted width of each terminal tab, so the fold animation moves tabs
+    /// between their real positions.
+    terminal_tab_widths: Rc<RefCell<HashMap<Uuid, f32>>>,
     right_panel_browsers: HashMap<Uuid, Entity<BrowserView>>,
     pull_request_video_views: HashMap<String, Entity<BrowserView>>,
     pull_request_media_paths: HashMap<String, PathBuf>,
@@ -3554,6 +3564,11 @@ impl Insulator {
                 terminal_pending_focus: false,
                 terminal_attention: Vec::new(),
                 terminal_mode_switch_generation: 0,
+                terminal_tabs_stacked: false,
+                terminal_tabs_generation: 0,
+                terminal_tabs_idle_generation: 0,
+                terminal_tabs_just_unfolded: false,
+                terminal_tab_widths: Rc::default(),
                 right_panel_browsers: HashMap::new(),
                 pull_request_video_views: HashMap::new(),
                 pull_request_media_paths: HashMap::new(),

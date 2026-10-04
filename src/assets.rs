@@ -29,6 +29,8 @@ const ICONS: &[(&str, &[u8])] = icons![
     "arrow-up-right",
     "block",
     "bot",
+    "mode-agents",
+    "mode-terminal",
     "case-sensitive",
     "chart-column",
     "check",

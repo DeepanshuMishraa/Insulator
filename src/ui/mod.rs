@@ -679,6 +679,8 @@ mod tests {
             "icons/panel-right.svg",
             "icons/x.svg",
             "icons/bot.svg",
+            "icons/mode-agents.svg",
+            "icons/mode-terminal.svg",
             "icons/rotate-cw.svg",
             "icons/package.svg",
             "icons/trash.svg",

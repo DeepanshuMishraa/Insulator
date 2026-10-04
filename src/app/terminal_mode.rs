@@ -18,6 +18,27 @@ const TERMINAL_FRAME_PADDING_BOTTOM: f32 = 10.0;
 const TERMINAL_FRAME_BORDER_WIDTH: f32 = 1.0;
 const TERMINAL_FRAME_RADIUS: f32 = 10.0;
 const TERMINAL_AGENT_POLL_INTERVAL: Duration = Duration::from_millis(150);
+const TERMINAL_TABS_STACK_DELAY: Duration = Duration::from_secs(5);
+const TERMINAL_TABS_ANIMATION_DURATION: Duration = Duration::from_millis(300);
+const TERMINAL_TAB_GAP: f32 = 6.0;
+const TERMINAL_TAB_HEIGHT: f32 = 32.0;
+/// Cards behind the front tab. Each one is inset from both sides and
+/// drops a little lower, like the edge of a deck seen from the front.
+const TERMINAL_STACK_INSET: f32 = 6.0;
+const TERMINAL_STACK_DROP: f32 = 3.0;
+
+/// `top` composited over `base`, fully opaque, so cards stacked behind a
+/// translucent tab do not show through it.
+fn opaque_over(top: Hsla, base: Hsla) -> Hsla {
+    let (top, base): (gpui::Rgba, gpui::Rgba) = (top.into(), base.into());
+    gpui::Rgba {
+        r: top.r * top.a + base.r * (1.0 - top.a),
+        g: top.g * top.a + base.g * (1.0 - top.a),
+        b: top.b * top.a + base.b * (1.0 - top.a),
+        a: 1.0,
+    }
+    .into()
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -308,6 +329,7 @@ impl Insulator {
         match mode {
             AppMode::Terminal => {
                 self.ensure_terminal_tabs(cx);
+                self.touch_terminal_tabs(cx);
                 self.terminal_pending_focus = true;
             }
             AppMode::Agents => {
@@ -396,7 +418,8 @@ impl Insulator {
                     self.default_terminal_cwd()
                 };
                 let restore = TerminalRestore {
-                    history: (!tab.history.is_empty()).then_some(tab.history),
+                    // Restored tabs start fresh; old output is not replayed.
+                    history: None,
                     // Only allowlisted names run, whatever the file says.
                     startup_command: tab
                         .resume
@@ -509,7 +532,64 @@ impl Insulator {
         .detach();
     }
 
+    /// Folds the strip into a stack right away (e.g. double-click on an active tab).
+    fn stack_terminal_tabs(&mut self, cx: &mut Context<Self>) {
+        if self.terminal_tabs.len() < 2 || self.terminal_tabs_stacked {
+            return;
+        }
+        self.terminal_tabs_stacked = true;
+        self.terminal_tabs_generation = self.terminal_tabs_generation.wrapping_add(1);
+        self.terminal_tabs_idle_generation = self.terminal_tabs_idle_generation.wrapping_add(1);
+        cx.notify();
+    }
+
+    /// Unfolds the stack into the full strip.
+    fn unfold_terminal_tabs(&mut self, cx: &mut Context<Self>) {
+        if !self.terminal_tabs_stacked {
+            self.touch_terminal_tabs(cx);
+            return;
+        }
+        self.terminal_tabs_just_unfolded = true;
+        self.terminal_tabs_stacked = false;
+        self.terminal_tabs_generation = self.terminal_tabs_generation.wrapping_add(1);
+        self.touch_terminal_tabs(cx);
+    }
+
+    /// Any tab activity unfolds the stack and restarts the idle countdown;
+    /// when it runs out with several tabs open, the strip folds again.
+    fn touch_terminal_tabs(&mut self, cx: &mut Context<Self>) {
+        if self.terminal_tabs_stacked {
+            self.terminal_tabs_stacked = false;
+            self.terminal_tabs_generation = self.terminal_tabs_generation.wrapping_add(1);
+            cx.notify();
+        }
+        self.terminal_tabs_idle_generation = self.terminal_tabs_idle_generation.wrapping_add(1);
+        let idle = self.terminal_tabs_idle_generation;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(TERMINAL_TABS_STACK_DELAY)
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.terminal_tabs_idle_generation == idle
+                    && this.app_mode == AppMode::Terminal
+                    && this.terminal_tabs.len() > 1
+                    && !this.terminal_tabs_stacked
+                {
+                    this.terminal_tabs_stacked = true;
+                    this.terminal_tabs_generation = this.terminal_tabs_generation.wrapping_add(1);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn new_terminal_tab(&mut self, cx: &mut Context<Self>) {
+        if self.terminal_tabs_stacked {
+            self.terminal_tabs_stacked = false;
+            self.terminal_tabs_generation = self.terminal_tabs_generation.wrapping_add(1);
+        }
+        self.touch_terminal_tabs(cx);
         let cwd = self.default_terminal_cwd();
         self.push_terminal_tab(cwd, TerminalRestore::default(), cx);
         self.active_terminal_tab = self.terminal_tabs.len() - 1;
@@ -519,6 +599,7 @@ impl Insulator {
     }
 
     fn select_terminal_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.touch_terminal_tabs(cx);
         if index >= self.terminal_tabs.len() || index == self.active_terminal_tab {
             return;
         }
@@ -549,13 +630,18 @@ impl Insulator {
         self.terminal_tabs.remove(index);
         if self.terminal_tabs.is_empty() {
             self.active_terminal_tab = 0;
+            self.terminal_tabs_stacked = false;
             self.set_app_mode(AppMode::Agents, cx);
             return;
+        }
+        if self.terminal_tabs.len() <= 1 {
+            self.terminal_tabs_stacked = false;
         }
         if self.active_terminal_tab > index || self.active_terminal_tab >= self.terminal_tabs.len()
         {
             self.active_terminal_tab = self.active_terminal_tab.saturating_sub(1);
         }
+        self.touch_terminal_tabs(cx);
         self.terminal_pending_focus = true;
         self.save_terminal_layout(cx);
         cx.notify();
@@ -585,7 +671,7 @@ impl Insulator {
                     let view = tab.view.read(cx);
                     SavedTerminalTab {
                         cwd: view.working_directory().to_path_buf(),
-                        history: view.history_text().unwrap_or_default(),
+                        history: String::new(),
                         resume: None,
                         child_pid: view.child_pid(),
                     }
@@ -763,14 +849,14 @@ impl Insulator {
             .child(segment(
                 "mode-agents",
                 AppMode::Agents,
-                "icons/bot.svg",
+                "icons/mode-agents.svg",
                 tr!("terminal.mode_agents"),
                 attention,
             ))
             .child(segment(
                 "mode-terminal",
                 AppMode::Terminal,
-                "icons/terminal.svg",
+                "icons/mode-terminal.svg",
                 tr!("terminal.mode_terminal"),
                 0,
             ))
@@ -786,15 +872,45 @@ impl Insulator {
             .min_w_0()
             .flex()
             .items_center()
-            .gap(px(6.0))
+            .gap(px(TERMINAL_TAB_GAP))
             .overflow_x_scroll();
+
+        let new_tab_button = div()
+            .id("new-terminal-tab")
+            .size(px(28.0))
+            .flex_none()
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .border_1()
+            .border_color(gpui::transparent_black())
+            .hover(|element| element.bg(theme.overlay).border_color(theme.border))
+            .active(|element| element.bg(theme.overlay_strong))
+            .tooltip(Tooltip::text(format!(
+                "{} ({}+T)",
+                tr!("terminal.new_tab"),
+                if cfg!(target_os = "macos") {
+                    "⌘"
+                } else {
+                    "Ctrl"
+                }
+            )))
+            .child(icon("icons/plus.svg", 13.0, theme.text_secondary))
+            .on_click(cx.listener(|this, _, _, cx| {
+                cx.stop_propagation();
+                this.new_terminal_tab(cx);
+            }));
+
+        let count = self.terminal_tabs.len();
+        if count == 0 {
+            return strip.child(new_tab_button);
+        }
+
+        let mut labels: Vec<SharedString> = Vec::with_capacity(count);
         for (index, tab) in self.terminal_tabs.iter().enumerate() {
-            let selected = index == self.active_terminal_tab;
             let view = tab.view.read(cx);
-            // Agents prefix their title with a status glyph (Claude Code's
-            // spinner), which would sit next to the tab icon as a second one.
-            // Shells title the tab with the working directory; keep only
-            // the folder name.
             let title = view.title().trim();
             let title = if title.contains('/') {
                 title
@@ -824,108 +940,85 @@ impl Insulator {
                         .unwrap_or_else(|| format!("{} {}", tr!("right_panel.terminal"), index + 1))
                 }
             };
-            let exited = view.is_exited();
-            let tab_group = SharedString::from(format!("terminal-tab-{}", tab.id));
-            let icon_element = div()
-                .h(px(20.0))
-                .w(px(24.0))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(match tab.agent.map(TerminalAgent::icon) {
-                    Some(TerminalAgentIcon::Color(path)) => {
-                        file_icon(path, 16.0).into_any_element()
-                    }
-                    Some(TerminalAgentIcon::Mono(path)) => icon(
-                        path,
-                        15.0,
-                        if selected {
-                            theme.text
-                        } else {
-                            theme.text_tertiary
-                        },
-                    )
-                    .into_any_element(),
-                    None => img(terminal_icon.clone())
-                        .size_full()
-                        .object_fit(ObjectFit::Contain)
-                        .into_any_element(),
-                })
-                .when(!selected && tab.agent.is_none(), |el| el.opacity(0.60));
+            labels.push(SharedString::from(label));
+        }
 
-            strip = strip.child(
-                div()
-                    .id(tab_group.clone())
-                    .group(tab_group.clone())
-                    .tab_index(0)
-                    .focus_visible(|element| element.border_color(theme.accent))
-                    .h(px(32.0))
-                    .min_w(px(80.0))
-                    .max_w(px(260.0))
-                    .pl(px(6.0))
-                    .pr(px(14.0))
+        let widths = self.terminal_tab_widths.borrow().clone();
+        let tab_width = |tab: &TerminalTab, label: &str| -> f32 {
+            if let Some(&w) = widths.get(&tab.id) {
+                w
+            } else {
+                let estimated = 6.0 + 24.0 + 8.0 + (label.len() as f32 * 7.5) + 24.0 + 14.0;
+                estimated.clamp(80.0, 260.0)
+            }
+        };
+        let tab_widths: Vec<f32> = self
+            .terminal_tabs
+            .iter()
+            .enumerate()
+            .map(|(i, tab)| tab_width(tab, labels[i].as_ref()))
+            .collect();
+        let slot_x = |index: usize| -> f32 {
+            tab_widths[..index].iter().map(|&w| w + TERMINAL_TAB_GAP).sum()
+        };
+
+        let make_measure_canvas = |tab_id: Uuid| {
+            let measured = self.terminal_tab_widths.clone();
+            canvas(
+                move |bounds, _, _| {
+                    measured
+                        .borrow_mut()
+                        .insert(tab_id, f32::from(bounds.size.width) + 2.0);
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0()
+        };
+
+        let make_tab_content =
+            |tab: &TerminalTab, index: usize, label: SharedString, selected: bool| {
+                let view = tab.view.read(cx);
+                let exited = view.is_exited();
+                let tab_group = SharedString::from(format!("terminal-tab-{}", tab.id));
+                let icon_element = div()
+                    .h(px(20.0))
+                    .w(px(24.0))
                     .flex_none()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
-                    .rounded_full()
-                    .cursor_pointer()
-                    .text_size(sp(13.0))
-                    .border_1()
-                    .when(selected, |element| {
-                        element
-                            .bg(theme.raised)
-                            .border_color(theme.border_strong)
-                            .text_color(theme.text)
-                            .font_weight(FontWeight::MEDIUM)
-                            .when(solid, |element| element.shadow_xs())
-                    })
-                    .when(!selected, |element| {
-                        element
-                            .bg(gpui::transparent_black())
-                            .border_color(gpui::transparent_black())
-                            .text_color(theme.text_tertiary)
-                            .font_weight(FontWeight::NORMAL)
-                            .hover(|element| {
-                                element
-                                    .bg(theme.overlay)
-                                    .border_color(theme.border)
-                                    .text_color(theme.text_secondary)
-                            })
-                    })
-                    .tooltip(Tooltip::text(format!(
-                        "{} ({}+{})",
-                        label,
-                        if cfg!(target_os = "macos") {
-                            "⌘"
-                        } else {
-                            "Ctrl"
-                        },
-                        if index < 9 {
-                            (index + 1).to_string()
-                        } else {
-                            "9".to_string()
+                    .justify_center()
+                    .child(match tab.agent.map(TerminalAgent::icon) {
+                        Some(TerminalAgentIcon::Color(path)) => {
+                            file_icon(path, 16.0).into_any_element()
                         }
-                    )))
-                    .on_mouse_down(
-                        MouseButton::Middle,
-                        cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.close_terminal_tab(index, cx);
-                        }),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.select_terminal_tab(index, cx);
-                    }))
+                        Some(TerminalAgentIcon::Mono(path)) => icon(
+                            path,
+                            15.0,
+                            if selected {
+                                theme.text
+                            } else {
+                                theme.text_tertiary
+                            },
+                        )
+                        .into_any_element(),
+                        None => img(terminal_icon.clone())
+                            .size_full()
+                            .object_fit(ObjectFit::Contain)
+                            .into_any_element(),
+                    })
+                    .when(!selected && tab.agent.is_none(), |el| el.opacity(0.60));
+
+                div()
+                    .id(SharedString::from(format!("tab-content-{}", tab.id)))
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .pl(px(6.0))
+                    .pr(px(14.0))
                     .child(icon_element)
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .truncate()
-                            .child(SharedString::from(label)),
-                    )
+                    .child(div().min_w_0().flex_1().truncate().child(label))
                     .when(exited, |element| {
                         element.child(
                             div()
@@ -958,38 +1051,514 @@ impl Insulator {
                                 cx.stop_propagation();
                                 this.close_terminal_tab(index, cx);
                             })),
-                    ),
-            );
-        }
-        strip.child(
-            div()
-                .id("new-terminal-tab")
-                .size(px(28.0))
+                    )
+            };
+
+        if count == 1 {
+            let tab = &self.terminal_tabs[0];
+            let label = labels[0].clone();
+            let tab_group = SharedString::from(format!("terminal-tab-{}", tab.id));
+            let pill = div()
+                .id(tab_group.clone())
+                .group(tab_group)
+                .tab_index(0)
+                .focus_visible(|element| element.border_color(theme.accent))
+                .h(px(TERMINAL_TAB_HEIGHT))
+                .min_w(px(80.0))
+                .max_w(px(260.0))
                 .flex_none()
                 .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
                 .cursor_pointer()
+                .text_size(sp(13.0))
                 .border_1()
-                .border_color(gpui::transparent_black())
-                .hover(|element| element.bg(theme.overlay).border_color(theme.border))
-                .active(|element| element.bg(theme.overlay_strong))
+                .bg(theme.raised)
+                .border_color(theme.border_strong)
+                .text_color(theme.text)
+                .font_weight(FontWeight::MEDIUM)
+                .when(solid, |element| element.shadow_xs())
                 .tooltip(Tooltip::text(format!(
-                    "{} ({}+T)",
-                    tr!("terminal.new_tab"),
+                    "{} ({}+1)",
+                    label,
                     if cfg!(target_os = "macos") {
                         "⌘"
                     } else {
                         "Ctrl"
+                    },
+                )))
+                .on_mouse_down(
+                    MouseButton::Middle,
+                    cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.close_terminal_tab(0, cx);
+                    }),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.select_terminal_tab(0, cx);
+                }))
+                .child(make_measure_canvas(tab.id))
+                .child(make_tab_content(tab, 0, label, true));
+
+            return strip.child(pill).child(new_tab_button);
+        }
+
+        let stacked = self.terminal_tabs_stacked && count > 1;
+        let generation = self.terminal_tabs_generation;
+        let active = self.active_terminal_tab.min(count - 1);
+        let front_width = tab_widths[active];
+        let total_unfolded_width = slot_x(count) - TERMINAL_TAB_GAP;
+
+        let mut tabs_container = div()
+            .id("terminal-tab-stack-container")
+            .relative()
+            .h(px(TERMINAL_TAB_HEIGHT))
+            .flex_none();
+
+        let make_unfolded_tab_base = |index: usize| {
+            let tab = &self.terminal_tabs[index];
+            let tab_group = SharedString::from(format!("terminal-tab-{}", tab.id));
+            let label = labels[index].clone();
+            div()
+                .id(tab_group.clone())
+                .group(tab_group)
+                .tab_index(0)
+                .focus_visible(|element| element.border_color(theme.accent))
+                .absolute()
+                .h(px(TERMINAL_TAB_HEIGHT))
+                .rounded_full()
+                .cursor_pointer()
+                .text_size(sp(13.0))
+                .border_1()
+                .bg(gpui::transparent_black())
+                .border_color(gpui::transparent_black())
+                .text_color(theme.text_tertiary)
+                .font_weight(FontWeight::NORMAL)
+                .hover(|element| {
+                    element
+                        .bg(theme.overlay)
+                        .border_color(theme.border)
+                        .text_color(theme.text_secondary)
+                })
+                .tooltip(Tooltip::text(format!(
+                    "{} ({}+{}) • Double-click to stack",
+                    label,
+                    if cfg!(target_os = "macos") {
+                        "⌘"
+                    } else {
+                        "Ctrl"
+                    },
+                    if index < 9 {
+                        (index + 1).to_string()
+                    } else {
+                        "9".to_string()
                     }
                 )))
-                .child(icon("icons/plus.svg", 13.0, theme.text_secondary))
-                .on_click(cx.listener(|this, _, _, cx| {
+                .on_mouse_down(
+                    MouseButton::Middle,
+                    cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.close_terminal_tab(index, cx);
+                    }),
+                )
+                .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                    if this.terminal_tabs_just_unfolded {
+                        this.terminal_tabs_just_unfolded = false;
+                        return;
+                    }
+                    if event.click_count() >= 2 {
+                        this.select_terminal_tab(index, cx);
+                        this.stack_terminal_tabs(cx);
+                    } else {
+                        this.select_terminal_tab(index, cx);
+                    }
+                }))
+        };
+
+        let make_unfolded_tab = |index: usize| {
+            let tab = &self.terminal_tabs[index];
+            let w = tab_widths[index];
+            let x = slot_x(index);
+            let label = labels[index].clone();
+            make_unfolded_tab_base(index)
+                .top(px(0.0))
+                .left(px(x))
+                .w(px(w))
+                .child(make_measure_canvas(tab.id))
+                .child(make_tab_content(tab, index, label, false))
+        };
+
+        let others: Vec<usize> = (0..count).filter(|i| *i != active).collect();
+        let deck_cards = (count - 1).min(2);
+
+        // 1. Extra tabs (others[2..])
+        for &idx in others.iter().skip(2) {
+            let tab = &self.terminal_tabs[idx];
+            let unfolded_x = slot_x(idx);
+            let unfolded_w = tab_widths[idx];
+            let label = labels[idx].clone();
+            if stacked && generation == 0 {
+                // Not visible when statically stacked
+            } else if !stacked && generation == 0 {
+                tabs_container = tabs_container.child(make_unfolded_tab(idx));
+            } else if stacked {
+                let el = make_unfolded_tab_base(idx)
+                    .top(px(0.0))
+                    .w(px(unfolded_w))
+                    .child(make_tab_content(tab, idx, label, false))
+                    .with_animation(
+                        SharedString::from(format!("terminal-tab-extra-fold-{generation}-{idx}")),
+                        Animation::new(TERMINAL_TABS_ANIMATION_DURATION).with_easing(ease_out_quint()),
+                        move |element, delta| {
+                            let x = unfolded_x * (1.0 - delta);
+                            let opacity = (1.0 - delta * 2.0).max(0.0);
+                            element.left(px(x)).opacity(opacity)
+                        },
+                    );
+                tabs_container = tabs_container.child(el);
+            } else {
+                let el = make_unfolded_tab_base(idx)
+                    .top(px(0.0))
+                    .w(px(unfolded_w))
+                    .child(make_measure_canvas(tab.id))
+                    .child(make_tab_content(tab, idx, label, false))
+                    .with_animation(
+                        SharedString::from(format!("terminal-tab-extra-unfold-{generation}-{idx}")),
+                        Animation::new(TERMINAL_TABS_ANIMATION_DURATION).with_easing(ease_out_quint()),
+                        move |element, delta| {
+                            let x = unfolded_x * delta;
+                            let opacity = ((delta - 0.3) / 0.7).clamp(0.0, 1.0);
+                            element.left(px(x)).opacity(opacity)
+                        },
+                    );
+                tabs_container = tabs_container.child(el);
+            }
+        }
+
+        // 2. Card 2 (others[1])
+        if deck_cards >= 2 {
+            let idx2 = others[1];
+            let tab2 = &self.terminal_tabs[idx2];
+            let unfolded_x = slot_x(idx2);
+            let unfolded_w = tab_widths[idx2];
+            let label2 = labels[idx2].clone();
+            let card2_target_x = TERMINAL_STACK_INSET * 2.0;
+            let card2_target_y = TERMINAL_STACK_DROP * 2.0;
+            let card2_target_w = (front_width - TERMINAL_STACK_INSET * 4.0).max(24.0);
+            let card2_fill = opaque_over(
+                Hsla {
+                    a: theme.raised.a * 0.65,
+                    ..theme.raised
+                },
+                theme.surface,
+            );
+
+            if stacked && generation == 0 {
+                let card = div()
+                    .id("terminal-tab-card-2")
+                    .absolute()
+                    .top(px(card2_target_y))
+                    .left(px(card2_target_x))
+                    .w(px(card2_target_w))
+                    .h(px(TERMINAL_TAB_HEIGHT))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(theme.border.opacity(0.70))
+                    .bg(card2_fill)
+                    .cursor_pointer()
+                    .tooltip(Tooltip::text(format!("{} (click to expand)", label2)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.unfold_terminal_tabs(cx)));
+                tabs_container = tabs_container.child(card);
+            } else if !stacked && generation == 0 {
+                tabs_container = tabs_container.child(make_unfolded_tab(idx2));
+            } else if stacked {
+                let card = div()
+                    .id(SharedString::from(format!("terminal-tab-card-2-fold-{generation}")))
+                    .absolute()
+                    .h(px(TERMINAL_TAB_HEIGHT))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(theme.border.opacity(0.70))
+                    .bg(card2_fill)
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| this.unfold_terminal_tabs(cx)))
+                    .with_animation(
+                        SharedString::from(format!("terminal-tab-card2-fold-{generation}")),
+                        Animation::new(TERMINAL_TABS_ANIMATION_DURATION).with_easing(ease_out_quint()),
+                        move |element, delta| {
+                            let x = unfolded_x + (card2_target_x - unfolded_x) * delta;
+                            let y = card2_target_y * delta;
+                            let w = unfolded_w + (card2_target_w - unfolded_w) * delta;
+                            element.left(px(x)).top(px(y)).w(px(w))
+                        },
+                    )
+                    .child(
+                        make_tab_content(tab2, idx2, label2, false).with_animation(
+                            SharedString::from(format!("terminal-tab-card2-c-fold-{generation}")),
+                            Animation::new(TERMINAL_TABS_ANIMATION_DURATION).with_easing(ease_out_quint()),
+                            move |element, delta| {
+                                element.opacity((1.0 - delta * 2.5).max(0.0))
+                            },
+                        ),
+                    );
+                tabs_container = tabs_container.child(card);
+            } else {
+                let card = make_unfolded_tab_base(idx2)
+                    .child(make_measure_canvas(tab2.id))
+                    .with_animation(
+                        SharedString::from(format!("terminal-tab-card2-unfold-{generation}")),
+                        Animation::new(TERMINAL_TABS_ANIMATION_DURATION).with_easing(ease_out_quint()),
+                        move |element, delta| {
+                            let x = card2_target_x + (unfolded_x - card2_target_x) * delta;
+                            let y = card2_target_y * (1.0 - delta);
+                            let w = card2_target_w + (unfolded_w - card2_target_w) * delta;
+                            element.left(px(x)).top(px(y)).w(px(w))
+                        },
+                    )
+                    .child(
+                        make_tab_content(tab2, idx2, label2, false).with_animation(
+                            SharedString::from(format!("terminal-tab-card2-c-unfold-{generation}")),
+                            Animation::new(TERMINAL_TABS_ANIMATION_DURATION).with_easing(ease_out_quint()),
+                            move |element, delta| {
+                                element.opacity(((delta - 0.25) / 0.75).clamp(0.0, 1.0))
+                            },
+                        ),
+                    );
+                tabs_container = tabs_container.child(card);
+            }
+        }
+
+        // 3. Card 1 (others[0])
+        if deck_cards >= 1 {
+            let idx1 = others[0];
+            let tab1 = &self.terminal_tabs[idx1];
+            let unfolded_x = slot_x(idx1);
+            let unfolded_w = tab_widths[idx1];
+            let label1 = labels[idx1].clone();
+            let card1_target_x = TERMINAL_STACK_INSET;
+            let card1_target_y = TERMINAL_STACK_DROP;
+            let card1_target_w = (front_width - TERMINAL_STACK_INSET * 2.0).max(24.0);
+            let card1_fill = opaque_over(
+                Hsla {
+                    a: theme.raised.a * 0.85,
+                    ..theme.raised
+                },
+                theme.surface,
+            );
+
+            if stacked && generation == 0 {
+                let card = div()
+                    .id("terminal-tab-card-1")
+                    .absolute()
+                    .top(px(card1_target_y))
+                    .left(px(card1_target_x))
+                    .w(px(card1_target_w))
+                    .h(px(TERMINAL_TAB_HEIGHT))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(card1_fill)
+                    .cursor_pointer()
+                    .tooltip(Tooltip::text(format!("{} (click to expand)", label1)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.unfold_terminal_tabs(cx)));
+                tabs_container = tabs_container.child(card);
+            } else if !stacked && generation == 0 {
+                tabs_container = tabs_container.child(make_unfolded_tab(idx1));
+            } else if stacked {
+                let card = div()
+                    .id(SharedString::from(format!("terminal-tab-card-1-fold-{generation}")))
+                    .absolute()
+                    .h(px(TERMINAL_TAB_HEIGHT))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(card1_fill)
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| this.unfold_terminal_tabs(cx)))
+                    .with_animation(
+                        SharedString::from(format!("terminal-tab-card1-fold-{generation}")),
+                        Animation::new(TERMINAL_TABS_ANIMATION_DURATION).with_easing(ease_out_quint()),
+                        move |element, delta| {
+                            let x = unfolded_x + (card1_target_x - unfolded_x) * delta;
+                            let y = card1_target_y * delta;
+                            let w = unfolded_w + (card1_target_w - unfolded_w) * delta;
+                            element.left(px(x)).top(px(y)).w(px(w))
+                        },
+                    )
+                    .child(
+                        make_tab_content(tab1, idx1, label1, false).with_animation(
+                            SharedString::from(format!("terminal-tab-card1-c-fold-{generation}")),
+                            Animation::new(TERMINAL_TABS_ANIMATION_DURATION).with_easing(ease_out_quint()),
+                            move |element, delta| {
+                                element.opacity((1.0 - delta * 2.5).max(0.0))
+                            },
+                        ),
+                    );
+                tabs_container = tabs_container.child(card);
+            } else {
+                let card = make_unfolded_tab_base(idx1)
+                    .child(make_measure_canvas(tab1.id))
+                    .with_animation(
+                        SharedString::from(format!("terminal-tab-card1-unfold-{generation}")),
+                        Animation::new(TERMINAL_TABS_ANIMATION_DURATION).with_easing(ease_out_quint()),
+                        move |element, delta| {
+                            let x = card1_target_x + (unfolded_x - card1_target_x) * delta;
+                            let y = card1_target_y * (1.0 - delta);
+                            let w = card1_target_w + (unfolded_w - card1_target_w) * delta;
+                            element.left(px(x)).top(px(y)).w(px(w))
+                        },
+                    )
+                    .child(
+                        make_tab_content(tab1, idx1, label1, false).with_animation(
+                            SharedString::from(format!("terminal-tab-card1-c-unfold-{generation}")),
+                            Animation::new(TERMINAL_TABS_ANIMATION_DURATION).with_easing(ease_out_quint()),
+                            move |element, delta| {
+                                element.opacity(((delta - 0.25) / 0.75).clamp(0.0, 1.0))
+                            },
+                        ),
+                    );
+                tabs_container = tabs_container.child(card);
+            }
+        }
+
+        // 4. Active Tab (Front, painted on top of cards)
+        let active_tab = &self.terminal_tabs[active];
+        let active_group = SharedString::from(format!("terminal-tab-{}", active_tab.id));
+        let active_unfolded_x = slot_x(active);
+        let active_bg = if stacked {
+            opaque_over(theme.raised, theme.surface)
+        } else {
+            theme.raised
+        };
+        let active_label = labels[active].clone();
+
+        let mut active_element = div()
+            .id(active_group.clone())
+            .group(active_group.clone())
+            .tab_index(0)
+            .focus_visible(|element| element.border_color(theme.accent))
+            .absolute()
+            .top(px(0.0))
+            .h(px(TERMINAL_TAB_HEIGHT))
+            .w(px(front_width))
+            .rounded_full()
+            .cursor_pointer()
+            .text_size(sp(13.0))
+            .border_1()
+            .bg(active_bg)
+            .border_color(theme.border_strong)
+            .text_color(theme.text)
+            .font_weight(FontWeight::MEDIUM)
+            .when(solid, |element| element.shadow_xs())
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
-                    this.new_terminal_tab(cx);
-                })),
-        )
+                    this.close_terminal_tab(active, cx);
+                }),
+            );
+
+        if stacked {
+            active_element = active_element
+                .tooltip(Tooltip::text(format!(
+                    "{} ({} tabs stacked — click to expand)",
+                    active_label, count
+                )))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.unfold_terminal_tabs(cx);
+                }));
+        } else {
+            active_element = active_element
+                .tooltip(Tooltip::text(format!(
+                    "{} ({}+{}) • Double-click to stack",
+                    active_label,
+                    if cfg!(target_os = "macos") {
+                        "⌘"
+                    } else {
+                        "Ctrl"
+                    },
+                    if active < 9 {
+                        (active + 1).to_string()
+                    } else {
+                        "9".to_string()
+                    }
+                )))
+                .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                    if this.terminal_tabs_just_unfolded {
+                        this.terminal_tabs_just_unfolded = false;
+                        return;
+                    }
+                    if event.click_count() >= 2 {
+                        this.select_terminal_tab(active, cx);
+                        this.stack_terminal_tabs(cx);
+                    } else {
+                        this.select_terminal_tab(active, cx);
+                    }
+                }))
+                .child(make_measure_canvas(active_tab.id));
+        }
+
+        active_element = active_element.child(make_tab_content(active_tab, active, active_label, true));
+
+        let active_any: AnyElement = if generation == 0 {
+            let x = if stacked { 0.0 } else { active_unfolded_x };
+            active_element.left(px(x)).into_any_element()
+        } else if stacked {
+            active_element
+                .with_animation(
+                    SharedString::from(format!("terminal-tab-active-fold-{generation}")),
+                    Animation::new(TERMINAL_TABS_ANIMATION_DURATION).with_easing(ease_out_quint()),
+                    move |element, delta| {
+                        let x = active_unfolded_x * (1.0 - delta);
+                        element.left(px(x))
+                    },
+                )
+                .into_any_element()
+        } else {
+            active_element
+                .with_animation(
+                    SharedString::from(format!("terminal-tab-active-unfold-{generation}")),
+                    Animation::new(TERMINAL_TABS_ANIMATION_DURATION).with_easing(ease_out_quint()),
+                    move |element, delta| {
+                        let x = active_unfolded_x * delta;
+                        element.left(px(x))
+                    },
+                )
+                .into_any_element()
+        };
+
+        tabs_container = tabs_container.child(active_any);
+
+        let container_any: AnyElement = if generation == 0 {
+            if stacked {
+                tabs_container.w(px(front_width)).into_any_element()
+            } else {
+                tabs_container.w(px(total_unfolded_width)).into_any_element()
+            }
+        } else if stacked {
+            tabs_container
+                .with_animation(
+                    SharedString::from(format!("terminal-tab-container-w-{generation}")),
+                    Animation::new(TERMINAL_TABS_ANIMATION_DURATION).with_easing(ease_out_quint()),
+                    move |element, delta| {
+                        let w = total_unfolded_width + (front_width - total_unfolded_width) * delta;
+                        element.w(px(w))
+                    },
+                )
+                .into_any_element()
+        } else {
+            tabs_container
+                .with_animation(
+                    SharedString::from(format!("terminal-tab-container-w-{generation}")),
+                    Animation::new(TERMINAL_TABS_ANIMATION_DURATION).with_easing(ease_out_quint()),
+                    move |element, delta| {
+                        let w = front_width + (total_unfolded_width - front_width) * delta;
+                        element.w(px(w))
+                    },
+                )
+                .into_any_element()
+        };
+
+        strip = strip.child(container_any).child(new_tab_button);
+        strip
     }
 
     fn render_terminal_titlebar(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -1094,7 +1663,13 @@ impl Insulator {
                     ..theme.surface
                 },
                 // Same translucency as the agent window's content column, with
-                // the wallpaper drawn underneath for the Image style.
+                // the wallpaper drawn underneath for the Image style. With a
+                // wallpaper the scrim is a child above it, because a root
+                // background would paint beneath the image.
+                WindowStyle::Image if self.state.background_image_path.is_some() => Hsla {
+                    a: 0.0,
+                    ..theme.surface
+                },
                 WindowStyle::Image => Hsla {
                     a: 0.82,
                     ..theme.surface
@@ -1114,6 +1689,10 @@ impl Insulator {
                             .size_full()
                             .object_fit(ObjectFit::Cover),
                     )
+                    .child(div().absolute().inset_0().bg(Hsla {
+                        a: 0.82,
+                        ..theme.surface
+                    }))
                 },
             )
             .child(self.render_terminal_titlebar(window, cx))
