@@ -16,6 +16,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.12]
+
 ### Added
 
 - Pair Insulator Mobile by scanning a QR code or pasting a link from Settings → Daemon
