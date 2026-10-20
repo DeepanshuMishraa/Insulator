@@ -233,6 +233,16 @@ pub fn execute(operation: WorkspaceOperation) -> anyhow::Result<WorkspaceResult>
         WorkspaceOperation::CollectReviewDiff { cwd, source } => WorkspaceResult::ReviewDiff {
             data: collect_review_diff(&cwd, source)?,
         },
+        WorkspaceOperation::InspectWorkingTree { cwd } => WorkspaceResult::WorkingTreeStatus {
+            status: crate::git_commit::inspect_working_tree(&cwd)?,
+        },
+        WorkspaceOperation::StagePaths { cwd, paths, staged } => {
+            crate::git_commit::stage_paths(&cwd, &paths, staged)?;
+            WorkspaceResult::Ack
+        }
+        WorkspaceOperation::ListWorktrees { cwd } => WorkspaceResult::Worktrees {
+            worktrees: crate::worktree::list(&cwd)?,
+        },
     })
 }
 

@@ -2,5 +2,12 @@
 
 /**
  * User-assigned task status for organizing chats in the sidebar and project workflows.
+ *
+ * Lifecycle: a new chat starts as `InProgress`, moves to `Done` when its turn
+ * finishes, and returns to `InReview` when the same chat is continued.
+ *
+ * `Backlog` and `Canceled` are retained for possible future use but are
+ * currently hidden from the UI (excluded from `MENU_ORDER`/`GROUP_ORDER` and
+ * migrated away on load). We might need them in the future but not now.
  */
 export type ChatStatus = "in-progress" | "backlog" | "in-review" | "done" | "canceled";

@@ -987,6 +987,120 @@ impl Insulator {
                 }
             }));
 
+        // The token is in the link, so the code shows only while it is revealed.
+        let pairing_section = token_revealed.then(|| {
+            let link = crate::pairing::pairing_link(self.daemon_connection_host(), port, &token);
+            let copy_link_feedback_id = "daemon-pairing-link";
+            let link_copied = self.control_was_copied(copy_link_feedback_id);
+            let click_link = link.clone();
+            let key_link = link.clone();
+            const MODULE: f32 = 4.0;
+            const QUIET_ZONE: f32 = 12.0;
+            let code =
+                crate::pairing::QrModules::encode(&link).map(|modules| {
+                    let side = modules.width as f32 * MODULE;
+                    div()
+                        .flex_none()
+                        .p(px(QUIET_ZONE))
+                        .rounded(px(10.0))
+                        // Scanners want dark modules on light, whatever the theme.
+                        .bg(gpui::white())
+                        .child(div().relative().size(px(side)).children(
+                            (0..modules.width).flat_map(|row| {
+                                modules
+                                    .row_runs(row)
+                                    .into_iter()
+                                    .map(move |(start, length)| {
+                                        div()
+                                            .absolute()
+                                            .left(px(start as f32 * MODULE))
+                                            .top(px(row as f32 * MODULE))
+                                            .w(px(length as f32 * MODULE))
+                                            .h(px(MODULE))
+                                            .bg(gpui::black())
+                                    })
+                            }),
+                        ))
+                });
+            let copy_link_button = div()
+                .id("copy-daemon-pairing-link")
+                .tab_index(0)
+                .h(px(27.0))
+                .px(px(9.0))
+                .rounded(px(6.0))
+                .border_1()
+                .border_color(theme.border_strong)
+                .flex()
+                .items_center()
+                .gap(px(5.0))
+                .cursor_default()
+                .text_size(sp(12.5))
+                .text_color(theme.text_secondary)
+                .focus_visible(|style| style.border_color(theme.accent))
+                .hover(|element| element.bg(theme.overlay))
+                .child(icon(
+                    if link_copied {
+                        "icons/check.svg"
+                    } else {
+                        "icons/copy.svg"
+                    },
+                    11.0,
+                    theme.text_tertiary,
+                ))
+                .child(if link_copied {
+                    tr!("common.copied")
+                } else {
+                    tr!("daemon.copy_pairing_link")
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(click_link.clone()));
+                    this.show_control_copied(copy_link_feedback_id, cx);
+                }))
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                    if !event.keystroke.modifiers.modified()
+                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                    {
+                        cx.write_to_clipboard(ClipboardItem::new_string(key_link.clone()));
+                        this.show_control_copied(copy_link_feedback_id, cx);
+                        cx.stop_propagation();
+                    }
+                }));
+            div()
+                .mt(px(10.0))
+                .pt(px(13.0))
+                .border_t_1()
+                .border_color(theme.border)
+                .flex()
+                .items_start()
+                .gap(px(18.0))
+                .children(code)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .items_start()
+                        .gap(px(8.0))
+                        .child(
+                            div()
+                                .text_size(sp(13.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.text)
+                                .child(tr!("daemon.pair_phone_title")),
+                        )
+                        .child(
+                            div()
+                                .whitespace_normal()
+                                .text_size(sp(12.5))
+                                .line_height(sp(16.0))
+                                .text_color(theme.text_secondary)
+                                .child(tr!("daemon.pair_phone_description")),
+                        )
+                        .child(copy_link_button),
+                )
+        });
+
         let regenerate_button = div()
             .id("regenerate-daemon-token")
             .tab_index(0)
@@ -1303,7 +1417,8 @@ impl Insulator {
                                         .text_color(theme.text_secondary)
                                         .child(tr!("daemon.security_warning")),
                                 ),
-                        ),
+                        )
+                        .children(pairing_section),
                 )
             })
             .into_any_element()

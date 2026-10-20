@@ -117,6 +117,9 @@ daemon.reveal_token: 显示令牌
 daemon.hide_token: 隐藏令牌
 daemon.regenerate_token: 重新生成
 daemon.security_warning: 此令牌可完全访问本机上的任务、文件、Git、附件和编程智能体。在私有网络之外请通过受信任的 TLS 代理使用 WSS。
+daemon.pair_phone_title: 配对手机
+daemon.pair_phone_description: 用 Insulator Mobile 扫描此二维码，或复制链接后粘贴到手机上。它包含令牌，请妥善保管。
+daemon.copy_pairing_link: 复制链接
 daemon.external_title: 外部守护进程
 daemon.external_description: 此桌面应用连接到由 Insulator 之外管理的守护进程。请在对应主机上配置监听地址、浏览器来源和令牌。
 daemon.web_external_description: Insulator Web 连接到由浏览器之外管理的守护进程。请在对应主机上配置监听地址、浏览器来源和令牌。

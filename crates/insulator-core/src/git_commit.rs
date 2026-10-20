@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use crate::model::ProviderKind;
 pub use insulator_protocol::git::{AgentInvocation, CommitSnapshot as Snapshot};
+use insulator_protocol::git::{FileChange, FileChangeStatus, WorkingTreeStatus};
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 const AGENT_TIMEOUT: Duration = Duration::from_secs(180);
@@ -160,6 +161,173 @@ pub fn commit(cwd: &Path, message: &str, include_unstaged: bool) -> anyhow::Resu
     }
     git_success(cwd, &["commit", "-m", &message])?;
     Ok(())
+}
+
+/// Largest untracked file whose lines are counted; past it the count is 0.
+const MAX_COUNTED_UNTRACKED_BYTES: u64 = 2 * 1024 * 1024;
+
+pub fn inspect_working_tree(cwd: &Path) -> anyhow::Result<WorkingTreeStatus> {
+    ensure_repository(cwd)?;
+    let branch = git_optional_stdout(cwd, &["branch", "--show-current"])?
+        .filter(|branch| !branch.is_empty())
+        .or_else(|| {
+            git_optional_stdout(cwd, &["rev-parse", "--short", "HEAD"])
+                .ok()
+                .flatten()
+        })
+        .unwrap_or_else(|| "HEAD".to_owned());
+    let porcelain = git_stdout(
+        cwd,
+        &[
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--no-renames",
+        ],
+    )?;
+    let staged_counts = path_numstat(
+        cwd,
+        &["diff", "--cached", "--numstat", "--no-renames", "-z"],
+    )?;
+    let unstaged_counts = path_numstat(cwd, &["diff", "--numstat", "--no-renames", "-z"])?;
+    let files = parse_porcelain(&porcelain)
+        .into_iter()
+        .map(|(path, status, staged, unstaged)| {
+            let (mut additions, mut deletions) = (0, 0);
+            for counts in [&staged_counts, &unstaged_counts] {
+                if let Some((added, deleted)) = counts.get(&path) {
+                    additions += added;
+                    deletions += deleted;
+                }
+            }
+            if status == FileChangeStatus::Untracked {
+                additions = untracked_lines(&cwd.join(&path));
+            }
+            FileChange {
+                path,
+                status,
+                staged,
+                unstaged,
+                additions,
+                deletions,
+            }
+        })
+        .collect();
+
+    let has_remote = !git_stdout(cwd, &["remote"])?.trim().is_empty();
+    let upstream = upstream(cwd)?;
+    let (ahead, behind) = match upstream {
+        Some(_) => git_optional_stdout(
+            cwd,
+            &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+        )?
+        .and_then(|counts| {
+            let mut fields = counts.split_whitespace();
+            Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
+        })
+        .unwrap_or((0, 0)),
+        None => (0, 0),
+    };
+    let default_branch = default_branch(cwd)?;
+    let ahead_of_default = match &default_branch {
+        Some(default) if *default != branch => {
+            let base = comparison_ref(cwd, default)?;
+            git_optional_stdout(cwd, &["rev-list", "--count", &format!("{base}..HEAD")])?
+                .and_then(|count| count.parse().ok())
+                .unwrap_or(0)
+        }
+        _ => 0,
+    };
+    Ok(WorkingTreeStatus {
+        branch,
+        default_branch,
+        has_remote,
+        upstream,
+        ahead,
+        behind,
+        ahead_of_default,
+        files,
+    })
+}
+
+/// Stages or unstages `paths`; every change when `paths` is empty.
+pub fn stage_paths(cwd: &Path, paths: &[String], staged: bool) -> anyhow::Result<()> {
+    ensure_repository(cwd)?;
+    let has_head =
+        git_optional_stdout(cwd, &["rev-parse", "--verify", "--quiet", "HEAD"])?.is_some();
+    let mut args: Vec<&str> = match (staged, has_head) {
+        (true, _) => vec!["add", "-A", "--"],
+        (false, true) => vec!["reset", "-q", "--"],
+        // Before the first commit there is no HEAD to reset the index to.
+        (false, false) => vec!["rm", "--cached", "-r", "-q", "--"],
+    };
+    if paths.is_empty() {
+        args.push(".");
+    } else {
+        args.extend(paths.iter().map(String::as_str));
+    }
+    git_success(cwd, &args)?;
+    Ok(())
+}
+
+/// Entries of `git status --porcelain=v1 -z --no-renames`, as each file's
+/// path, status, and whether it has staged and unstaged changes.
+fn parse_porcelain(porcelain: &str) -> Vec<(String, FileChangeStatus, bool, bool)> {
+    porcelain
+        .split('\0')
+        .filter_map(|entry| {
+            let bytes = entry.as_bytes();
+            if bytes.len() < 4 {
+                return None;
+            }
+            let (x, y) = (bytes[0], bytes[1]);
+            let status = match (x, y) {
+                (b'?', _) => FileChangeStatus::Untracked,
+                (b'A', _) | (_, b'A') => FileChangeStatus::Added,
+                (b'D', _) | (_, b'D') => FileChangeStatus::Deleted,
+                _ => FileChangeStatus::Modified,
+            };
+            Some((
+                entry[3..].to_owned(),
+                status,
+                x != b' ' && x != b'?',
+                y != b' ' || x == b'?',
+            ))
+        })
+        .collect()
+}
+
+/// `git diff --numstat -z` by path. Binary files count as no lines.
+fn path_numstat(
+    cwd: &Path,
+    args: &[&str],
+) -> anyhow::Result<std::collections::HashMap<String, (u64, u64)>> {
+    Ok(git_stdout(cwd, args)?
+        .split('\0')
+        .filter_map(|entry| {
+            let mut fields = entry.trim_start_matches('\n').splitn(3, '\t');
+            let added = fields.next()?.parse().unwrap_or(0);
+            let deleted = fields.next()?.parse().unwrap_or(0);
+            Some((fields.next()?.to_owned(), (added, deleted)))
+        })
+        .collect())
+}
+
+fn untracked_lines(path: &Path) -> u64 {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() && metadata.len() <= MAX_COUNTED_UNTRACKED_BYTES => {
+            fs::read(path)
+                .ok()
+                .filter(|bytes| !bytes.contains(&0))
+                .map(|bytes| {
+                    let newlines = bytes.iter().filter(|byte| **byte == b'\n').count() as u64;
+                    newlines + u64::from(bytes.last().is_some_and(|byte| *byte != b'\n'))
+                })
+                .unwrap_or(0)
+        }
+        _ => 0,
+    }
 }
 
 pub fn push(cwd: &Path) -> anyhow::Result<()> {
@@ -900,6 +1068,76 @@ mod tests {
         run_git(&root, &["add", "."]);
         run_git(&root, &["commit", "-m", "initial"]);
         root
+    }
+
+    #[test]
+    fn working_tree_lists_each_file_with_its_staging() {
+        let root = repository();
+        fs::write(root.join("README.md"), "one\ntwo\n").unwrap();
+        run_git(&root, &["add", "README.md"]);
+        fs::write(root.join("README.md"), "one\ntwo\nthree\n").unwrap();
+        fs::write(root.join("new file.txt"), "a\nb\n").unwrap();
+
+        let status = inspect_working_tree(&root).unwrap();
+        assert_eq!(status.branch, "main");
+        assert!(!status.has_remote);
+        let readme = status
+            .files
+            .iter()
+            .find(|file| file.path == "README.md")
+            .unwrap();
+        assert_eq!(readme.status, FileChangeStatus::Modified);
+        assert!(readme.staged && readme.unstaged);
+        assert_eq!(readme.additions, 2);
+        let added = status
+            .files
+            .iter()
+            .find(|file| file.path == "new file.txt")
+            .unwrap();
+        assert_eq!(added.status, FileChangeStatus::Untracked);
+        assert!(!added.staged && added.unstaged);
+        assert_eq!(added.additions, 2);
+    }
+
+    #[test]
+    fn stage_paths_stages_and_unstages_named_files_or_everything() {
+        let root = repository();
+        fs::write(root.join("README.md"), "one\ntwo\n").unwrap();
+        fs::write(root.join("other.txt"), "x\n").unwrap();
+
+        stage_paths(&root, &["other.txt".to_owned()], true).unwrap();
+        let status = inspect_working_tree(&root).unwrap();
+        let other = status
+            .files
+            .iter()
+            .find(|file| file.path == "other.txt")
+            .unwrap();
+        assert_eq!(other.status, FileChangeStatus::Added);
+        assert!(other.staged && !other.unstaged);
+        let readme = status
+            .files
+            .iter()
+            .find(|file| file.path == "README.md")
+            .unwrap();
+        assert!(!readme.staged);
+
+        stage_paths(&root, &[], true).unwrap();
+        assert!(
+            inspect_working_tree(&root)
+                .unwrap()
+                .files
+                .iter()
+                .all(|file| file.staged && !file.unstaged)
+        );
+
+        stage_paths(&root, &[], false).unwrap();
+        assert!(
+            inspect_working_tree(&root)
+                .unwrap()
+                .files
+                .iter()
+                .all(|file| !file.staged)
+        );
     }
 
     #[test]

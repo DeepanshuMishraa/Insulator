@@ -10,43 +10,86 @@ final class AppearanceSettings {
         didSet { UserDefaults.standard.set(theme.rawValue, forKey: Self.themeKey) }
     }
 
+    var scheme: AppSchemeChoice {
+        didSet { UserDefaults.standard.set(scheme.rawValue, forKey: Self.schemeKey) }
+    }
+
     var font: AppFontChoice {
         didSet { UserDefaults.standard.set(font.rawValue, forKey: Self.fontKey) }
     }
 
-    fileprivate static let themeKey = "appearance.theme"
+    fileprivate static let themeKey = "appearance.theme.v2"
+    fileprivate static let schemeKey = "appearance.scheme"
     fileprivate static let fontKey = "appearance.font"
 
     private init() {
-        theme = AppThemeChoice(rawValue: UserDefaults.standard.string(forKey: Self.themeKey) ?? "") ?? .system
+        theme = AppThemeChoice(rawValue: UserDefaults.standard.string(forKey: Self.themeKey) ?? "") ?? .classic
+        scheme = AppSchemeChoice(rawValue: UserDefaults.standard.string(forKey: Self.schemeKey) ?? "") ?? .system
         font = AppFontChoice(rawValue: UserDefaults.standard.string(forKey: Self.fontKey) ?? "") ?? .sfPro
     }
 }
 
-enum AppThemeChoice: String, CaseIterable, Identifiable {
+/// Light, dark, or whatever the phone is set to.
+enum AppSchemeChoice: String, CaseIterable, Identifiable {
     case system
-    case catppuccin
-    case tokyoNight
-    case dracula
+    case light
+    case dark
 
     var id: Self { self }
 
     var name: String {
         switch self {
         case .system: "System"
-        case .catppuccin: "Catppuccin"
-        case .tokyoNight: "Tokyo Night"
-        case .dracula: "Dracula"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+}
+
+/// The themes the app draws in, each in both schemes: Classic in neutral
+/// greys, the rest washing its surfaces in a hue with an accent to match.
+enum AppThemeChoice: String, CaseIterable, Identifiable {
+    case classic
+    case cobalt
+    case jade
+    case copper
+    case violet
+    case blush
+
+    var id: Self { self }
+
+    var name: String {
+        switch self {
+        case .classic: "Classic"
+        case .cobalt: "Cobalt"
+        case .jade: "Jade"
+        case .copper: "Copper"
+        case .violet: "Violet"
+        case .blush: "Blush"
+        }
+    }
+
+    func palette(_ scheme: ColorScheme) -> ThemeVariant {
+        switch self {
+        case .classic: scheme == .dark ? .classicDark : .classicLight
+        case .cobalt: .tinted(hue: 212, scheme: scheme, accent: scheme == .dark ? "5aa9f7" : "1f6fc4")
+        case .jade: .tinted(hue: 150, scheme: scheme, accent: scheme == .dark ? "4cc38a" : "13804f")
+        case .copper: .tinted(hue: 22, scheme: scheme, accent: scheme == .dark ? "f0884a" : "c2531a")
+        case .violet: .tinted(hue: 262, scheme: scheme, accent: scheme == .dark ? "9d87f5" : "6a4fd6")
+        case .blush: .tinted(hue: 338, scheme: scheme, accent: scheme == .dark ? "ec6fa3" : "c42a6c")
         }
     }
 
     fileprivate var palette: ThemePalette {
-        switch self {
-        case .system: .system
-        case .catppuccin: .catppuccin
-        case .tokyoNight: .tokyoNight
-        case .dracula: .dracula
-        }
+        ThemePalette(light: palette(.light), dark: palette(.dark))
     }
 }
 
@@ -95,21 +138,38 @@ enum AppFontChoice: String, CaseIterable, Identifiable {
     }
 }
 
+/// The current theme's colours. Each adapts to light and dark on its own, so
+/// a scheme change redraws without the views asking.
 @MainActor
 enum AppTheme {
     static var background: Color { palette.background }
+    static var sheet: Color { palette.sheet }
     static var surface: Color { palette.surface }
-    static var raised: Color { palette.raised }
-    static var border: Color { palette.border }
-    static var primary: Color { palette.primary }
-    static var secondary: Color { palette.secondary }
+    static var surfaceRaised: Color { palette.surfaceRaised }
+    static var stroke: Color { palette.stroke }
+    static var selection: Color { palette.selection }
+    static var content: Color { palette.content }
+    static var muted: Color { palette.muted }
+    static var faint: Color { palette.faint }
     static var accent: Color { palette.accent }
-    static var success: Color { palette.success }
-    static var danger: Color { palette.danger }
-    static var code: Color { palette.code }
-    static var codeText: Color { palette.codeText }
-    static var link: Color { palette.link }
-    static var shadow: Color { Color.black.opacity(0.32) }
+    static var additions: Color { palette.additions }
+    static var deletions: Color { palette.deletions }
+    /// Amber, for warnings and full access.
+    static var caution: Color { palette.caution }
+    /// A file named in a transcript, apart from prose, code and links.
+    static var fileRef: Color { palette.fileRef }
+    static var inverse: Color { palette.inverse }
+    static var inverseSurface: Color { palette.inverseSurface }
+    /// Round buttons and pills over glass.
+    static var fill: Color { palette.fill }
+    /// A segmented switch's thumb, inside the glass.
+    static var thumb: Color { palette.thumb }
+    /// Laid over the Insulator mark.
+    static var mark: Color { palette.mark }
+    /// A transcript's fold rails and connectors.
+    static var rail: Color { palette.rail }
+    /// The user's message bubble.
+    static var bubble: Color { palette.bubble }
 
     static func font(
         _ style: Font.TextStyle,
@@ -142,6 +202,11 @@ enum AppTheme {
         return .system(size: size, weight: weight, design: monospaced ? .monospaced : .default)
     }
 
+    /// Code, diffs and file contents: Menlo, as the desktop's code views.
+    static func code(size: CGFloat) -> Font {
+        .custom("Menlo", size: size)
+    }
+
     private static var palette: ThemePalette {
         AppearanceSettings.shared.theme.palette
     }
@@ -163,118 +228,191 @@ enum AppTheme {
     }
 }
 
-private struct ThemePalette {
-    let background: Color
-    let surface: Color
-    let raised: Color
-    let border: Color
-    let primary: Color
-    let secondary: Color
-    let accent: Color
-    let success: Color
-    let danger: Color
-    let code: Color
-    let codeText: Color
-    let link: Color
+/// Diff and change-status colours, as the desktop's changes panel draws them.
+@MainActor
+enum DiffTheme {
+    static let addRow = Color(red: 16 / 255, green: 185 / 255, blue: 129 / 255).opacity(0.15)
+    static let addGutter = Color(red: 16 / 255, green: 185 / 255, blue: 129 / 255).opacity(0.25)
+    static let deleteRow = Color(red: 244 / 255, green: 63 / 255, blue: 94 / 255).opacity(0.15)
+    static let deleteGutter = Color(red: 244 / 255, green: 63 / 255, blue: 94 / 255).opacity(0.25)
+    static let addText = Color.adaptive("047857", dark: "6ee7b7")
+    static let deleteText = Color.adaptive("be123c", dark: "fda4af")
 
-    init(
-        light: ThemeVariant,
-        dark: ThemeVariant
-    ) {
-        background = Color.adaptive(light.background, dark: dark.background)
-        surface = Color.adaptive(light.surface, dark: dark.surface)
-        raised = Color.adaptive(light.raised, dark: dark.raised)
-        border = Color.adaptive(light.border, dark: dark.border)
-        primary = Color.adaptive(light.primary, dark: dark.primary)
-        secondary = Color.adaptive(light.secondary, dark: dark.secondary)
-        accent = Color.adaptive(light.accent, dark: dark.accent)
-        success = Color.adaptive(light.success, dark: dark.success)
-        danger = Color.adaptive(light.danger, dark: dark.danger)
-        code = Color.adaptive(light.code, dark: dark.code)
-        codeText = Color.adaptive(light.codeText, dark: dark.codeText)
-        link = Color.adaptive(light.link, dark: dark.link)
+    static func status(_ status: FileChangeStatus) -> Color {
+        switch status {
+        case .modified: .adaptive("b45309", dark: "fbbf24")
+        case .added: .adaptive("047857", dark: "6ee7b7")
+        case .deleted: .adaptive("be123c", dark: "fda4af")
+        case .untracked: .adaptive("0284c7", dark: "38bdf8")
+        }
+    }
+}
+
+/// The ASCII field's sweep, and the colours mascots are painted in.
+enum BrandHues {
+    static let field = ["4c9ef5", "a78bfa", "f472b6", "fbbf24", "6ee7b7"].map(Color.init(hex:))
+}
+
+struct ThemeVariant {
+    let background: String
+    let sheet: String
+    let surface: String
+    let surfaceRaised: String
+    let stroke: RGBA
+    let selection: RGBA
+    let content: String
+    let muted: String
+    let faint: String
+    let accent: String
+    let additions: String
+    let deletions: String
+    let caution: String
+    let fileRef: String
+    let inverse: String
+    let inverseSurface: String
+    let fill: RGBA
+    let thumb: RGBA
+    let mark: String
+    let rail: String
+    let bubble: String
+
+    struct RGBA {
+        let hex: String
+        let alpha: Double
     }
 
-    static let system = ThemePalette(
-        light: ThemeVariant(
-            background: "f7f7f8", surface: "ffffff", raised: "e9e9ec", border: "d3d3d8",
-            primary: "18181b", secondary: "62626a", accent: "238636", success: "238636",
-            danger: "cf222e", code: "ededf0", codeText: "24292f", link: "0969da"
-        ),
-        dark: ThemeVariant(
-            background: "000000", surface: "1a1a1c", raised: "27272a", border: "3c3c40",
-            primary: "f2f2f3", secondary: "9b9ba3", accent: "66e095", success: "66e095",
-            danger: "f26d78", code: "17171c", codeText: "d1e6ff", link: "73b7ff"
-        )
+    static let classicDark = ThemeVariant(
+        background: "0f0f0f", sheet: "141414", surface: "1c1c1c", surfaceRaised: "262626",
+        stroke: RGBA(hex: "ebebeb", alpha: 0.08), selection: RGBA(hex: "ebebeb", alpha: 0.10),
+        content: "ebebeb", muted: "8c8c8c", faint: "5c5c5c", accent: "4c9ef5",
+        additions: "6ee7b7", deletions: "f87171", caution: "fbbf24", fileRef: "c4b5fd",
+        inverse: "0c0c0c", inverseSurface: "f2f2f2",
+        fill: RGBA(hex: "ffffff", alpha: 0.08), thumb: RGBA(hex: "ffffff", alpha: 0.14),
+        mark: "ffffff", rail: "2e2e2e", bubble: "252525"
     )
 
-    // Official Catppuccin Latte and Mocha tokens: https://catppuccin.com/palette/
-    static let catppuccin = ThemePalette(
-        light: ThemeVariant(
-            background: "eff1f5", surface: "e6e9ef", raised: "ccd0da", border: "bcc0cc",
-            primary: "4c4f69", secondary: "5c5f77", accent: "1e66f5", success: "40a02b",
-            danger: "d20f39", code: "dce0e8", codeText: "4c4f69", link: "1e66f5"
-        ),
-        dark: ThemeVariant(
-            background: "1e1e2e", surface: "181825", raised: "313244", border: "45475a",
-            primary: "cdd6f4", secondary: "a6adc8", accent: "89b4fa", success: "a6e3a1",
-            danger: "f38ba8", code: "11111b", codeText: "cdd6f4", link: "89b4fa"
-        )
+    static let classicLight = ThemeVariant(
+        background: "f7f7f7", sheet: "ffffff", surface: "ededed", surfaceRaised: "e3e3e3",
+        stroke: RGBA(hex: "2e2e2e", alpha: 0.10), selection: RGBA(hex: "2e2e2e", alpha: 0.06),
+        content: "2e2e2e", muted: "737373", faint: "a6a6a6", accent: "1f7ae0",
+        additions: "047857", deletions: "be123c", caution: "b45309", fileRef: "6d28d9",
+        inverse: "fafafa", inverseSurface: "262626",
+        fill: RGBA(hex: "2e2e2e", alpha: 0.09), thumb: RGBA(hex: "2e2e2e", alpha: 0.10),
+        mark: "2e2e2e", rail: "dadada", bubble: "e9e9e9"
     )
 
-    // Official Tokyo Night Day and Night tokens: https://github.com/folke/tokyonight.nvim
-    static let tokyoNight = ThemePalette(
-        light: ThemeVariant(
-            background: "e1e2e7", surface: "d0d5e3", raised: "c4c8da", border: "b4b5b9",
-            primary: "3760bf", secondary: "40434f", accent: "2e7de9", success: "587539",
-            danger: "c64343", code: "d0d5e3", codeText: "3760bf", link: "2e7de9"
-        ),
-        dark: ThemeVariant(
-            background: "1a1b26", surface: "16161e", raised: "292e42", border: "414868",
-            primary: "c0caf5", secondary: "a9b1d6", accent: "7aa2f7", success: "9ece6a",
-            danger: "f7768e", code: "16161e", codeText: "c0caf5", link: "7dcfff"
+    /// Classic's surfaces washed in `hue`: dark's barely, so text keeps its
+    /// contrast, and light's fainter still.
+    static func tinted(hue: Double, scheme: ColorScheme, accent: String) -> ThemeVariant {
+        let base = scheme == .dark ? classicDark : classicLight
+        if scheme == .dark {
+            return base.with(
+                background: hsl(hue, 22, 7), sheet: hsl(hue, 20, 9), surface: hsl(hue, 16, 12.5),
+                surfaceRaised: hsl(hue, 14, 16.5), rail: hsl(hue, 12, 19), bubble: hsl(hue, 16, 16),
+                accent: accent
+            )
+        }
+        return base.with(
+            background: hsl(hue, 30, 96.5), sheet: base.sheet, surface: hsl(hue, 22, 92.5),
+            surfaceRaised: hsl(hue, 18, 88.5), rail: hsl(hue, 16, 85), bubble: hsl(hue, 22, 91),
+            accent: accent
         )
-    )
+    }
 
-    // Official Alucard and Dracula tokens: https://draculatheme.com/spec
-    static let dracula = ThemePalette(
-        light: ThemeVariant(
-            background: "fffbeb", surface: "efeddc", raised: "dedccf", border: "bcBAB3",
-            primary: "1f1f1f", secondary: "6c664b", accent: "644ac9", success: "14710a",
-            danger: "cb3a2a", code: "ece9df", codeText: "1f1f1f", link: "036a96"
-        ),
-        dark: ThemeVariant(
-            background: "282a36", surface: "21222c", raised: "343746", border: "424450",
-            primary: "f8f8f2", secondary: "a7acc4", accent: "bd93f9", success: "50fa7b",
-            danger: "ff5555", code: "191a21", codeText: "f8f8f2", link: "8be9fd"
+    private func with(
+        background: String, sheet: String, surface: String, surfaceRaised: String,
+        rail: String, bubble: String, accent: String
+    ) -> ThemeVariant {
+        ThemeVariant(
+            background: background, sheet: sheet, surface: surface, surfaceRaised: surfaceRaised,
+            stroke: stroke, selection: selection, content: content, muted: muted, faint: faint,
+            accent: accent, additions: additions, deletions: deletions, caution: caution,
+            fileRef: fileRef, inverse: inverse, inverseSurface: inverseSurface, fill: fill,
+            thumb: thumb, mark: mark, rail: rail, bubble: bubble
         )
-    )
+    }
 }
 
-private struct ThemeVariant {
-    let background: String
-    let surface: String
-    let raised: String
-    let border: String
-    let primary: String
-    let secondary: String
-    let accent: String
-    let success: String
-    let danger: String
-    let code: String
-    let codeText: String
-    let link: String
+/// `hsl()` as `rrggbb`.
+func hsl(_ hue: Double, _ saturation: Double, _ lightness: Double) -> String {
+    let s = saturation / 100
+    let l = lightness / 100
+    let a = s * min(l, 1 - l)
+    func channel(_ n: Double) -> Int {
+        let k = (n + hue / 30).truncatingRemainder(dividingBy: 12)
+        return Int((255 * (l - a * max(-1, min(k - 3, 9 - k, 1)))).rounded())
+    }
+    return String(format: "%02x%02x%02x", channel(0), channel(8), channel(4))
 }
 
-private extension Color {
+private struct ThemePalette {
+    let background: Color
+    let sheet: Color
+    let surface: Color
+    let surfaceRaised: Color
+    let stroke: Color
+    let selection: Color
+    let content: Color
+    let muted: Color
+    let faint: Color
+    let accent: Color
+    let additions: Color
+    let deletions: Color
+    let caution: Color
+    let fileRef: Color
+    let inverse: Color
+    let inverseSurface: Color
+    let fill: Color
+    let thumb: Color
+    let mark: Color
+    let rail: Color
+    let bubble: Color
+
+    init(light: ThemeVariant, dark: ThemeVariant) {
+        background = .adaptive(light.background, dark: dark.background)
+        sheet = .adaptive(light.sheet, dark: dark.sheet)
+        surface = .adaptive(light.surface, dark: dark.surface)
+        surfaceRaised = .adaptive(light.surfaceRaised, dark: dark.surfaceRaised)
+        stroke = .adaptive(light.stroke, dark: dark.stroke)
+        selection = .adaptive(light.selection, dark: dark.selection)
+        content = .adaptive(light.content, dark: dark.content)
+        muted = .adaptive(light.muted, dark: dark.muted)
+        faint = .adaptive(light.faint, dark: dark.faint)
+        accent = .adaptive(light.accent, dark: dark.accent)
+        additions = .adaptive(light.additions, dark: dark.additions)
+        deletions = .adaptive(light.deletions, dark: dark.deletions)
+        caution = .adaptive(light.caution, dark: dark.caution)
+        fileRef = .adaptive(light.fileRef, dark: dark.fileRef)
+        inverse = .adaptive(light.inverse, dark: dark.inverse)
+        inverseSurface = .adaptive(light.inverseSurface, dark: dark.inverseSurface)
+        fill = .adaptive(light.fill, dark: dark.fill)
+        thumb = .adaptive(light.thumb, dark: dark.thumb)
+        mark = .adaptive(light.mark, dark: dark.mark)
+        rail = .adaptive(light.rail, dark: dark.rail)
+        bubble = .adaptive(light.bubble, dark: dark.bubble)
+    }
+}
+
+extension Color {
+    init(hex: String) {
+        self.init(uiColor: UIColor(hex: hex))
+    }
+
     static func adaptive(_ light: String, dark: String) -> Color {
         Color(uiColor: UIColor { traits in
             UIColor(hex: traits.userInterfaceStyle == .dark ? dark : light)
         })
     }
+
+    fileprivate static func adaptive(_ light: ThemeVariant.RGBA, dark: ThemeVariant.RGBA) -> Color {
+        Color(uiColor: UIColor { traits in
+            let value = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(hex: value.hex).withAlphaComponent(value.alpha)
+        })
+    }
 }
 
-private extension UIColor {
+extension UIColor {
     convenience init(hex: String) {
         let value = UInt64(hex, radix: 16) ?? 0
         self.init(
@@ -283,13 +421,5 @@ private extension UIColor {
             blue: CGFloat(value & 0xff) / 255,
             alpha: 1
         )
-    }
-}
-
-struct PressableCardStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .contentShape(Rectangle())
-            .opacity(configuration.isPressed ? 0.66 : 1)
     }
 }

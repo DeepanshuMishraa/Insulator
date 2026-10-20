@@ -440,11 +440,59 @@ struct AgentTurn: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+/// Where a task runs: the project's checkout, or a Git worktree of its own.
+/// A draft may ask for a worktree that is created on its first prompt.
+enum SessionWorkspace: Codable, Hashable, Sendable {
+    case local
+    case newWorktree(baseBranch: String?)
+    case worktree(path: String, branch: String)
+
+    var path: String? {
+        if case .worktree(let path, _) = self { return path }
+        return nil
+    }
+
+    private enum CodingKeys: String, CodingKey { case kind, baseBranch, path, branch }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(String.self, forKey: .kind) {
+        case "newWorktree":
+            self = .newWorktree(baseBranch: try container.decodeIfPresent(String.self, forKey: .baseBranch))
+        case "worktree":
+            self = .worktree(
+                path: try container.decode(String.self, forKey: .path),
+                branch: try container.decode(String.self, forKey: .branch)
+            )
+        default:
+            self = .local
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .local:
+            try container.encode("local", forKey: .kind)
+        case .newWorktree(let baseBranch):
+            try container.encode("newWorktree", forKey: .kind)
+            try container.encodeIfPresent(baseBranch, forKey: .baseBranch)
+        case .worktree(let path, let branch):
+            try container.encode("worktree", forKey: .kind)
+            try container.encode(path, forKey: .path)
+            try container.encode(branch, forKey: .branch)
+        }
+    }
+}
+
 struct AgentSession: Codable, Hashable, Identifiable, Sendable {
     let id: UUID
     var title: String
     var autoTitle: String?
     var projectID: UUID
+    /// Absent for a session in the project's own checkout. Kept so a save from
+    /// the phone never moves a worktree task back to the checkout.
+    var workspace: SessionWorkspace?
     var provider: ProviderKind
     var model: String?
     var runtimeMode: RuntimeMode
@@ -480,8 +528,15 @@ struct AgentSession: Codable, Hashable, Identifiable, Sendable {
         autoTitle = generated
     }
 
+    var worktreePath: String? { workspace?.path }
+
+    var branch: String? {
+        if case .worktree(_, let branch)? = workspace { return branch }
+        return nil
+    }
+
     enum CodingKeys: String, CodingKey {
-        case id, title, provider, model, status, messages
+        case id, title, provider, model, status, messages, workspace
         case autoTitle = "auto_title"
         case projectID = "project_id"
         case runtimeMode = "runtime_mode"
@@ -557,6 +612,23 @@ struct PairingPayload: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case url, token
     }
+
+    /// The `insulator://pair?url=…&token=…` link the desktop shows as a QR
+    /// code under Settings → Daemon, scanned, pasted or opened.
+    init(link: String) throws {
+        guard let components = URLComponents(string: link.trimmingCharacters(in: .whitespacesAndNewlines)),
+              components.scheme?.lowercased() == "insulator",
+              components.host?.lowercased() == "pair" else {
+            throw ConnectionError.invalidPairingLink
+        }
+        let items = components.queryItems ?? []
+        guard let address = items.first(where: { $0.name == "url" })?.value,
+              let url = URL(string: address),
+              let token = items.first(where: { $0.name == "token" })?.value else {
+            throw ConnectionError.invalidPairingLink
+        }
+        try self.init(url: url, token: token)
+    }
 }
 
 enum ConnectionState: Equatable, Sendable {
@@ -569,6 +641,7 @@ enum ConnectionState: Equatable, Sendable {
 enum ConnectionError: LocalizedError, Sendable {
     case invalidAddress
     case missingToken
+    case invalidPairingLink
     case rejected(String)
     case protocolMismatch(Int)
     case disconnected
@@ -579,6 +652,7 @@ enum ConnectionError: LocalizedError, Sendable {
         switch self {
         case .invalidAddress: "Enter a ws:// or wss:// daemon address."
         case .missingToken: "Enter the daemon token from Insulator Desktop."
+        case .invalidPairingLink: "That isn't an Insulator pairing link. Copy it again from Insulator Desktop under Settings → Daemon, with the token revealed."
         case .rejected(let message), .daemon(let message): message
         case .protocolMismatch(let version): "The Mac uses protocol \(version), but this app supports protocol 8. Update Insulator on both devices."
         case .disconnected: "The connection to your Mac closed. Your work is still safe on the Mac."

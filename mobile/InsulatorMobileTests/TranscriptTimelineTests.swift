@@ -16,6 +16,7 @@ struct TranscriptTimelineTests {
             title: "Thread",
             autoTitle: nil,
             projectID: UUID(),
+            workspace: nil,
             provider: .pi,
             model: nil,
             runtimeMode: .ask,

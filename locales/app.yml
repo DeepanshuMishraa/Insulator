@@ -244,6 +244,12 @@ daemon.regenerate_token:
   en: Regenerate
 daemon.security_warning:
   en: The token grants full access to tasks, files, Git, attachments, and coding agents on this machine. Use WSS through a trusted TLS proxy outside a private network.
+daemon.pair_phone_title:
+  en: Pair a phone
+daemon.pair_phone_description:
+  en: Scan this code with Insulator Mobile, or copy the link and paste it there. It carries the token, so keep it private.
+daemon.copy_pairing_link:
+  en: Copy link
 daemon.external_title:
   en: External daemon
 daemon.external_description:

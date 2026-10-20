@@ -5,7 +5,10 @@ use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::composer::{FileEntry, ReferenceEntry, SlashCommand};
-use crate::git::{AgentInvocation, BranchSnapshot, CommitSnapshot, CreatedWorktree};
+use crate::git::{
+    AgentInvocation, BranchSnapshot, CommitSnapshot, CreatedWorktree, WorkingTreeStatus,
+    WorktreeEntry,
+};
 use crate::model::{Checkpoint, ProviderKind};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
@@ -201,6 +204,23 @@ pub enum WorkspaceOperation {
         cwd: PathBuf,
         source: ReviewDiffSource,
     },
+    /// Every uncommitted file with its staging state, and the branch's
+    /// position against its upstream and the default branch.
+    InspectWorkingTree {
+        #[ts(type = "string")]
+        cwd: PathBuf,
+    },
+    /// Stages or unstages `paths`, relative to `cwd`; every change when empty.
+    StagePaths {
+        #[ts(type = "string")]
+        cwd: PathBuf,
+        paths: Vec<String>,
+        staged: bool,
+    },
+    ListWorktrees {
+        #[ts(type = "string")]
+        cwd: PathBuf,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
@@ -268,5 +288,11 @@ pub enum WorkspaceResult {
     },
     ReviewDiff {
         data: ReviewDiffData,
+    },
+    WorkingTreeStatus {
+        status: WorkingTreeStatus,
+    },
+    Worktrees {
+        worktrees: Vec<WorktreeEntry>,
     },
 }

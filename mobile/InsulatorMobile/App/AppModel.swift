@@ -26,11 +26,22 @@ final class AppModel {
     /// and cached here so a thumbnail and the full-screen viewer share one read.
     let attachmentImages: AttachmentImageStore
 
-    @ObservationIgnored private let client: DaemonClient
-    @ObservationIgnored private var runtimes: [UUID: UUID] = [:]
+    /// Sessions that finished since the phone saw them working, newest first,
+    /// for the deck resting on a project's composer. The session on screen
+    /// never lands here.
+    var finished: [FinishedSession] = []
+    /// The session the user is looking at, which never lands on the deck.
+    var viewingSessionID: UUID?
+    /// Per project, what a new session there will run with and its access,
+    /// as picked in the model sheet before it starts.
+    var draftChoices: [UUID: ModelChoice] = [:]
+    var draftAccess: [UUID: RuntimeMode] = [:]
+
+    @ObservationIgnored let client: DaemonClient
+    @ObservationIgnored var runtimes: [UUID: UUID] = [:]
     @ObservationIgnored private var supportsSteer: [UUID: Bool] = [:]
     @ObservationIgnored private var activityIDs: [UUID: [String: String]] = [:]
-    @ObservationIgnored private var binaryOverrides: [ProviderKind: String] = [:]
+    @ObservationIgnored var binaryOverrides: [ProviderKind: String] = [:]
     @ObservationIgnored private var disabledProviders: Set<ProviderKind> = []
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var savedPayload: PairingPayload?
@@ -124,6 +135,15 @@ final class AppModel {
         }
     }
 
+    /// Pairs from a scanned, pasted or opened `insulator://pair` link.
+    func pair(link: String) async {
+        do {
+            await connect(try PairingPayload(link: link), remember: true)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func disconnect(forget: Bool = false) {
         flushStreamDeltas()
         streamCommitTask?.cancel()
@@ -209,14 +229,17 @@ final class AppModel {
         reasoningEffort: String?,
         serviceTier: String?,
         contextWindow: String?,
-        agentPreset: String?
+        agentPreset: String?,
+        workspace: SessionWorkspace? = nil,
+        id: UUID = UUID()
     ) async throws -> AgentSession {
         let now = UInt64(Date().timeIntervalSince1970)
         let session = AgentSession(
-            id: UUID(),
+            id: id,
             title: "New thread",
             autoTitle: nil,
             projectID: project.id,
+            workspace: workspace,
             provider: provider,
             model: model?.id,
             runtimeMode: mode,
@@ -250,12 +273,12 @@ final class AppModel {
         return session
     }
 
-    func send(_ text: String, images: [UIImage] = []) async {
+    func send(_ text: String, images: [UIImage] = [], files: [PickedFile] = []) async {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty || !images.isEmpty, let session = selectedSession else { return }
+        guard !prompt.isEmpty || !images.isEmpty || !files.isEmpty, let session = selectedSession else { return }
         do {
             let runtimeID = try await ensureRuntime(for: session)
-            let attachments = try await upload(images: images)
+            let attachments = try await upload(images: images) + upload(files: files)
             guard let submission = Self.submission(prompt: prompt, attachments: attachments) else { return }
             let messageID = UUID()
             let turnID = UUID()
@@ -287,13 +310,18 @@ final class AppModel {
         }
     }
 
-    func steer(_ text: String, images: [UIImage] = []) async {
+    /// Whether a message mid-turn steers the running turn rather than waiting.
+    func canSteer(_ sessionID: UUID) -> Bool {
+        runtimes[sessionID] != nil && supportsSteer[sessionID] == true
+    }
+
+    func steer(_ text: String, images: [UIImage] = [], files: [PickedFile] = []) async {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let session = selectedSession,
               let runtimeID = runtimes[session.id],
               supportsSteer[session.id] == true else { return }
         do {
-            let attachments = try await upload(images: images)
+            let attachments = try await upload(images: images) + upload(files: files)
             guard let submission = Self.submission(prompt: prompt, attachments: attachments) else { return }
             _ = try await client.request(
                 sessionID: session.id,
@@ -354,6 +382,35 @@ final class AppModel {
         return attachments
     }
 
+    /// Imports picked files into the daemon's attachment store.
+    private func upload(files: [PickedFile]) async throws -> [MessageAttachment] {
+        var attachments: [MessageAttachment] = []
+        for file in files {
+            let payload = try await client.request(command: .object([
+                "type": .string("importAttachment"),
+                "name": .string(file.name),
+                "upload": .object([
+                    "kind": .string("file"),
+                    "data_base64": .string(file.data.base64EncodedString()),
+                ]),
+            ]))
+            guard let stored = payload["attachment"],
+                  let reference = stored["reference"]?.string,
+                  let path = stored["path"]?.string else {
+                throw ConnectionError.malformedResponse
+            }
+            attachments.append(MessageAttachment(
+                path: path,
+                mention: path,
+                name: stored["name"]?.string ?? file.name,
+                isDir: false,
+                isImage: false,
+                blobReference: reference
+            ))
+        }
+        return attachments
+    }
+
     /// Reads blob bytes the daemon owns. The transcript keeps only a reference,
     /// so this is the only way back to a picture the user sent earlier.
     private static func readBlobData(reference: String, using client: DaemonClient) async throws -> Data {
@@ -372,16 +429,26 @@ final class AppModel {
     }
 
     func cancel() async {
-        guard let session = selectedSession, let runtimeID = runtimes[session.id] else { return }
+        guard let session = selectedSession else { return }
         do {
-            _ = try await client.request(
-                sessionID: session.id,
-                runtimeID: runtimeID,
-                command: .object(["type": .string("cancel")])
-            )
+            try await stop(session.id)
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Stops a session's turn, on screen or not. A session started on the
+    /// desktop has no runtime known here until it is attached.
+    func stop(_ sessionID: UUID) async throws {
+        if runtimes[sessionID] == nil { try await attach(sessionID) }
+        guard let runtimeID = runtimes[sessionID] else {
+            throw ConnectionError.daemon("That session isn't running on the Mac anymore.")
+        }
+        _ = try await client.request(
+            sessionID: sessionID,
+            runtimeID: runtimeID,
+            command: .object(["type": .string("cancel")])
+        )
     }
 
     func respond(to permission: PendingPermission, option: PermissionOption) async {
@@ -804,10 +871,19 @@ final class AppModel {
             throw ConnectionError.malformedResponse
         }
         projects = try projectValues.map { try $0.decode(Project.self) }
-        sessions = try sessionValues
+        let loaded = try sessionValues
             .map { try $0.decode(AgentSession.self) }
             .filter { $0.title != "__removed__" }
             .sorted { ($0.lastReplyAt ?? $0.createdAt) > ($1.lastReplyAt ?? $1.createdAt) }
+        // The first load has nothing to compare against: what was already
+        // done before the phone looked isn't news.
+        if !sessions.isEmpty {
+            let before = Dictionary(sessions.map { ($0.id, $0.status) }, uniquingKeysWith: { first, _ in first })
+            for session in loaded where before[session.id]?.isBusy == true && !session.status.isBusy {
+                noteFinished(session)
+            }
+        }
+        sessions = loaded
 
         if let selected = selectedSession,
            let projection = sessions.first(where: { $0.id == selected.id }) {
@@ -869,7 +945,7 @@ final class AppModel {
         probes = loaded
     }
 
-    private func hydrate(_ sessionID: UUID) async throws {
+    func hydrate(_ sessionID: UUID) async throws {
         let payload = try await client.request(
             sessionID: sessionID,
             command: .object(["type": .string("hydrateSession"), "sessionId": .uuid(sessionID)])
@@ -890,7 +966,7 @@ final class AppModel {
         updateSelectedSession(session)
     }
 
-    private func attach(_ sessionID: UUID) async throws {
+    func attach(_ sessionID: UUID) async throws {
         let payload = try await client.request(
             sessionID: sessionID,
             command: .object(["type": .string("attachSession")])
@@ -921,7 +997,7 @@ final class AppModel {
                 "options": .object([
                     "provider": .string(session.provider.rawValue),
                     "binary": .string(binary),
-                    "cwd": .string(project.path),
+                    "cwd": .string(session.worktreePath ?? project.path),
                     "mode": .string(session.runtimeMode.rawValue),
                     "model": .optional(session.model),
                     "reasoningEffort": .optional(session.reasoningEffort),
@@ -955,6 +1031,48 @@ final class AppModel {
     }
 
     private func handleEvent(sessionID: UUID, runtimeID: UUID, kind: String, payload: JSONValue) {
+        let wasBusy = session(withID: sessionID)?.status.isBusy ?? false
+        if selectedSession?.id == sessionID {
+            applyEvent(sessionID: sessionID, runtimeID: runtimeID, kind: kind, payload: payload)
+        } else {
+            applyStatusEvent(sessionID: sessionID, kind: kind)
+        }
+        guard let after = session(withID: sessionID) else { return }
+        if wasBusy, !after.status.isBusy {
+            noteFinished(after)
+            SessionNotifier.finished(after)
+        } else if kind == "permission" {
+            SessionNotifier.needsInput(after)
+        }
+    }
+
+    /// A session off screen gets no transcript here, only its status, so the
+    /// working and finished pills stay current until the next catalog read.
+    private func applyStatusEvent(sessionID: UUID, kind: String) {
+        guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+        let status: SessionStatus? = switch kind {
+        case "promptSubmitted", "turnStarted", "connected": .working
+        case "permission", "turnParked": .waiting
+        case "turnFinished", "processExited": .idle
+        case "error": .failed
+        default: nil
+        }
+        guard let status, sessions[index].status != status else { return }
+        sessions[index].status = status
+        if !status.isBusy {
+            let now = UInt64(Date().timeIntervalSince1970)
+            sessions[index].lastReplyAt = now
+            sessions[index].updatedAt = now
+        }
+    }
+
+    func noteFinished(_ session: AgentSession) {
+        guard session.id != viewingSessionID else { return }
+        finished.removeAll { $0.sessionID == session.id }
+        finished.insert(FinishedSession(sessionID: session.id, projectID: session.projectID, at: UInt64(Date().timeIntervalSince1970)), at: 0)
+    }
+
+    private func applyEvent(sessionID: UUID, runtimeID: UUID, kind: String, payload: JSONValue) {
         switch kind {
         case "promptSubmitted":
             guard var session = selectedSession, session.id == sessionID else { return }
@@ -1271,7 +1389,7 @@ final class AppModel {
         )
     }
 
-    private func updateSession(_ sessionID: UUID, mutation: (inout AgentSession) -> Void) {
+    func updateSession(_ sessionID: UUID, mutation: (inout AgentSession) -> Void) {
         guard var session = selectedSession, session.id == sessionID else { return }
         mutation(&session)
         updateSelectedSession(session)
@@ -1293,14 +1411,14 @@ final class AppModel {
         }
     }
 
-    private func session(withID sessionID: UUID) -> AgentSession? {
+    func session(withID sessionID: UUID) -> AgentSession? {
         if let selectedSession, selectedSession.id == sessionID {
             return selectedSession
         }
         return sessions.first { $0.id == sessionID }
     }
 
-    private func saveSession(_ sessionID: UUID) async throws {
+    func saveSession(_ sessionID: UUID) async throws {
         guard let session = session(withID: sessionID) else { return }
         _ = try await client.request(command: .object([
             "type": .string("saveTaskState"),
@@ -1326,7 +1444,7 @@ final class AppModel {
         }
     }
 
-    private func replaceInSessionList(_ session: AgentSession) {
+    func replaceInSessionList(_ session: AgentSession) {
         if let index = sessions.firstIndex(where: { $0.id == session.id }) {
             sessions[index] = session
         } else {

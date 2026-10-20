@@ -38,6 +38,7 @@ mod driver;
 pub mod haptics;
 mod input;
 mod md;
+mod pairing;
 mod platform;
 mod query;
 mod review_diff;

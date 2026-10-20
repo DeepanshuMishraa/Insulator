@@ -59,3 +59,51 @@ pub struct CreatedWorktree {
     pub path: PathBuf,
     pub branch: String,
 }
+
+/// How a changed file differs from `HEAD`, as `git status` letters it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum FileChangeStatus {
+    Modified,
+    Added,
+    Deleted,
+    Untracked,
+}
+
+/// One uncommitted file. A partly staged file has both `staged` and
+/// `unstaged` set; its counts cover both halves.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct FileChange {
+    pub path: String,
+    pub status: FileChangeStatus,
+    pub staged: bool,
+    pub unstaged: bool,
+    pub additions: u64,
+    pub deletions: u64,
+}
+
+/// A working copy's uncommitted files and where its branch stands against
+/// its upstream and the default branch.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct WorkingTreeStatus {
+    pub branch: String,
+    pub default_branch: Option<String>,
+    pub has_remote: bool,
+    pub upstream: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+    /// Commits on this branch that the default branch does not have.
+    pub ahead_of_default: u32,
+    pub files: Vec<FileChange>,
+}
+
+/// A checkout of the repository, as `git worktree list` reports it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct WorktreeEntry {
+    #[ts(type = "string")]
+    pub path: PathBuf,
+    /// `None` for a detached HEAD.
+    pub branch: Option<String>,
+    /// The repository's main checkout rather than a linked worktree.
+    pub is_main: bool,
+}

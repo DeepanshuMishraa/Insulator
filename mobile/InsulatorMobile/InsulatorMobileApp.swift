@@ -12,7 +12,7 @@ struct InsulatorMobileApp: App {
             ContentView()
                 .environment(appearance)
                 .font(AppTheme.font(.body))
-                .foregroundStyle(AppTheme.primary)
+                .foregroundStyle(AppTheme.content)
                 .tint(AppTheme.accent)
         }
     }

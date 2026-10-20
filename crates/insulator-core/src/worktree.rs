@@ -15,7 +15,7 @@ const DEFAULT_SLUG: &str = "new-worktree";
 const MAX_SLUG_BYTES: usize = 48;
 const MAX_CANDIDATES: usize = 100;
 
-pub use insulator_protocol::git::CreatedWorktree;
+pub use insulator_protocol::git::{CreatedWorktree, WorktreeEntry};
 
 pub fn create(
     project_path: &Path,
@@ -215,6 +215,43 @@ fn command_error(output: &Output) -> String {
     }
 }
 
+/// Every checkout of the repository at `cwd`, the main one first.
+pub fn list(cwd: &Path) -> anyhow::Result<Vec<WorktreeEntry>> {
+    Ok(parse_worktree_list(&git_stdout(
+        cwd,
+        &["worktree", "list", "--porcelain"],
+    )?))
+}
+
+fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeEntry> {
+    porcelain
+        .split("\n\n")
+        .filter_map(|record| {
+            let mut path = None;
+            let mut branch = None;
+            for line in record.lines() {
+                if let Some(value) = line.strip_prefix("worktree ") {
+                    path = Some(PathBuf::from(value));
+                } else if let Some(value) = line.strip_prefix("branch ") {
+                    branch = Some(
+                        value
+                            .strip_prefix("refs/heads/")
+                            .unwrap_or(value)
+                            .to_owned(),
+                    );
+                }
+            }
+            Some((path?, branch))
+        })
+        .enumerate()
+        .map(|(index, (path, branch))| WorktreeEntry {
+            path,
+            branch,
+            is_main: index == 0,
+        })
+        .collect()
+}
+
 fn candidate_name(slug: &str, index: usize) -> String {
     if index == 0 {
         slug.to_owned()
@@ -250,6 +287,35 @@ mod tests {
             .output()
             .unwrap();
         assert!(output.status.success(), "{}", command_error(&output));
+    }
+
+    #[test]
+    fn parses_worktree_list_porcelain() {
+        let listed = parse_worktree_list(
+            "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\n\
+             worktree /home/u/.insulator/worktrees/fix\nHEAD def\nbranch refs/heads/fix-bug\n\n\
+             worktree /tmp/detached\nHEAD 123\ndetached\n",
+        );
+        assert_eq!(
+            listed,
+            vec![
+                WorktreeEntry {
+                    path: PathBuf::from("/repo"),
+                    branch: Some("main".to_owned()),
+                    is_main: true,
+                },
+                WorktreeEntry {
+                    path: PathBuf::from("/home/u/.insulator/worktrees/fix"),
+                    branch: Some("fix-bug".to_owned()),
+                    is_main: false,
+                },
+                WorktreeEntry {
+                    path: PathBuf::from("/tmp/detached"),
+                    branch: None,
+                    is_main: false,
+                },
+            ]
+        );
     }
 
     #[test]

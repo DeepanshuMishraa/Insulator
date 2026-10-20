@@ -16,6 +16,12 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+### Added
+
+- Pair Insulator Mobile by scanning a QR code or pasting a link from Settings → Daemon
+- Redesign Insulator Mobile: swipe between a new session and a project's sessions, follow working and finished sessions from pills above the composer, and read turns with their work folded behind one line
+- Stage, commit, push and open pull requests from Insulator Mobile, start sessions in a new or existing worktree, dictate messages, and attach files
+
 ## [0.1.11]
 
 ### Added
