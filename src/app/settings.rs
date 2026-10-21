@@ -2160,6 +2160,56 @@ impl Insulator {
                     .child(window_style_selector),
             )
             .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+            .when(selected_window_style == WindowStyle::LiquidGlass, |element| {
+                element.child(
+                    div()
+                        .w_full()
+                        .min_h(px(72.0))
+                        .px(px(20.0))
+                        .py(px(12.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(24.0))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .text_size(sp(13.5))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.text)
+                                        .child("Glass level"),
+                                )
+                                .child(
+                                    div()
+                                        .mt(px(5.0))
+                                        .text_size(sp(12.5))
+                                        .line_height(sp(18.0))
+                                        .text_color(theme.text_secondary)
+                                        .child("From frosted to clear glass."),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .w(px(220.0))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.0))
+                                .child(Slider::new(&self.glass_level_slider).width(px(170.0)))
+                                .child(
+                                    div()
+                                        .w(px(40.0))
+                                        .text_size(sp(12.5))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.text_secondary)
+                                        .text_right()
+                                        .child(format!("{:.0}%", self.state.glass_level)),
+                                ),
+                        ),
+                )
+            })
             .when(
                 selected_window_style != WindowStyle::LiquidGlass,
                 |element| {
@@ -3659,6 +3709,27 @@ impl Insulator {
         );
         self.save();
         self.sync_sim_appearance(cx);
+        cx.notify();
+    }
+
+    pub(super) fn set_glass_level(&mut self, level: f32, cx: &mut Context<Self>) {
+        let level = insulator_client::persistence::sanitized_glass_level(level);
+        if (self.state.glass_level - level).abs() < f32::EPSILON {
+            return;
+        }
+        self.state.glass_level = level;
+        crate::theme::set_glass_level(level);
+        crate::theme::update_active_theme(
+            self.state.theme,
+            self.state.color_theme,
+            self.state.accent_color,
+            self.state.window_style,
+            self.state.sidebar_transparency,
+            cx,
+        );
+        let backdrop = Theme::from_color_theme(self.state.color_theme);
+        crate::platform::set_liquid_glass_tint(backdrop.surface, backdrop.is_dark);
+        cx.refresh_windows();
         cx.notify();
     }
 

@@ -271,6 +271,9 @@ pub struct AppSettings {
     /// Corner rounding, 0 (square) to 100 (twice the authored radii).
     #[serde(default)]
     pub corner_rounding: f32,
+    /// Liquid Glass see-through, 0 (frosted) to 100 (clear); 50 is the default look.
+    #[serde(default = "default_glass_level")]
+    pub glass_level: f32,
     #[serde(default)]
     pub window_style: WindowStyle,
     #[serde(default = "default_sidebar_transparency")]
@@ -326,6 +329,7 @@ impl Default for AppSettings {
             color_theme: ColorTheme::default(),
             accent_color: AccentColor::default(),
             corner_rounding: 0.0,
+            glass_level: DEFAULT_GLASS_LEVEL,
             window_style: WindowStyle::default(),
             sidebar_transparency: DEFAULT_SIDEBAR_TRANSPARENCY,
             sidebar_transparency_customized: false,
@@ -353,6 +357,19 @@ pub const DEFAULT_CODE_FONT_SIZE: f32 = 13.0;
 pub const DEFAULT_UI_FONT_FAMILY: &str = ".SystemUIFont";
 pub const DEFAULT_CODE_FONT_FAMILY: &str = "JetBrains Mono";
 pub const DEFAULT_SIDEBAR_TRANSPARENCY: f32 = 25.0;
+pub const DEFAULT_GLASS_LEVEL: f32 = 50.0;
+
+fn default_glass_level() -> f32 {
+    DEFAULT_GLASS_LEVEL
+}
+
+pub fn sanitized_glass_level(level: f32) -> f32 {
+    if level.is_finite() {
+        level.clamp(0.0, 100.0)
+    } else {
+        DEFAULT_GLASS_LEVEL
+    }
+}
 
 pub fn default_sidebar_transparency_for(dark: bool, window_style: WindowStyle) -> f32 {
     if !dark {
@@ -499,6 +516,9 @@ pub struct PersistedState {
     /// Corner rounding, 0 (square) to 100 (twice the authored radii).
     #[serde(default)]
     pub corner_rounding: f32,
+    /// Liquid Glass see-through, 0 (frosted) to 100 (clear); 50 is the default look.
+    #[serde(default = "default_glass_level")]
+    pub glass_level: f32,
     #[serde(default)]
     pub window_style: WindowStyle,
     #[serde(default = "default_sidebar_transparency")]
@@ -617,6 +637,7 @@ impl PersistedState {
             color_theme: ColorTheme::default(),
             accent_color: AccentColor::default(),
             corner_rounding: 0.0,
+            glass_level: DEFAULT_GLASS_LEVEL,
             window_style: WindowStyle::default(),
             sidebar_transparency: DEFAULT_SIDEBAR_TRANSPARENCY,
             sidebar_transparency_customized: false,
@@ -762,6 +783,7 @@ impl PersistedState {
             color_theme: self.color_theme,
             accent_color: self.accent_color,
             corner_rounding: self.corner_rounding,
+            glass_level: self.glass_level,
             window_style: self.window_style,
             sidebar_transparency: self.sidebar_transparency,
             sidebar_transparency_customized: self.sidebar_transparency_customized,
@@ -820,6 +842,7 @@ impl PersistedState {
         self.color_theme = settings.color_theme;
         self.accent_color = settings.accent_color;
         self.corner_rounding = settings.corner_rounding.clamp(0.0, 100.0);
+        self.glass_level = sanitized_glass_level(settings.glass_level);
         self.window_style = settings.window_style;
         self.sidebar_transparency_customized = settings.sidebar_transparency_customized;
         let dark = match settings.theme {

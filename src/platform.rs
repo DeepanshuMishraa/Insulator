@@ -841,6 +841,34 @@ pub fn set_sidebar_material_transparency(sidebar_color: Hsla, sidebar_transparen
 #[cfg(not(target_os = "macos"))]
 pub fn set_sidebar_material_transparency(_: Hsla, _: f32) {}
 
+/// Re-tint the Liquid Glass backdrop after the glass level changes. A no-op
+/// outside Liquid Glass, where the view is hidden.
+#[cfg(target_os = "macos")]
+pub fn set_liquid_glass_tint(surface: Hsla, dark: bool) {
+    use objc2::msg_send;
+    use objc2_app_kit::NSColor;
+
+    let rgb = surface.to_rgb();
+    let tint = NSColor::colorWithSRGBRed_green_blue_alpha(
+        f64::from(rgb.r),
+        f64::from(rgb.g),
+        f64::from(rgb.b),
+        f64::from(crate::theme::liquid_glass_tint_alpha(dark)),
+    );
+    let has_glass_class = objc2::runtime::AnyClass::get(c"NSGlassView").is_some();
+    LIQUID_GLASS_VIEW.with_borrow(|slot| {
+        let Some(view) = slot.as_ref() else { return };
+        if has_glass_class {
+            let _: () = unsafe { msg_send![&**view, setTintColor: &*tint] };
+        } else if let Some(layer) = view.layer() {
+            layer.setBackgroundColor(Some(&tint.CGColor()));
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn set_liquid_glass_tint(_: Hsla, _: bool) {}
+
 thread_local! {
     #[cfg(target_os = "macos")]
     static LIQUID_GLASS_VIEW: std::cell::RefCell<Option<objc2::rc::Retained<objc2_app_kit::NSView>>> =
@@ -927,7 +955,7 @@ unsafe fn apply_native_window_style(
                 }
             }
 
-            let alpha = if active_theme.is_dark { 0.45 } else { 0.35 };
+            let alpha = f64::from(crate::theme::liquid_glass_tint_alpha(active_theme.is_dark));
             let tint_color = NSColor::colorWithSRGBRed_green_blue_alpha(
                 f64::from(rgb.r),
                 f64::from(rgb.g),

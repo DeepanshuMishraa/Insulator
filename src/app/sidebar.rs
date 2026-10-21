@@ -1372,14 +1372,7 @@ impl Insulator {
                     .child(self.render_sidebar_pull_requests(cx))
                     .child(self.render_sidebar_search(cx)),
             )
-            .child(
-                div()
-                    .mx(px(10.0))
-                    .mt(px(8.0))
-                    .mb(px(6.0))
-                    .h(px(1.0))
-                    .bg(theme.border),
-            )
+            .child(div().h(px(15.0)).flex_none())
             .child(
                 div()
                     .id("sidebar-scroll")
@@ -2687,8 +2680,6 @@ impl Insulator {
             .flex()
             .items_center()
             .gap(px(8.0))
-            .border_b_1()
-            .border_color(theme.border)
             .children(left_window_controls)
             // The header starts where the sidebar ends, so until the sidebar
             // is wide enough to host the traffic lights itself the header has

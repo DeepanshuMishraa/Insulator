@@ -63,6 +63,30 @@ pub fn radius(value: f32) -> Pixels {
     px(value * corner_scale())
 }
 
+/// Liquid Glass see-through, 0 to 100, stored as `f32` bits. 50 is the
+/// authored look.
+static GLASS_LEVEL: AtomicU32 = AtomicU32::new(0x4248_0000); // 50.0
+
+pub fn set_glass_level(level: f32) {
+    GLASS_LEVEL.store(
+        insulator_client::persistence::sanitized_glass_level(level).to_bits(),
+        Ordering::Relaxed,
+    );
+}
+
+/// Multiplier for Liquid Glass tint and surface opacity: 2 at level 0, 1 at
+/// the default 50, 0 at 100. Callers clamp the product to 1.
+pub fn glass_opacity_factor() -> f32 {
+    let level = f32::from_bits(GLASS_LEVEL.load(Ordering::Relaxed));
+    (1.0 - level / 100.0) * 2.0
+}
+
+/// Opacity of the native glass tint behind the window.
+pub fn liquid_glass_tint_alpha(dark: bool) -> f32 {
+    let base = if dark { 0.45 } else { 0.35 };
+    (base * glass_opacity_factor()).min(1.0)
+}
+
 fn resolves_to_dark(preference: ThemePreference, system_appearance: WindowAppearance) -> bool {
     match preference {
         ThemePreference::System => matches!(
@@ -472,11 +496,12 @@ impl Theme {
     pub fn for_window_style(mut self, style: WindowStyle, transparency: f32) -> Self {
         match style {
             WindowStyle::LiquidGlass => {
-                let alpha_raised = if self.is_dark { 0.22 } else { 0.32 };
-                let alpha_composer = if self.is_dark { 0.26 } else { 0.38 };
-                let alpha_inset = if self.is_dark { 0.20 } else { 0.28 };
-                let alpha_surface = if self.is_dark { 0.16 } else { 0.25 };
-                let alpha_canvas = if self.is_dark { 0.10 } else { 0.18 };
+                let glass = |alpha: f32| (alpha * glass_opacity_factor()).min(1.0);
+                let alpha_raised = glass(if self.is_dark { 0.22 } else { 0.32 });
+                let alpha_composer = glass(if self.is_dark { 0.26 } else { 0.38 });
+                let alpha_inset = glass(if self.is_dark { 0.20 } else { 0.28 });
+                let alpha_surface = glass(if self.is_dark { 0.16 } else { 0.25 });
+                let alpha_canvas = glass(if self.is_dark { 0.10 } else { 0.18 });
                 self.raised = Hsla {
                     a: alpha_raised,
                     ..self.raised
@@ -781,5 +806,18 @@ mod tests {
         set_corner_rounding(250.0);
         assert_eq!(radius(8.0), px(16.0));
         set_corner_rounding(0.0);
+    }
+
+    #[test]
+    fn glass_level_scales_tint_from_frosted_to_clear() {
+        set_glass_level(50.0);
+        assert!((liquid_glass_tint_alpha(true) - 0.45).abs() < 1e-6);
+        set_glass_level(100.0);
+        assert_eq!(liquid_glass_tint_alpha(true), 0.0);
+        set_glass_level(0.0);
+        assert!((liquid_glass_tint_alpha(true) - 0.9).abs() < 1e-6);
+        set_glass_level(f32::NAN);
+        assert!((liquid_glass_tint_alpha(false) - 0.35).abs() < 1e-6);
+        set_glass_level(50.0);
     }
 }

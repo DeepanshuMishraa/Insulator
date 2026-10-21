@@ -1235,6 +1235,7 @@ pub struct Insulator {
     sound_volume_slider: Entity<SliderState>,
     sidebar_transparency_slider: Entity<SliderState>,
     corner_rounding_slider: Entity<SliderState>,
+    glass_level_slider: Entity<SliderState>,
     settings_focus: FocusHandle,
     /// Focus of last resort for the agent window. Key bindings and action
     /// handlers hang off the root element, so with nothing focused (or a focus
@@ -2293,6 +2294,7 @@ impl Insulator {
         crate::haptics::set_haptics_enabled(state.haptics_enabled);
         set_active_ui_font_family(state.ui_font_family.clone());
         crate::theme::set_corner_rounding(state.corner_rounding);
+        crate::theme::set_glass_level(state.glass_level);
         crate::md::render::set_active_mono_family(state.code_font_family.clone());
         // Chrome text is authored in `sp` rems against the default UI font
         // size, so the window's rem size *is* the UI font size setting.
@@ -2371,6 +2373,13 @@ impl Insulator {
                 .min(0.0)
                 .max(100.0)
                 .default_value(state.sidebar_transparency)
+                .step(1.0)
+        });
+        let glass_level_slider = cx.new(|_| {
+            SliderState::new()
+                .min(0.0)
+                .max(100.0)
+                .default_value(state.glass_level)
                 .step(1.0)
         });
         let corner_rounding_slider = cx.new(|_| {
@@ -2964,6 +2973,16 @@ impl Insulator {
             )
             .detach();
             cx.subscribe(
+                &glass_level_slider,
+                |this: &mut Self, _, event: &SliderEvent, cx| match event {
+                    SliderEvent::Change(value) => {
+                        this.set_glass_level(value.start(), cx);
+                    }
+                    SliderEvent::Release(_) => this.save(),
+                },
+            )
+            .detach();
+            cx.subscribe(
                 &corner_rounding_slider,
                 |this: &mut Self, _, event: &SliderEvent, cx| match event {
                     SliderEvent::Change(value) => {
@@ -3294,6 +3313,7 @@ impl Insulator {
                 sound_volume_slider,
                 sidebar_transparency_slider,
                 corner_rounding_slider,
+                glass_level_slider,
                 settings_focus,
                 app_focus,
                 window_style_restart_dialog: None,
