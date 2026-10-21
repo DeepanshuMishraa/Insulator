@@ -16,6 +16,23 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.13]
+
+### Added
+
+- Merge pull requests from the PR panel with merge, squash and merge, or rebase and merge
+- Choose an accent color, set corner rounding from square to fully rounded, and set the glass level in Liquid Glass mode from Settings → Appearance
+- Pick from more fonts in Insulator Mobile, grouped into sans, serif, and mono, including Geist Mono, Inter, Newsreader, and Lora; the chosen font now applies across the whole app
+
+### Changed
+
+- Refresh the desktop design: a deeper, quieter palette, a darker sidebar, square corners by default, and fewer borders and filled cards
+- Make opening a pull request faster
+
+### Removed
+
+- Remove terminal mode; terminals stay available in the right panel
+
 ## [0.1.12]
 
 ### Added
