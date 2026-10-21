@@ -34,7 +34,7 @@ use gpui::{
 use gpui::{AsyncApp, ForegroundExecutor, WeakEntity};
 
 use crate::input::{InputEvent, TextInput};
-use crate::theme::{Theme, sp};
+use crate::theme::{Theme, radius, sp};
 use crate::ui::icon;
 use crate::ui::text_field::TextField;
 use crate::ui::tooltip::Tooltip;
@@ -2133,7 +2133,7 @@ impl BrowserView {
         let base = div()
             .id(id)
             .size(px(26.0))
-            .rounded(px(6.0))
+            .rounded(radius(6.0))
             .flex_none()
             .flex()
             .items_center()

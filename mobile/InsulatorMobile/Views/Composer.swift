@@ -152,7 +152,7 @@ struct Composer: View {
     private var field: some View {
         ZStack(alignment: .leading) {
             TextField(busy ? Self.busyPlaceholder : Self.placeholder, text: $text, axis: .vertical)
-                .font(.system(size: 17))
+                .font(AppTheme.font(size: 17))
                 .foregroundStyle(AppTheme.content)
                 .lineLimit(expanded ? 2...7 : 1...1)
                 .focused($focused)
@@ -165,7 +165,7 @@ struct Composer: View {
                 HStack(spacing: 10) {
                     PulsingDot()
                     Text("Reconnecting to desktop")
-                        .font(.system(size: 15))
+                        .font(AppTheme.font(size: 15))
                         .foregroundStyle(AppTheme.muted)
                         .lineLimit(1)
                 }
@@ -252,7 +252,7 @@ struct Composer: View {
                 }
                 (Text(name).foregroundStyle(AppTheme.content).fontWeight(.medium)
                     + Text(effort.map { " \($0)" } ?? "").foregroundStyle(AppTheme.muted))
-                    .font(.system(size: 15))
+                    .font(AppTheme.font(size: 15))
                     .lineLimit(1)
                 IconView(.chevronDown, size: 14).foregroundStyle(AppTheme.muted)
             }
@@ -282,7 +282,7 @@ struct Composer: View {
                     HStack(spacing: 6) {
                         IconView(.fileText, size: 18).foregroundStyle(AppTheme.muted)
                         Text(file.name)
-                            .font(.system(size: 13))
+                            .font(AppTheme.font(size: 13))
                             .foregroundStyle(AppTheme.content)
                             .lineLimit(1)
                     }
@@ -378,7 +378,7 @@ struct ComposerWorkspace: View {
         let content = HStack(spacing: 6) {
             IconView(current ? .folder : .branch, size: 14).foregroundStyle(AppTheme.muted)
             Text(value.label)
-                .font(.system(size: 13, weight: .medium))
+                .font(AppTheme.font(size: 13, weight: .medium))
                 .foregroundStyle(AppTheme.content)
                 .lineLimit(1)
                 .truncationMode(.middle)

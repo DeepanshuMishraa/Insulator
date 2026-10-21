@@ -1,4 +1,3 @@
-use super::terminal_mode::AgentAttention;
 use super::*;
 
 impl Insulator {
@@ -446,7 +445,6 @@ impl Insulator {
                     if let Some(session) = self.state.session_mut(session_id) {
                         session.status = SessionStatus::Waiting;
                     }
-                    self.note_agent_attention(session_id, AgentAttention::NeedsInput);
                 }
             }
             DriverEvent::UserInputRequested {
@@ -462,7 +460,6 @@ impl Insulator {
                     if let Some(session) = self.state.session_mut(session_id) {
                         session.status = SessionStatus::Waiting;
                     }
-                    self.note_agent_attention(session_id, AgentAttention::NeedsInput);
                 }
             }
             DriverEvent::PlanApproved => {
@@ -695,7 +692,6 @@ impl Insulator {
                 if success && self.state.sounds_enabled {
                     crate::audio::play_success();
                 }
-                self.note_agent_attention(session_id, AgentAttention::TurnFinished { success });
                 let task_notification = cx.active_window().is_none().then(|| {
                     self.state
                         .sessions

@@ -50,7 +50,13 @@
 	<array>
 		<string>Geist[wght].ttf</string>
 		<string>Geist-Italic[wght].ttf</string>
+		<string>GeistMono[wght].ttf</string>
 		<string>PaperMono[wght].ttf</string>
+		<string>Inter[opsz,wght].ttf</string>
+		<string>InstrumentSans[wdth,wght].ttf</string>
+		<string>Newsreader[opsz,wght].ttf</string>
+		<string>SourceSerif4[opsz,wght].ttf</string>
+		<string>Lora[wght].ttf</string>
 		<string>JetBrainsMono[wght].ttf</string>
 		<string>JetBrainsMono-Italic[wght].ttf</string>
 		<string>Manrope[wght].ttf</string>

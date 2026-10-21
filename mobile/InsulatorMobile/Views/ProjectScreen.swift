@@ -153,7 +153,7 @@ struct ProjectScreen: View {
             HStack(spacing: 8) {
                 PulsingDot()
                 Text("Reconnecting to desktop")
-                    .font(.system(size: 13))
+                    .font(AppTheme.font(size: 13))
                     .foregroundStyle(AppTheme.muted)
             }
             .frame(height: 22)
@@ -227,7 +227,7 @@ struct BranchLine: View {
             IconView(current ? .folder : .branch, size: 13)
                 .foregroundStyle(AppTheme.muted)
             Text(branch.isEmpty ? "No branch" : branch)
-                .font(.system(size: 13, weight: .medium))
+                .font(AppTheme.font(size: 13, weight: .medium))
                 .foregroundStyle(AppTheme.content)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -240,7 +240,7 @@ struct BranchLine: View {
                     .foregroundStyle(DiffTheme.deleteText)
             }
         }
-        .font(.system(size: 13, weight: .medium).monospacedDigit())
+        .font(AppTheme.font(size: 13, weight: .medium).monospacedDigit())
     }
 }
 
@@ -274,11 +274,11 @@ struct EmptySession: View {
                         .frame(width: 84, height: 84)
                         .opacity(0.3)
                     Text(Self.headline)
-                        .font(.system(size: 22, weight: .semibold))
+                        .font(AppTheme.font(size: 22, weight: .semibold))
                         .foregroundStyle(AppTheme.content)
                         .multilineTextAlignment(.center)
                     Text(project.name)
-                        .font(.system(size: 15, weight: .medium))
+                        .font(AppTheme.font(size: 15, weight: .medium))
                         .foregroundStyle(AppTheme.muted)
                         .lineLimit(1)
                         .padding(.top, -8)

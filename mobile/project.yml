@@ -7,6 +7,7 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
+    DEVELOPMENT_TEAM: YY5H9WM46P
 targets:
   InsulatorMobile:
     type: application
@@ -29,7 +30,13 @@ targets:
         UIAppFonts:
           - Geist[wght].ttf
           - Geist-Italic[wght].ttf
+          - GeistMono[wght].ttf
           - PaperMono[wght].ttf
+          - Inter[opsz,wght].ttf
+          - InstrumentSans[wdth,wght].ttf
+          - Newsreader[opsz,wght].ttf
+          - SourceSerif4[opsz,wght].ttf
+          - Lora[wght].ttf
           - JetBrainsMono[wght].ttf
           - JetBrainsMono-Italic[wght].ttf
           - Manrope[wght].ttf

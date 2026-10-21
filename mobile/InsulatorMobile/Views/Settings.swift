@@ -74,7 +74,7 @@ struct SettingsScreen: View {
 
                 if case .failed(let message) = app.connectionState {
                     Text(message)
-                        .font(.system(size: 14))
+                        .font(AppTheme.font(size: 14))
                         .foregroundStyle(AppTheme.deletions)
                         .padding(.top, 16)
                 }
@@ -105,11 +105,11 @@ struct SettingsScreen: View {
                 .foregroundStyle(app.isConnected ? AppTheme.content : AppTheme.muted)
             VStack(alignment: .leading, spacing: 2) {
                 Text(app.displayHost ?? "Your Mac")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(AppTheme.font(size: 17, weight: .semibold))
                     .foregroundStyle(AppTheme.content)
                     .lineLimit(1)
                 Text(app.isConnected ? "Connected to desktop" : "Desktop unavailable. Your workspace stays here.")
-                    .font(.system(size: 14))
+                    .font(AppTheme.font(size: 14))
                     .foregroundStyle(AppTheme.muted)
             }
             Spacer(minLength: 0)
@@ -145,7 +145,7 @@ struct SettingsHeading: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 15))
+            .font(AppTheme.font(size: 15))
             .foregroundStyle(AppTheme.muted)
             .padding(.top, 24)
             .padding(.bottom, 8)
@@ -159,7 +159,7 @@ struct SettingsNote: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 13))
+            .font(AppTheme.font(size: 13))
             .lineSpacing(3)
             .foregroundStyle(AppTheme.muted)
             .padding(.top, 8)
@@ -204,13 +204,13 @@ struct SettingsRow<Accessory: View, Leading: View>: View {
                     .padding(.trailing, 4)
             }
             Text(label)
-                .font(.system(size: 17))
+                .font(AppTheme.font(size: 17))
                 .foregroundStyle(tint)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if let value {
                 Text(value)
-                    .font(.system(size: 14))
+                    .font(AppTheme.font(size: 14))
                     .foregroundStyle(AppTheme.muted)
                     .lineLimit(1)
                     .padding(.trailing, 8)
@@ -291,7 +291,13 @@ struct AppearanceSettingsPage: View {
             SettingsHeading("Font")
             SettingsCard {
                 Picker("Font", selection: $appearance.font) {
-                    ForEach(AppFontChoice.allCases.filter(\.isAvailable)) { Text($0.name).tag($0) }
+                    ForEach(AppFontChoice.Kind.allCases, id: \.self) { kind in
+                        Section(kind.rawValue) {
+                            ForEach(AppFontChoice.allCases.filter { $0.kind == kind && $0.isAvailable }) {
+                                Text($0.name).tag($0)
+                            }
+                        }
+                    }
                 }
                 .pickerStyle(.menu)
                 .tint(AppTheme.muted)
@@ -354,7 +360,7 @@ private struct BackgroundSection: View {
                     } else if image == nil {
                         VStack(spacing: 8) {
                             IconView(.image, size: 26).foregroundStyle(AppTheme.muted)
-                            Text("Choose a photo").font(.system(size: 15)).foregroundStyle(AppTheme.muted)
+                            Text("Choose a photo").font(AppTheme.font(size: 15)).foregroundStyle(AppTheme.muted)
                         }
                     }
                 }
@@ -492,7 +498,7 @@ private struct ProviderModelsPage: View {
             }
             if shown.isEmpty {
                 Text(needle.isEmpty ? "No models from this provider yet." : "No models match.")
-                    .font(.system(size: 15))
+                    .font(AppTheme.font(size: 15))
                     .foregroundStyle(AppTheme.muted)
                     .frame(maxWidth: .infinity)
                     .padding(.top, 24)
@@ -547,8 +553,8 @@ private struct PermissionsPage: View {
                                 .frame(width: 36, height: 36)
                                 .padding(.trailing, 4)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(mode.label).font(.system(size: 17)).foregroundStyle(tint)
-                                Text(mode.hint).font(.system(size: 13)).foregroundStyle(AppTheme.muted)
+                                Text(mode.label).font(AppTheme.font(size: 17)).foregroundStyle(tint)
+                                Text(mode.hint).font(AppTheme.font(size: 13)).foregroundStyle(AppTheme.muted)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             if preferences.defaultAccess == mode {
@@ -584,7 +590,7 @@ private struct DesktopDefaultButton: View {
         } label: {
             HStack(spacing: 8) {
                 IconView(.computer, size: 18)
-                Text("Use desktop default").font(.system(size: 16, weight: .semibold))
+                Text("Use desktop default").font(AppTheme.font(size: 16, weight: .semibold))
             }
             .foregroundStyle(AppTheme.content)
             .frame(maxWidth: .infinity, minHeight: 50)
@@ -658,7 +664,7 @@ struct ProjectPicker: View {
                 }
                 if !needle.isEmpty, shown.isEmpty {
                     Text("No projects match.")
-                        .font(.system(size: 15))
+                        .font(AppTheme.font(size: 15))
                         .foregroundStyle(AppTheme.muted)
                         .frame(maxWidth: .infinity)
                         .padding(.top, 24)

@@ -135,18 +135,18 @@ private struct EmptyWorkspace: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             Text("Make yourself at home.")
-                .font(.system(size: 34, weight: .semibold))
+                .font(AppTheme.font(size: 34, weight: .semibold))
                 .foregroundStyle(AppTheme.content)
             Text(app.projects.isEmpty
                  ? "Add a project in Insulator on your Mac, and it shows up here."
                  : "Choose the projects you want on your phone.")
-                .font(.system(size: 16))
+                .font(AppTheme.font(size: 16))
                 .foregroundStyle(AppTheme.muted)
             Button {
                 router.sheet = .settings(projectID: nil)
             } label: {
                 Text("Open settings")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(AppTheme.font(size: 16, weight: .semibold))
                     .foregroundStyle(AppTheme.inverse)
                     .frame(maxWidth: .infinity, minHeight: 54)
                     .background(AppTheme.inverseSurface, in: Capsule())

@@ -75,7 +75,7 @@ struct SegmentedSwitch: View {
                     .foregroundStyle(AppTheme.content)
                     .opacity(0.5 + 0.5 * a)
                 Text(segment.label)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(AppTheme.font(size: 15, weight: .semibold))
                     .foregroundStyle(AppTheme.content)
                     .lineLimit(1)
                     .fixedSize()
@@ -97,7 +97,7 @@ struct SegmentedSwitch: View {
         ZStack {
             ForEach(segments.indices, id: \.self) { index in
                 Text(segments[index].label)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(AppTheme.font(size: 15, weight: .semibold))
                     .fixedSize()
                     .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
                         labelWidths[index] = min(120, ceil(width))

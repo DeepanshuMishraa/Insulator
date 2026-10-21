@@ -305,7 +305,7 @@ pub(super) fn render_message_footer(
         .id(SharedString::from(format!("copy-message-{message_id}")))
         .w(px(27.0))
         .h(px(27.0))
-        .rounded(px(8.0))
+        .rounded(radius(8.0))
         .flex()
         .items_center()
         .justify_center()
@@ -360,7 +360,7 @@ pub(super) fn render_message_footer(
                 .id(SharedString::from(format!("fork-response-{message_id}")))
                 .w(px(27.0))
                 .h(px(27.0))
-                .rounded(px(8.0))
+                .rounded(radius(8.0))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -402,7 +402,7 @@ pub(super) fn render_message_footer(
                 )))
                 .w(px(27.0))
                 .h(px(27.0))
-                .rounded(px(8.0))
+                .rounded(radius(8.0))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -498,7 +498,7 @@ fn render_sent_message_attachments(
             )))
             .w(px(96.0))
             .h(px(80.0))
-            .rounded(px(9.0))
+            .rounded(radius(9.0))
             .overflow_hidden()
             .border_1()
             .border_color(theme.border)
@@ -665,7 +665,7 @@ fn render_user_message_collapse_toggle(
         .tab_index(0)
         .h(px(26.0))
         .px(px(10.0))
-        .rounded(px(7.0))
+        .rounded(radius(7.0))
         .border_1()
         .border_color(theme.border)
         .bg(theme.overlay)
@@ -740,7 +740,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                 .w_full()
                 .flex()
                 .flex_col()
-                .items_end()
+                .items_start()
                 .gap(px(3.0))
                 .group(group_name.clone());
             if let Some(attachments) = render_sent_message_attachments(
@@ -763,7 +763,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                     div()
                         .w_full()
                         .max_w(px(540.0))
-                        .rounded(px(12.0))
+                        .rounded(radius(12.0))
                         .bg(theme.raised)
                         .pt(px(9.0))
                         .pb(px(8.0))
@@ -782,7 +782,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                                         )))
                                         .h(px(26.0))
                                         .px(px(10.0))
-                                        .rounded(px(7.0))
+                                        .rounded(radius(7.0))
                                         .border_1()
                                         .border_color(theme.border)
                                         .bg(theme.overlay)
@@ -806,7 +806,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                                         )))
                                         .h(px(26.0))
                                         .px(px(11.0))
-                                        .rounded(px(7.0))
+                                        .rounded(radius(7.0))
                                         .bg(if can_submit {
                                             theme.inverse
                                         } else {
@@ -842,12 +842,13 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                     let body = render_markdown_message_body(&content, markdown, theme, ctx);
                     column = column.child(
                         div()
-                            .max_w(px(540.0))
+                            .max_w(px(640.0))
                             .min_w_0()
-                            .rounded(px(12.0))
-                            .bg(theme.raised)
-                            .px(px(12.0))
-                            .py(px(8.0))
+                            .border_l_2()
+                            .border_color(theme.accent)
+                            .pl(px(14.0))
+                            .pr(px(4.0))
+                            .py(px(4.0))
                             .text_size(sp(14.0))
                             .line_height(sp(20.0))
                             .child(body),
@@ -866,7 +867,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                     copied,
                     group_name,
                     false,
-                    true,
+                    false,
                     None,
                     user_message_action,
                     insulator.clone(),

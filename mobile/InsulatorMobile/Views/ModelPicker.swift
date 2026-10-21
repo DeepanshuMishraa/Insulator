@@ -81,15 +81,15 @@ struct ModelPicker: View {
                             ProviderLogo(provider: choice.provider, size: 20).foregroundStyle(AppTheme.content)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(model?.name ?? choice.modelID ?? "Desktop default")
-                                    .font(.system(size: 17, weight: .semibold))
+                                    .font(AppTheme.font(size: 17, weight: .semibold))
                                     .foregroundStyle(AppTheme.content)
                                 Text(summary(choice, model: model))
-                                    .font(.system(size: 13))
+                                    .font(AppTheme.font(size: 13))
                                     .foregroundStyle(access == .fullAccess ? AppTheme.caution : AppTheme.muted)
                             }
                             .lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            Text("Options").font(.system(size: 15)).foregroundStyle(AppTheme.muted)
+                            Text("Options").font(AppTheme.font(size: 15)).foregroundStyle(AppTheme.muted)
                             IconView(.chevronRight, size: 14).foregroundStyle(AppTheme.muted)
                         }
                         .padding(12)
@@ -101,7 +101,7 @@ struct ModelPicker: View {
             }
             if sections.isEmpty {
                 Text("No matching models.")
-                    .font(.system(size: 15))
+                    .font(AppTheme.font(size: 15))
                     .foregroundStyle(AppTheme.muted)
                     .frame(maxWidth: .infinity)
                     .padding(.top, 24)
@@ -137,7 +137,7 @@ struct ModelPicker: View {
 
     private func heading(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 13, weight: .semibold))
+            .font(AppTheme.font(size: 13, weight: .semibold))
             .foregroundStyle(AppTheme.muted)
             .padding(.horizontal, 12)
     }
@@ -157,11 +157,11 @@ struct ModelPicker: View {
                 HStack(spacing: 8) {
                     ProviderLogo(provider: provider, size: 18).foregroundStyle(AppTheme.content)
                     Text(provider.name)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(AppTheme.font(size: 15, weight: .semibold))
                         .foregroundStyle(AppTheme.content)
                     if !open {
                         Text("\(models.count)")
-                            .font(.system(size: 13).monospacedDigit())
+                            .font(AppTheme.font(size: 13).monospacedDigit())
                             .foregroundStyle(AppTheme.muted)
                     }
                     Spacer()
@@ -182,7 +182,7 @@ struct ModelPicker: View {
                 Rectangle().fill(AppTheme.stroke).frame(height: 0.5).padding(.horizontal, 4)
                 if models.isEmpty {
                     Text("No models from this provider yet.")
-                        .font(.system(size: 15))
+                        .font(AppTheme.font(size: 15))
                         .foregroundStyle(AppTheme.muted)
                         .padding(.vertical, 12)
                         .padding(.horizontal, 4)
@@ -215,12 +215,12 @@ struct ModelPicker: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 8) {
                         Text(entry.name)
-                            .font(.system(size: 16, weight: selected ? .semibold : .regular))
+                            .font(AppTheme.font(size: 16, weight: selected ? .semibold : .regular))
                             .foregroundStyle(AppTheme.content)
                             .lineLimit(1)
                         if isDefault {
                             Text("Default")
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(AppTheme.font(size: 12, weight: .semibold))
                                 .foregroundStyle(AppTheme.accent)
                                 .padding(.horizontal, 7)
                                 .padding(.vertical, 2)
@@ -228,7 +228,7 @@ struct ModelPicker: View {
                         }
                     }
                     if let sub = entry.subProvider {
-                        Text(sub).font(.system(size: 13)).foregroundStyle(AppTheme.muted).lineLimit(1)
+                        Text(sub).font(AppTheme.font(size: 13)).foregroundStyle(AppTheme.muted).lineLimit(1)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -271,12 +271,12 @@ private struct AccountCard: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Text(usage?.planLabel ?? "\(provider.name) on your Mac")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(AppTheme.font(size: 16, weight: .semibold))
                     .foregroundStyle(AppTheme.content)
                     .lineLimit(1)
                 if let warning {
                     Text(warning.label)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(AppTheme.font(size: 13, weight: .semibold))
                         .foregroundStyle(warning.color)
                 }
                 Spacer()
@@ -292,14 +292,14 @@ private struct AccountCard: View {
                 .accessibilityLabel("Refresh account usage")
             }
             if let error {
-                Text(error).font(.system(size: 13)).foregroundStyle(AppTheme.muted)
+                Text(error).font(AppTheme.font(size: 13)).foregroundStyle(AppTheme.muted)
             } else if let usage, !usage.windows.isEmpty {
                 ForEach(usage.windows, id: \.label) { window in
                     UsageMeter(window: window)
                 }
             } else if !loading {
                 Text("Usage isn't reported for this provider. Add accounts in desktop Settings → Accounts.")
-                    .font(.system(size: 13))
+                    .font(AppTheme.font(size: 13))
                     .foregroundStyle(AppTheme.muted)
             }
         }
@@ -333,7 +333,7 @@ private struct UsageMeter: View {
                     .monospacedDigit()
                     .foregroundStyle(percent >= 80 ? AppTheme.caution : AppTheme.muted)
             }
-            .font(.system(size: 13))
+            .font(AppTheme.font(size: 13))
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
                     Capsule().fill(AppTheme.content.opacity(0.1))
@@ -374,8 +374,8 @@ struct ModelOptions: View {
                         HStack(spacing: 12) {
                             IconView(.automation, size: 18).foregroundStyle(AppTheme.content)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Fast mode").font(.system(size: 16)).foregroundStyle(AppTheme.content)
-                                Text("Quicker replies, at a higher cost.").font(.system(size: 13)).foregroundStyle(AppTheme.muted)
+                                Text("Fast mode").font(AppTheme.font(size: 16)).foregroundStyle(AppTheme.content)
+                                Text("Quicker replies, at a higher cost.").font(AppTheme.font(size: 13)).foregroundStyle(AppTheme.muted)
                             }
                             Spacer()
                             Toggle("Fast mode", isOn: Binding(
@@ -449,7 +449,7 @@ struct OptionList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(AppTheme.font(size: 13, weight: .semibold))
                 .foregroundStyle(AppTheme.muted)
                 .padding(.horizontal, 4)
             VStack(spacing: 0) {
@@ -468,10 +468,10 @@ struct OptionList: View {
                             }
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(entry.label)
-                                    .font(.system(size: 16, weight: selected ? .semibold : .regular))
+                                    .font(AppTheme.font(size: 16, weight: selected ? .semibold : .regular))
                                     .foregroundStyle(tone)
                                 if let hint = entry.hint {
-                                    Text(hint).font(.system(size: 13)).foregroundStyle(AppTheme.muted)
+                                    Text(hint).font(AppTheme.font(size: 13)).foregroundStyle(AppTheme.muted)
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -509,10 +509,10 @@ struct EffortControl: View {
         let hot = isHotEffort(options[safe: shown]?.id)
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(label).font(.system(size: 16)).foregroundStyle(AppTheme.content)
+                Text(label).font(AppTheme.font(size: 16)).foregroundStyle(AppTheme.content)
                 Spacer()
                 Text(options[safe: shown]?.label ?? "")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(AppTheme.font(size: 15, weight: .semibold))
                     .foregroundStyle(hot ? AppTheme.caution : AppTheme.accent)
             }
             if options.count > 1 {

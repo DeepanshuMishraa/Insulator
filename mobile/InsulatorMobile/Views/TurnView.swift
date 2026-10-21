@@ -71,12 +71,12 @@ private struct UserBubble: View {
             VStack(alignment: .leading, spacing: 4) {
                 if !message.attachments.isEmpty {
                     Text(message.attachments.count == 1 ? "1 attachment" : "\(message.attachments.count) attachments")
-                        .font(.system(size: 13))
+                        .font(AppTheme.font(size: 13))
                         .foregroundStyle(AppTheme.muted)
                 }
                 if !text.isEmpty {
                     Text(text)
-                        .font(.system(size: 16))
+                        .font(AppTheme.font(size: 16))
                         .lineSpacing(7)
                         .foregroundStyle(AppTheme.content)
                         .lineLimit(expanded ? nil : 4)
@@ -85,7 +85,7 @@ private struct UserBubble: View {
                 }
                 if text.count > 220 || text.filter({ $0 == "\n" }).count >= 4 {
                     Button(expanded ? "Show less" : "Show more") { expanded.toggle() }
-                        .font(.system(size: 13))
+                        .font(AppTheme.font(size: 13))
                         .foregroundStyle(AppTheme.content.opacity(0.6))
                 }
             }
@@ -96,7 +96,7 @@ private struct UserBubble: View {
                 in: RoundedRectangle(cornerRadius: singleLine && message.attachments.isEmpty ? 21 : 14, style: .continuous)
             )
             Text(Date(timeIntervalSince1970: TimeInterval(message.createdAt)), format: .dateTime.hour().minute())
-                .font(.system(size: 12))
+                .font(AppTheme.font(size: 12))
                 .foregroundStyle(AppTheme.content.opacity(0.4))
                 .padding(.horizontal, 12)
         }
@@ -135,11 +135,11 @@ private struct FoldLine: View {
                     .foregroundStyle(AppTheme.content.opacity(0.45))
                     if header.live {
                         TimelineView(.periodic(from: .now, by: 1)) { context in
-                            ShimmerText(text: liveLabel(at: context.date), font: .system(size: Layout.workText), color: AppTheme.content.opacity(0.5), duration: 1)
+                            ShimmerText(text: liveLabel(at: context.date), font: AppTheme.font(size: Layout.workText), color: AppTheme.content.opacity(0.5), duration: 1)
                         }
                     } else {
                         Text(TranscriptTurns.workingLabel(seconds: header.durationSeconds, model: header.model, done: true))
-                            .font(.system(size: Layout.workText))
+                            .font(AppTheme.font(size: Layout.workText))
                             .foregroundStyle(AppTheme.content.opacity(0.5))
                             .lineLimit(1)
                     }
@@ -256,10 +256,10 @@ private struct PhaseView: View {
                             .foregroundStyle(AppTheme.content.opacity(0.45))
                     }
                     if active {
-                        ShimmerText(text: phase.title, font: .system(size: Layout.workText), color: AppTheme.content.opacity(0.5))
+                        ShimmerText(text: phase.title, font: AppTheme.font(size: Layout.workText), color: AppTheme.content.opacity(0.5))
                     } else {
                         Text(phase.title)
-                            .font(.system(size: Layout.workText))
+                            .font(AppTheme.font(size: Layout.workText))
                             .foregroundStyle(AppTheme.content.opacity(0.5))
                             .lineLimit(1)
                     }
@@ -274,7 +274,7 @@ private struct PhaseView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
                         Text(step.label)
-                            .font(.system(size: Layout.workText))
+                            .font(AppTheme.font(size: Layout.workText))
                             .lineSpacing(Layout.workLine - Layout.workText * 1.2)
                             .foregroundStyle(step.failed ? AppTheme.deletions.opacity(0.8) : AppTheme.content.opacity(0.45))
                             .lineLimit(2)
@@ -313,7 +313,7 @@ private struct Notice: View {
             HStack(spacing: 12) {
                 IconView(.chat, size: 18).foregroundStyle(AppTheme.muted)
                 Text(text)
-                    .font(.system(size: 14, weight: .medium))
+                    .font(AppTheme.font(size: 14, weight: .medium))
                     .foregroundStyle(AppTheme.muted)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -325,7 +325,7 @@ private struct Notice: View {
             .padding(.vertical, 8)
         } else {
             Text(text)
-                .font(.system(size: 14))
+                .font(AppTheme.font(size: 14))
                 .foregroundStyle(AppTheme.content.opacity(0.5))
                 .padding(.horizontal, Layout.gutter)
                 .padding(.vertical, 8)
@@ -364,7 +364,7 @@ private struct TurnFooter: View {
                     Circle().fill(AppTheme.content.opacity(0.25)).frame(width: 3, height: 3)
                 }
                 Text(Date(timeIntervalSince1970: TimeInterval(completedAt)), format: .dateTime.hour().minute())
-                    .font(.system(size: 14))
+                    .font(AppTheme.font(size: 14))
                     .foregroundStyle(AppTheme.content.opacity(0.35))
             }
         }

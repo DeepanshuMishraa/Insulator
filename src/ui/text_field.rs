@@ -4,7 +4,7 @@ use gpui::{
 };
 
 use crate::input::TextInput;
-use crate::theme::{Theme, sp};
+use crate::theme::{Theme, radius, sp};
 
 use super::icon;
 
@@ -65,7 +65,7 @@ impl RenderOnce for TextField {
         self.base
             .h(px(28.0))
             .px(px(8.0))
-            .rounded(px(6.0))
+            .rounded(radius(6.0))
             .border_1()
             .border_color(if focused {
                 theme.accent

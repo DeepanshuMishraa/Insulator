@@ -78,7 +78,7 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
-use crate::theme::{Theme, sp};
+use crate::theme::{Theme, radius, sp};
 use crate::ui::icon;
 
 /// One row of a menu.
@@ -1030,7 +1030,7 @@ impl RenderOnce for MenuCard {
             .max_h(px(420.0))
             .overflow_y_scroll()
             .py(px(4.0))
-            .rounded(px(9.0))
+            .rounded(radius(9.0))
             .border_1()
             .border_color(theme.border_strong)
             .bg(theme.elevated)
@@ -1106,7 +1106,7 @@ impl RenderOnce for MenuCard {
                 .min_w(px(176.0))
                 .max_w(px(320.0))
                 .py(px(4.0))
-                .rounded(px(9.0))
+                .rounded(radius(9.0))
                 .border_1()
                 .border_color(theme.border_strong)
                 .bg(theme.elevated)
@@ -1335,7 +1335,7 @@ fn row(
         .mx(px(4.0))
         .px(px(8.0))
         .min_h(px(26.0))
-        .rounded(px(6.0))
+        .rounded(radius(6.0))
         .flex()
         .items_center()
         .gap(px(8.0))

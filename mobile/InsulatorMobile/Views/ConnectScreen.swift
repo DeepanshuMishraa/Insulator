@@ -29,7 +29,7 @@ struct ConnectScreen: View {
                         .fill(AppTheme.content)
                         .frame(width: 44, height: 44)
                     Text("Insulator")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(AppTheme.font(size: 15, weight: .semibold))
                         .foregroundStyle(AppTheme.content.opacity(0.8))
                 }
                 .padding(.top, 8)
@@ -37,13 +37,13 @@ struct ConnectScreen: View {
 
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Keep coding,\nwherever you are.")
-                        .font(.system(size: 38, weight: .bold))
+                        .font(AppTheme.font(size: 38, weight: .bold))
                         .lineSpacing(6)
                         .foregroundStyle(AppTheme.content)
                         .measured("title", into: $frames)
                     Text(app.rememberedHost.map { "Reconnect to \($0) to pick up your sessions where you left them." }
                         ?? "Pair this phone with Insulator on your Mac to pick up your sessions on the go.")
-                        .font(.system(size: 16))
+                        .font(AppTheme.font(size: 16))
                         .lineSpacing(7)
                         .foregroundStyle(AppTheme.content.opacity(0.78))
                         .frame(maxWidth: 320, alignment: .leading)
@@ -60,7 +60,7 @@ struct ConnectScreen: View {
                     }
                     if let error = cameraError ?? connectionError {
                         Text(error)
-                            .font(.system(size: 14))
+                            .font(AppTheme.font(size: 14))
                             .foregroundStyle(AppTheme.deletions)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.bottom, 4)
@@ -131,7 +131,7 @@ struct ConnectScreen: View {
     private func primaryButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 16, weight: .semibold))
+                .font(AppTheme.font(size: 16, weight: .semibold))
                 .foregroundStyle(AppTheme.inverse)
                 .frame(maxWidth: .infinity, minHeight: 54)
                 .contentShape(Capsule())
@@ -145,7 +145,7 @@ struct ConnectScreen: View {
     private func secondaryButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 16, weight: .semibold))
+                .font(AppTheme.font(size: 16, weight: .semibold))
                 .foregroundStyle(AppTheme.content)
                 .frame(maxWidth: .infinity, minHeight: 54)
                 .contentShape(Capsule())
@@ -181,19 +181,19 @@ struct PairingLinkSheet: View {
             VStack(alignment: .leading, spacing: 14) {
                 if manual {
                     Text("Enter the Tailscale address and token shown in Insulator Desktop under Settings → Daemon.")
-                        .font(.system(size: 15))
+                        .font(AppTheme.font(size: 15))
                         .foregroundStyle(AppTheme.muted)
                     field("100.x.x.x:port", text: $address, secure: false)
                     field("Daemon token", text: $token, secure: true)
                 } else {
                     Text("Copy the pairing link from Insulator Desktop under Settings → Daemon, with the token revealed, and paste it here.")
-                        .font(.system(size: 15))
+                        .font(AppTheme.font(size: 15))
                         .foregroundStyle(AppTheme.muted)
                     field("insulator://pair?…", text: $link, secure: false)
                     Button("Paste") {
                         link = UIPasteboard.general.string ?? link
                     }
-                    .font(.system(size: 15, weight: .medium))
+                    .font(AppTheme.font(size: 15, weight: .medium))
                     .tint(AppTheme.accent)
                 }
                 Spacer()
@@ -208,7 +208,7 @@ struct PairingLinkSheet: View {
                     }
                 } label: {
                     Text(app.connectionState == .connecting ? "Connecting…" : "Connect")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(AppTheme.font(size: 16, weight: .semibold))
                         .foregroundStyle(AppTheme.inverse)
                         .frame(maxWidth: .infinity, minHeight: 54)
                         .background(AppTheme.inverseSurface, in: Capsule())
@@ -217,7 +217,7 @@ struct PairingLinkSheet: View {
                 Button(manual ? "Use a pairing link instead" : "Enter address and token instead") {
                     withAnimation(.snappy) { manual.toggle() }
                 }
-                .font(.system(size: 15))
+                .font(AppTheme.font(size: 15))
                 .tint(AppTheme.accent)
                 .frame(maxWidth: .infinity)
             }
@@ -247,7 +247,7 @@ struct PairingLinkSheet: View {
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
         .focused($focused)
-        .font(.system(size: 16))
+        .font(AppTheme.font(size: 16))
         .padding(14)
         .background(AppTheme.content.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
@@ -264,11 +264,11 @@ struct ScannerScreen: View {
                 .ignoresSafeArea(edges: .top)
             VStack(spacing: 12) {
                 Text("Scan the code in Insulator Desktop under Settings → Daemon")
-                    .font(.system(size: 16))
+                    .font(AppTheme.font(size: 16))
                     .foregroundStyle(AppTheme.muted)
                     .multilineTextAlignment(.center)
                 Button("Cancel", action: onCancel)
-                    .font(.system(size: 16))
+                    .font(AppTheme.font(size: 16))
                     .tint(AppTheme.accent)
                     .padding(14)
             }

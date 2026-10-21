@@ -160,6 +160,87 @@ impl ColorTheme {
     }
 }
 
+/// Accent laid over the color theme. `Theme` keeps the palette's own accent.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccentColor {
+    #[default]
+    Theme,
+    Coral,
+    Orange,
+    Amber,
+    Lime,
+    Green,
+    Teal,
+    Cyan,
+    Blue,
+    Indigo,
+    Violet,
+    Pink,
+    Red,
+    Mono,
+}
+
+impl AccentColor {
+    pub const ALL: [Self; 14] = [
+        Self::Theme,
+        Self::Coral,
+        Self::Orange,
+        Self::Amber,
+        Self::Lime,
+        Self::Green,
+        Self::Teal,
+        Self::Cyan,
+        Self::Blue,
+        Self::Indigo,
+        Self::Violet,
+        Self::Pink,
+        Self::Red,
+        Self::Mono,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Theme => "Theme",
+            Self::Coral => "Coral",
+            Self::Orange => "Orange",
+            Self::Amber => "Amber",
+            Self::Lime => "Lime",
+            Self::Green => "Green",
+            Self::Teal => "Teal",
+            Self::Cyan => "Cyan",
+            Self::Blue => "Blue",
+            Self::Indigo => "Indigo",
+            Self::Violet => "Violet",
+            Self::Pink => "Pink",
+            Self::Red => "Red",
+            Self::Mono => "Mono",
+        }
+    }
+
+    /// The accent's RGB for a dark or light surface, or `None` to keep the
+    /// color theme's own.
+    pub fn rgb(self, dark: bool) -> Option<u32> {
+        let (on_dark, on_light) = match self {
+            Self::Theme => return None,
+            Self::Coral => (0xE2795B, 0xC85F44),
+            Self::Orange => (0xF08A3C, 0xC2560F),
+            Self::Amber => (0xE8B04A, 0xA16207),
+            Self::Lime => (0xA3D45A, 0x4D7C0F),
+            Self::Green => (0x5CC98A, 0x15803D),
+            Self::Teal => (0x4FC4B4, 0x0F766E),
+            Self::Cyan => (0x5CC8E8, 0x0E7490),
+            Self::Blue => (0x5B9CF5, 0x1D4ED8),
+            Self::Indigo => (0x8A90F5, 0x4338CA),
+            Self::Violet => (0xA98BF5, 0x6D28D9),
+            Self::Pink => (0xEC76B0, 0xBE185D),
+            Self::Red => (0xEE6B6B, 0xB91C1C),
+            Self::Mono => (0xE6E6E6, 0x1F1F1F),
+        };
+        Some(if dark { on_dark } else { on_light })
+    }
+}
+
 impl ThemePreference {
     pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
 

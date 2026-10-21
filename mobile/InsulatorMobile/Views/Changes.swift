@@ -32,7 +32,7 @@ struct ChangesScreen: View {
                         section("Changes", count: 0, loading: status == nil && error == nil, key: nil, action: nil) { EmptyView() }
                         if let error {
                             Text(error)
-                                .font(.system(size: 15))
+                                .font(AppTheme.font(size: 15))
                                 .foregroundStyle(AppTheme.muted)
                                 .padding(.horizontal, 16)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -67,9 +67,9 @@ struct ChangesScreen: View {
                 }
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 1) {
-                        Text("Changes").font(.system(size: 16, weight: .semibold)).foregroundStyle(AppTheme.content)
+                        Text("Changes").font(AppTheme.font(size: 16, weight: .semibold)).foregroundStyle(AppTheme.content)
                         Text(status?.branch ?? (target.cwd as NSString).lastPathComponent)
-                            .font(.system(size: 12))
+                            .font(AppTheme.font(size: 12))
                             .foregroundStyle(AppTheme.muted)
                             .lineLimit(1)
                     }
@@ -117,7 +117,7 @@ struct ChangesScreen: View {
                 HStack(spacing: 4) {
                     HStack(spacing: 8) {
                         Text(title.uppercased())
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(AppTheme.font(size: 13, weight: .semibold))
                             .tracking(0.6)
                             .foregroundStyle(AppTheme.muted)
                             .lineLimit(1)
@@ -125,7 +125,7 @@ struct ChangesScreen: View {
                             ProgressView().controlSize(.small)
                         } else {
                             Text(formatCount(count))
-                                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                                .font(AppTheme.font(size: 12, weight: .semibold).monospacedDigit())
                                 .foregroundStyle(count == 0 ? AppTheme.muted : .white)
                                 .padding(.horizontal, 7)
                                 .frame(minWidth: 24, minHeight: 20)
@@ -192,7 +192,7 @@ struct ChangesScreen: View {
                         IconView(action.icon, size: 18).foregroundStyle(AppTheme.content)
                     }
                     Text(action.label)
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(AppTheme.font(size: 17, weight: .semibold))
                         .foregroundStyle(AppTheme.content)
                 }
                 .padding(.trailing, 12)
@@ -297,7 +297,7 @@ private struct FileChangeRow: View {
                 HStack(spacing: 8) {
                     IconView(.fileText, size: 14).foregroundStyle(AppTheme.muted)
                     Text(file.name)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(AppTheme.font(size: 15, weight: .semibold))
                         .foregroundStyle(AppTheme.content)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -308,11 +308,11 @@ private struct FileChangeRow: View {
                         Text("-\(formatCount(file.deletions))").foregroundStyle(DiffTheme.deleteText)
                     }
                 }
-                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                .font(AppTheme.font(size: 13, weight: .semibold).monospacedDigit())
                 HStack(spacing: 8) {
                     IconView(.folder, size: 12).foregroundStyle(AppTheme.faint).frame(width: 14)
                     Text(file.directory)
-                        .font(.system(size: 12))
+                        .font(AppTheme.font(size: 12))
                         .foregroundStyle(AppTheme.muted)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -372,7 +372,7 @@ private struct CommitSheet: View {
                 VStack(alignment: .leading, spacing: 2) {
                     (Text(status?.branch ?? "Changes").foregroundStyle(AppTheme.content).fontWeight(.semibold)
                         + Text(counts.map { "  \($0)" } ?? "").foregroundStyle(AppTheme.muted))
-                        .font(.system(size: 16))
+                        .font(AppTheme.font(size: 16))
                     Group {
                         if hasFiles {
                             Text("\(formatCount(staged.count)) staged \(staged.count == 1 ? "file" : "files")  ").foregroundStyle(AppTheme.muted)
@@ -382,7 +382,7 @@ private struct CommitSheet: View {
                             Text(changed > 0 ? "Nothing staged" : "No uncommitted changes").foregroundStyle(AppTheme.muted)
                         }
                     }
-                    .font(.system(size: 13))
+                    .font(AppTheme.font(size: 13))
                 }
                 .lineLimit(1)
             }
@@ -391,7 +391,7 @@ private struct CommitSheet: View {
             ZStack(alignment: .bottomTrailing) {
                 TextField(hasFiles ? "Commit message" : "Nothing to commit", text: $message, axis: .vertical)
                     .lineLimit(3...4)
-                    .font(.system(size: 16))
+                    .font(AppTheme.font(size: 16))
                     .disabled(!hasFiles || busy != nil)
                     .padding(12)
                     .padding(.trailing, 40)
@@ -507,7 +507,7 @@ private struct CommitSheet: View {
                 } else {
                     IconView(icon, size: 18)
                 }
-                Text(label).font(.system(size: 16, weight: .semibold))
+                Text(label).font(AppTheme.font(size: 16, weight: .semibold))
             }
             .foregroundStyle(primary ? AppTheme.inverse : AppTheme.content)
             .padding(.trailing, 12)
@@ -533,7 +533,7 @@ struct DiffScreen: View {
                 CodeView(rows: lines.map(CodeRow.init(diff:)), wrap: wrap)
             } else {
                 Text("This diff is no longer available. Open it again from Changes.")
-                    .font(.system(size: 15))
+                    .font(AppTheme.font(size: 15))
                     .foregroundStyle(AppTheme.muted)
                     .padding(20)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -544,12 +544,12 @@ struct DiffScreen: View {
         .toolbar {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {
-                    Text(file.name).font(.system(size: 16, weight: .semibold)).foregroundStyle(AppTheme.content)
+                    Text(file.name).font(AppTheme.font(size: 16, weight: .semibold)).foregroundStyle(AppTheme.content)
                     (Text("\(file.status.letter) ").foregroundStyle(DiffTheme.status(file.status))
                         + Text("\(file.directory)  ").foregroundStyle(AppTheme.muted)
                         + Text(file.additions > 0 ? "+\(formatCount(file.additions)) " : "").foregroundStyle(DiffTheme.addText)
                         + Text(file.deletions > 0 ? "-\(formatCount(file.deletions))" : "").foregroundStyle(DiffTheme.deleteText))
-                        .font(.system(size: 12))
+                        .font(AppTheme.font(size: 12))
                         .lineLimit(1)
                 }
             }

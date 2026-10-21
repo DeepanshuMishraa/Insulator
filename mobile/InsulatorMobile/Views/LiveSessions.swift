@@ -70,7 +70,7 @@ private struct NowWorking: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Ticker(
                                 titles: working.map(\.displayTitle),
-                                font: .system(size: 16, weight: .semibold),
+                                font: AppTheme.font(size: 16, weight: .semibold),
                                 front: front
                             ) { active = $0 }
                             .foregroundStyle(AppTheme.content)
@@ -126,12 +126,12 @@ private struct NowWorking: View {
         return HStack(spacing: 6) {
             if !waiting {
                 TerminalSpinner()
-                    .font(.system(size: 13))
+                    .font(AppTheme.font(size: 13))
                     .foregroundStyle(AppTheme.accent)
                     .frame(width: 12)
             }
             Text(detail)
-                .font(.system(size: 13))
+                .font(AppTheme.font(size: 13))
                 .foregroundStyle(waiting ? AppTheme.caution : AppTheme.muted)
                 .lineLimit(1)
                 .id(detail)
@@ -143,7 +143,7 @@ private struct NowWorking: View {
                         .transition(.push(from: .bottom))
                     Text(" of \(working.count)")
                 }
-                .font(.system(size: 12).monospacedDigit())
+                .font(AppTheme.font(size: 12).monospacedDigit())
                 .foregroundStyle(AppTheme.faint)
                 .animation(.easeOut(duration: 0.24), value: index)
                 .accessibilityLabel("\(index + 1) of \(working.count)")
@@ -239,10 +239,10 @@ private struct MiniPill: View {
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.displayTitle)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(AppTheme.font(size: 14, weight: .semibold))
                         .foregroundStyle(AppTheme.content)
                     Text(detail)
-                        .font(.system(size: 12))
+                        .font(AppTheme.font(size: 12))
                         .foregroundStyle(waiting ? AppTheme.caution : AppTheme.muted)
                 }
                 .lineLimit(1)
@@ -314,14 +314,14 @@ private struct FinishedDeck: View {
                 if open {
                     HStack(spacing: 4) {
                         Text("Finished")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(AppTheme.font(size: 13, weight: .semibold))
                             .foregroundStyle(AppTheme.muted)
                         Spacer()
                         smallButton(label: "Clear finished sessions") {
                             Haptics.impact(.light)
                             app.finished.removeAll { entry in shown.contains { $0.0.id == entry.id } }
                         } content: {
-                            Text("Clear").font(.system(size: 12, weight: .semibold))
+                            Text("Clear").font(AppTheme.font(size: 12, weight: .semibold))
                         }
                         smallButton(label: "Stack finished sessions") {
                             withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { open = false }
@@ -375,20 +375,20 @@ private struct FinishedDeck: View {
                         .offset(x: 2, y: 2)
                 }
                 Text(session.displayTitle)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(AppTheme.font(size: 14, weight: .semibold))
                     .foregroundStyle(AppTheme.content)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if !open, count > 1 {
                     Text("+\(count - 1)")
-                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                        .font(AppTheme.font(size: 12, weight: .semibold).monospacedDigit())
                         .foregroundStyle(AppTheme.muted)
                         .padding(.horizontal, 8)
                         .frame(height: 22)
                         .background(AppTheme.fill, in: Capsule())
                 } else {
                     Text(relativeTime(entry.at))
-                        .font(.system(size: 12).monospacedDigit())
+                        .font(AppTheme.font(size: 12).monospacedDigit())
                         .foregroundStyle(AppTheme.faint)
                         .padding(.trailing, 6)
                 }

@@ -1,11 +1,13 @@
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{OnceLock, RwLock};
 
 use gpui::{
-    App, Context, Global, Hsla, Rems, Window, WindowAppearance, hsla, rems, rgb, transparent_black,
+    App, Context, Global, Hsla, Pixels, Rems, Window, WindowAppearance, hsla, px, rems, rgb,
+    transparent_black,
 };
 
 pub use insulator_client::theme::{ColorTheme, ThemePreference};
-pub use insulator_protocol::theme::WindowStyle;
+pub use insulator_protocol::theme::{AccentColor, WindowStyle};
 
 static ACTIVE_UI_FONT_FAMILY: OnceLock<RwLock<&'static str>> = OnceLock::new();
 
@@ -35,6 +37,30 @@ pub fn set_active_ui_font_family(family: String) {
 /// twice.
 pub fn sp(value: f32) -> Rems {
     rems(value / insulator_client::persistence::DEFAULT_UI_FONT_SIZE)
+}
+
+/// Corner rounding as a multiple of each element's authored radius, stored as
+/// `f32` bits. 0 draws square corners, 1 the authored design, 2 the most
+/// rounded; GPUI clamps a radius to half the element, so 2 never overdraws.
+static CORNER_SCALE: AtomicU32 = AtomicU32::new(0);
+
+/// Largest multiple of the authored radius the rounding setting reaches.
+pub const MAX_CORNER_SCALE: f32 = 2.0;
+
+pub fn corner_scale() -> f32 {
+    f32::from_bits(CORNER_SCALE.load(Ordering::Relaxed))
+}
+
+/// Set from the rounding setting, a percentage of [`MAX_CORNER_SCALE`].
+pub fn set_corner_rounding(percent: f32) {
+    let scale = percent.clamp(0.0, 100.0) / 100.0 * MAX_CORNER_SCALE;
+    CORNER_SCALE.store(scale.to_bits(), Ordering::Relaxed);
+}
+
+/// A corner radius authored at the design's default rounding, scaled by the
+/// user's rounding setting.
+pub fn radius(value: f32) -> Pixels {
+    px(value * corner_scale())
 }
 
 fn resolves_to_dark(preference: ThemePreference, system_appearance: WindowAppearance) -> bool {
@@ -309,32 +335,32 @@ impl Theme {
     pub fn dark() -> Self {
         Self {
             is_dark: true,
-            canvas: rgb(0x1A1A1A).into(),
+            canvas: rgb(0x111112).into(),
             sidebar: if cfg!(target_os = "macos") {
                 transparent_black()
             } else {
-                rgb(0x181818).into()
+                rgb(0x0C0C0D).into()
             },
-            sidebar_drag_background: rgb(0x181818).into(),
-            sidebar_item_background: hsla(0.0, 0.0, 0.941, 0.06),
-            surface: rgb(0x1A1A1A).into(),
-            raised: rgb(0x232323).into(),
-            elevated: rgb(0x232323).into(),
-            elevated_surface: rgb(0x1A1A1A).into(),
-            composer: rgb(0x212121).into(),
-            inset: rgb(0x151515).into(),
-            terminal: rgb(0x151515).into(),
-            overlay: hsla(220.0 / 360.0, 0.10, 0.90, 0.05),
-            overlay_strong: hsla(220.0 / 360.0, 0.10, 0.90, 0.09),
+            sidebar_drag_background: rgb(0x0C0C0D).into(),
+            sidebar_item_background: hsla(0.0, 0.0, 1.0, 0.045),
+            surface: rgb(0x111112).into(),
+            raised: rgb(0x19191A).into(),
+            elevated: rgb(0x1A1A1B).into(),
+            elevated_surface: rgb(0x141415).into(),
+            composer: rgb(0x151516).into(),
+            inset: rgb(0x0D0D0E).into(),
+            terminal: rgb(0x0D0D0E).into(),
+            overlay: hsla(0.0, 0.0, 1.0, 0.04),
+            overlay_strong: hsla(0.0, 0.0, 1.0, 0.075),
 
-            border: hsla(220.0 / 360.0, 0.10, 0.90, 0.07),
-            border_strong: hsla(220.0 / 360.0, 0.10, 0.90, 0.14),
-            sidebar_border: hsla(126.93 / 360.0, 0.000_000_1, 0.16077, 1.0),
+            border: hsla(0.0, 0.0, 1.0, 0.07),
+            border_strong: hsla(0.0, 0.0, 1.0, 0.13),
+            sidebar_border: hsla(0.0, 0.0, 1.0, 0.07),
 
-            text: rgb(0xE2E2E2).into(),
-            text_secondary: rgb(0xA3A3A3).into(),
-            text_tertiary: rgb(0x7D7D7D).into(),
-            text_ghost: rgb(0x575757).into(),
+            text: rgb(0xEDEDED).into(),
+            text_secondary: rgb(0x9C9C9C).into(),
+            text_tertiary: rgb(0x6F6F6F).into(),
+            text_ghost: rgb(0x4A4A4A).into(),
 
             accent: rgb(0xE2795B).into(),
             primary: rgb(0xE2795B).into(),
@@ -343,7 +369,7 @@ impl Theme {
 
             selection: hsla(211.0 / 360.0, 1.0, 0.50, 0.55),
             code_text: rgb(0xE0A882).into(),
-            code_wash: hsla(220.0 / 360.0, 0.10, 0.90, 0.08),
+            code_wash: hsla(0.0, 0.0, 1.0, 0.06),
 
             inverse: rgb(0xE7E9EC).into(),
             on_inverse: rgb(0x17181C).into(),
@@ -359,30 +385,30 @@ impl Theme {
     pub fn light() -> Self {
         Self {
             is_dark: false,
-            canvas: rgb(0xF6F5F6).into(),
+            canvas: rgb(0xFCFCFB).into(),
             sidebar: if cfg!(target_os = "macos") {
                 transparent_black()
             } else {
-                rgb(0xF3F3F3).into()
+                rgb(0xF2F2F1).into()
             },
-            sidebar_drag_background: rgb(0xF3F3F3).into(),
-            sidebar_item_background: hsla(0.0, 0.0, 0.078, 0.06),
-            surface: rgb(0xF6F5F6).into(),
-            raised: rgb(0xECECEC).into(),
-            elevated: rgb(0xECECEC).into(),
-            elevated_surface: rgb(0xF6F5F6).into(),
+            sidebar_drag_background: rgb(0xF2F2F1).into(),
+            sidebar_item_background: hsla(0.0, 0.0, 0.0, 0.05),
+            surface: rgb(0xFCFCFB).into(),
+            raised: rgb(0xF1F1F0).into(),
+            elevated: rgb(0xFFFFFF).into(),
+            elevated_surface: rgb(0xF7F7F6).into(),
             composer: rgb(0xFFFFFF).into(),
-            inset: rgb(0xE6E6E6).into(),
+            inset: rgb(0xEDEDEC).into(),
             terminal: rgb(0xFFFFFF).into(),
-            overlay: hsla(220.0 / 360.0, 0.10, 0.12, 0.05),
-            overlay_strong: hsla(220.0 / 360.0, 0.10, 0.12, 0.09),
+            overlay: hsla(0.0, 0.0, 0.0, 0.04),
+            overlay_strong: hsla(0.0, 0.0, 0.0, 0.075),
 
-            border: hsla(220.0 / 360.0, 0.10, 0.12, 0.08),
-            border_strong: hsla(220.0 / 360.0, 0.10, 0.12, 0.15),
-            sidebar_border: hsla(0.0, 0.0, 0.078, 0.12),
+            border: hsla(0.0, 0.0, 0.0, 0.08),
+            border_strong: hsla(0.0, 0.0, 0.0, 0.14),
+            sidebar_border: hsla(0.0, 0.0, 0.0, 0.08),
 
-            text: rgb(0x242424).into(),
-            text_secondary: rgb(0x666666).into(),
+            text: rgb(0x161616).into(),
+            text_secondary: rgb(0x5F5F5F).into(),
             text_tertiary: rgb(0x858585).into(),
             text_ghost: rgb(0xA4A4A4).into(),
 
@@ -393,7 +419,7 @@ impl Theme {
 
             selection: hsla(211.0 / 360.0, 1.0, 0.50, 0.35),
             code_text: rgb(0x9A5528).into(),
-            code_wash: hsla(220.0 / 360.0, 0.10, 0.12, 0.07),
+            code_wash: hsla(0.0, 0.0, 0.0, 0.05),
 
             inverse: rgb(0x202227).into(),
             on_inverse: rgb(0xF8F8F9).into(),
@@ -636,6 +662,26 @@ impl Theme {
     }
 }
 
+impl Theme {
+    /// Swap the palette's accent for the user's choice. Selection follows it
+    /// as a wash so highlighted text reads in the same hue.
+    pub fn with_accent(mut self, accent: AccentColor) -> Self {
+        let Some(color) = accent.rgb(self.is_dark) else {
+            return self;
+        };
+        let color: Hsla = rgb(color).into();
+        self.accent = color;
+        self.primary = color;
+        self.resize_handle = color;
+        self.gauge = color;
+        self.selection = Hsla {
+            a: if self.is_dark { 0.45 } else { 0.30 },
+            ..color
+        };
+        self
+    }
+}
+
 #[derive(Clone, Copy)]
 struct ActiveInsulatorTheme(Theme);
 
@@ -660,6 +706,7 @@ pub fn init(cx: &mut App) {
 pub fn apply_theme_preference(
     preference: ThemePreference,
     color_theme: ColorTheme,
+    accent: AccentColor,
     window_style: WindowStyle,
     sidebar_transparency: f32,
     window: &mut Window,
@@ -681,8 +728,9 @@ pub fn apply_theme_preference(
     } else {
         ColorTheme::default_for_dark(is_dark)
     };
-    let theme =
-        Theme::from_color_theme(color_theme).for_window_style(window_style, sidebar_transparency);
+    let theme = Theme::from_color_theme(color_theme)
+        .with_accent(accent)
+        .for_window_style(window_style, sidebar_transparency);
     let sidebar_color = theme.sidebar_drag_background;
     set_active_theme(theme, cx);
     crate::platform::configure_sidebar_material(
@@ -697,6 +745,7 @@ pub fn apply_theme_preference(
 pub fn update_active_theme(
     preference: ThemePreference,
     color_theme: ColorTheme,
+    accent: AccentColor,
     window_style: WindowStyle,
     sidebar_transparency: f32,
     cx: &mut App,
@@ -711,7 +760,26 @@ pub fn update_active_theme(
     } else {
         ColorTheme::default_for_dark(is_dark)
     };
-    let theme =
-        Theme::from_color_theme(color_theme).for_window_style(window_style, sidebar_transparency);
+    let theme = Theme::from_color_theme(color_theme)
+        .with_accent(accent)
+        .for_window_style(window_style, sidebar_transparency);
     set_active_theme(theme, cx);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rounding_scales_authored_radii_and_clamps() {
+        set_corner_rounding(0.0);
+        assert_eq!(radius(8.0), px(0.0));
+        set_corner_rounding(50.0);
+        assert_eq!(radius(8.0), px(8.0));
+        set_corner_rounding(100.0);
+        assert_eq!(radius(8.0), px(16.0));
+        set_corner_rounding(250.0);
+        assert_eq!(radius(8.0), px(16.0));
+        set_corner_rounding(0.0);
+    }
 }

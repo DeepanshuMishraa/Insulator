@@ -257,7 +257,7 @@ impl Insulator {
             .id("usage-meter")
             .h(px(20.0))
             .px(px(5.0))
-            .rounded(px(5.0))
+            .rounded(radius(5.0))
             .flex()
             .items_center()
             .flex_none()
@@ -383,7 +383,7 @@ fn usage_panel(
         .track_focus(handle.focus_handle())
         .w(px(320.0))
         .p(px(14.0))
-        .rounded(px(10.0))
+        .rounded(radius(10.0))
         .border_1()
         .border_color(theme.border_strong)
         .bg(theme.elevated)
@@ -541,7 +541,7 @@ fn plan_skeleton(theme: &Theme) -> AnyElement {
             .h(px(9.0))
             .w(px(width))
             .flex_none()
-            .rounded(px(4.5))
+            .rounded(radius(4.5))
             .bg(theme.overlay_strong)
     };
     let row = move |label_width: f32, value_width: f32| {

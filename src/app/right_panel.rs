@@ -2482,10 +2482,6 @@ impl Insulator {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.app_mode == super::terminal_mode::AppMode::Terminal {
-            self.cycle_terminal_tabs(false, cx);
-            return;
-        }
         self.cycle_main_tabs(false, cx);
     }
 
@@ -2495,10 +2491,6 @@ impl Insulator {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.app_mode == super::terminal_mode::AppMode::Terminal {
-            self.cycle_terminal_tabs(true, cx);
-            return;
-        }
         self.cycle_main_tabs(true, cx);
     }
 
@@ -2508,10 +2500,6 @@ impl Insulator {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.app_mode == super::terminal_mode::AppMode::Terminal {
-            self.close_active_terminal_tab(cx);
-            return;
-        }
         // The Browser, Simulator and BackgroundWork tabs live outside
         // `right_panel_surfaces`, so without this the shortcut would sail
         // past the panel and close the main chat tab underneath them.
@@ -2614,10 +2602,6 @@ impl Insulator {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.app_mode == super::terminal_mode::AppMode::Terminal {
-            self.close_active_terminal_tab(cx);
-            return;
-        }
         if self.close_right_panel_upper_tab(window, cx) {
             return;
         }
@@ -2654,7 +2638,7 @@ impl Insulator {
             .w(px(26.0))
             .h(px(26.0))
             .flex_none()
-            .rounded(px(6.0))
+            .rounded(radius(6.0))
             .flex()
             .items_center()
             .justify_center()
@@ -2726,7 +2710,7 @@ impl Insulator {
                     .id(tab_element_id)
                     .h(px(24.0))
                     .px(px(6.0))
-                    .rounded(px(4.0))
+                    .rounded(radius(4.0))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -2765,7 +2749,7 @@ impl Insulator {
                         div()
                             .id(close_element_id)
                             .size(px(14.0))
-                            .rounded(px(3.0))
+                            .rounded(radius(3.0))
                             .flex_none()
                             .flex()
                             .items_center()
@@ -2788,7 +2772,7 @@ impl Insulator {
             div()
                 .id("add-right-panel-terminal-btn")
                 .size(px(20.0))
-                .rounded(px(4.0))
+                .rounded(radius(4.0))
                 .flex_none()
                 .flex()
                 .items_center()
@@ -2821,7 +2805,7 @@ impl Insulator {
                 div()
                     .id("right-panel-terminal-collapse-btn")
                     .size(px(20.0))
-                    .rounded(px(4.0))
+                    .rounded(radius(4.0))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -2857,7 +2841,7 @@ impl Insulator {
                     div()
                         .id("add-right-panel-terminal-btn-empty")
                         .size(px(20.0))
-                        .rounded(px(4.0))
+                        .rounded(radius(4.0))
                         .flex_none()
                         .flex()
                         .items_center()
@@ -2881,7 +2865,7 @@ impl Insulator {
                     div()
                         .id("right-panel-terminal-restart-btn")
                         .size(px(20.0))
-                        .rounded(px(4.0))
+                        .rounded(radius(4.0))
                         .flex_none()
                         .flex()
                         .items_center()
@@ -2905,7 +2889,7 @@ impl Insulator {
                     div()
                         .id("right-panel-terminal-close-btn")
                         .size(px(20.0))
-                        .rounded(px(4.0))
+                        .rounded(radius(4.0))
                         .flex_none()
                         .flex()
                         .items_center()
@@ -2980,7 +2964,7 @@ impl Insulator {
                             .h(px(26.0))
                             .px(px(12.0))
                             .mt(px(4.0))
-                            .rounded(px(6.0))
+                            .rounded(radius(6.0))
                             .flex()
                             .items_center()
                             .gap(px(6.0))
@@ -3209,7 +3193,6 @@ impl Insulator {
         // not apply to it: shown mid-slide it would hang over the transcript
         // at full width. Keep it down until the panel has finished moving.
         let active_browser = if self.settings_page.is_none()
-            && self.app_mode == super::terminal_mode::AppMode::Agents
             && self.right_panel_visible
             && self.right_panel_slide.is_none()
         {
@@ -3329,7 +3312,7 @@ impl Insulator {
                 .id("right-panel-tab-files")
                 .h(px(28.0))
                 .px(px(8.0))
-                .rounded(px(6.0))
+                .rounded(radius(6.0))
                 .flex_none()
                 .flex()
                 .items_center()
@@ -3365,7 +3348,7 @@ impl Insulator {
                 .id("right-panel-tab-changes")
                 .h(px(28.0))
                 .px(px(8.0))
-                .rounded(px(6.0))
+                .rounded(radius(6.0))
                 .flex_none()
                 .flex()
                 .items_center()
@@ -3401,7 +3384,7 @@ impl Insulator {
                 .id("right-panel-tab-browser")
                 .h(px(28.0))
                 .px(px(8.0))
-                .rounded(px(6.0))
+                .rounded(radius(6.0))
                 .flex_none()
                 .flex()
                 .items_center()
@@ -3437,7 +3420,7 @@ impl Insulator {
                 .id("right-panel-tab-simulator")
                 .h(px(28.0))
                 .px(px(8.0))
-                .rounded(px(6.0))
+                .rounded(radius(6.0))
                 .flex_none()
                 .flex()
                 .items_center()
@@ -3480,7 +3463,7 @@ impl Insulator {
                     .h(px(28.0))
                     .max_w(px(160.0))
                     .px(px(8.0))
-                    .rounded(px(6.0))
+                    .rounded(radius(6.0))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -3501,7 +3484,7 @@ impl Insulator {
                         div()
                             .id("close-right-panel-tab-bg-work")
                             .size(px(16.0))
-                            .rounded(px(4.0))
+                            .rounded(radius(4.0))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -3644,7 +3627,7 @@ impl Insulator {
             .flex_1()
             .min_w_0()
             .p(px(14.0))
-            .rounded(px(8.0))
+            .rounded(radius(8.0))
             .border_1()
             .border_color(theme.border_strong)
             .bg(theme.composer)
@@ -3724,7 +3707,7 @@ impl Insulator {
                 .mx(px(8.0))
                 .pl(px(8.0 + entry.depth as f32 * 16.0))
                 .pr(px(8.0))
-                .rounded(px(6.0))
+                .rounded(radius(6.0))
                 .flex()
                 .items_center()
                 .gap(px(6.0))
@@ -3859,7 +3842,7 @@ impl Insulator {
                 .track_focus(&focus)
                 .tab_index(0)
                 .size(px(26.0))
-                .rounded(px(7.0))
+                .rounded(radius(7.0))
                 .flex_none()
                 .flex()
                 .items_center()
@@ -4741,7 +4724,7 @@ impl Insulator {
             .track_focus(&refresh_focus)
             .tab_index(0)
             .size(px(28.0))
-            .rounded(px(7.0))
+            .rounded(radius(7.0))
             .flex_none()
             .flex()
             .items_center()
@@ -5343,7 +5326,7 @@ impl Insulator {
                         .min_w_0()
                         .pl(px(7.0 + depth as f32 * 14.0))
                         .pr(px(7.0))
-                        .rounded(px(5.0))
+                        .rounded(radius(5.0))
                         .flex()
                         .items_center()
                         .gap(px(6.0))
@@ -5408,7 +5391,7 @@ impl Insulator {
                             .min_w_0()
                             .pl(px(23.0 + depth as f32 * 14.0))
                             .pr(px(7.0))
-                            .rounded(px(5.0))
+                            .rounded(radius(5.0))
                             .flex()
                             .items_center()
                             .gap(px(6.0))
@@ -5441,7 +5424,7 @@ impl Insulator {
                                     .w(px(18.0))
                                     .h(px(18.0))
                                     .flex_none()
-                                    .rounded(px(4.0))
+                                    .rounded(radius(4.0))
                                     .border_1()
                                     .border_color(status_color.opacity(0.65))
                                     .flex()
@@ -6060,7 +6043,7 @@ impl Insulator {
                     .h(px(24.0))
                     .pl(px(7.0))
                     .pr(px(4.0))
-                    .rounded(px(6.0))
+                    .rounded(radius(6.0))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.raised)
@@ -6087,7 +6070,7 @@ impl Insulator {
                         div()
                             .px(px(4.0))
                             .py(px(1.0))
-                            .rounded(px(4.0))
+                            .rounded(radius(4.0))
                             .bg(theme.overlay)
                             .text_size(sp(11.0))
                             .text_color(theme.text_secondary)
@@ -6097,7 +6080,7 @@ impl Insulator {
                         div()
                             .id(("clear-file-selection-button", index))
                             .size(px(16.0))
-                            .rounded(px(3.0))
+                            .rounded(radius(3.0))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -6134,7 +6117,7 @@ impl Insulator {
                     .id("clear-all-file-selections-button")
                     .h(px(24.0))
                     .px(px(6.0))
-                    .rounded(px(4.0))
+                    .rounded(radius(4.0))
                     .text_size(sp(11.0))
                     .text_color(theme.text_secondary)
                     .hover(|e| e.bg(theme.overlay).text_color(theme.text))
@@ -6210,7 +6193,7 @@ impl Insulator {
                     .max_w(px(CONTENT_MAX_WIDTH))
                     .h(px(42.0))
                     .px(px(12.0))
-                    .rounded(px(10.0))
+                    .rounded(radius(10.0))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.composer)
@@ -6253,7 +6236,7 @@ impl Insulator {
                     .child(
                         div()
                             .size(px(24.0))
-                            .rounded(px(6.0))
+                            .rounded(radius(6.0))
                             .bg(theme.overlay_strong)
                             .flex()
                             .items_center()

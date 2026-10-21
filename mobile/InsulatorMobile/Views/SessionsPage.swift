@@ -45,7 +45,7 @@ struct SessionsPage: View {
         List {
             if sessions.isEmpty {
                 Text(query.isEmpty && filter == .none && worktree == nil ? "No sessions yet." : "No matching sessions.")
-                    .font(.system(size: 15))
+                    .font(AppTheme.font(size: 15))
                     .foregroundStyle(AppTheme.muted)
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
@@ -151,7 +151,7 @@ struct SessionCard: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text(session.displayTitle)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(AppTheme.font(size: 16, weight: .semibold))
                     .foregroundStyle(AppTheme.content)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -160,11 +160,11 @@ struct SessionCard: View {
                         TerminalSpinner(paused: paused)
                         Text("Working...")
                     }
-                    .font(.system(size: 13))
+                    .font(AppTheme.font(size: 13))
                     .foregroundStyle(AppTheme.accent)
                 } else {
                     Text(relativeTime(session.lastReplyAt ?? session.updatedAt))
-                        .font(.system(size: 13).monospacedDigit())
+                        .font(AppTheme.font(size: 13).monospacedDigit())
                         .foregroundStyle(AppTheme.faint)
                 }
             }
@@ -183,7 +183,7 @@ struct SessionCard: View {
                     ProviderLogo(provider: session.provider, size: 14).foregroundStyle(AppTheme.muted)
                 }
             }
-            .font(.system(size: 13))
+            .font(AppTheme.font(size: 13))
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 14)
@@ -211,7 +211,7 @@ struct SearchBar<Accessory: View>: View {
             HStack(spacing: 10) {
                 IconView(.search, size: 20).foregroundStyle(AppTheme.muted)
                 TextField(placeholder, text: $query)
-                    .font(.system(size: 17))
+                    .font(AppTheme.font(size: 17))
                     .focused($focused)
                     .submitLabel(.search)
                     .autocorrectionDisabled()

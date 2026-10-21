@@ -411,10 +411,6 @@ impl Render for Insulator {
                 .into_any_element();
             return self.render_window_frame(content, window, cx);
         }
-        if self.app_mode == super::terminal_mode::AppMode::Terminal {
-            let content = self.render_terminal_mode(window, cx);
-            return self.render_window_frame(content, window, cx);
-        }
         // Re-armed every frame this window shows time labels; parks while
         // settings covers them and while the window isn't drawing at all.
         self.schedule_time_label_wake(cx);
@@ -436,7 +432,10 @@ impl Render for Insulator {
         let project_dialog = self.render_project_dialog(cx);
         let rename_dialog = self.render_rename_dialog(cx);
         let goal_dialog = self.render_goal_dialog(window, cx);
-        self.restore_agents_focus(window, cx);
+        // Shortcuts only reach handlers on the path from the focused element.
+        if window.focused(cx).is_none() {
+            window.focus(&self.app_focus, cx);
+        }
         let toast = self.render_active_toast(cx);
         let content = div()
             .key_context("Insulator")
@@ -448,8 +447,6 @@ impl Render for Insulator {
             .on_action(cx.listener(Self::open_settings_action))
             .on_action(cx.listener(Self::toggle_sidebar_action))
             .on_action(cx.listener(Self::toggle_right_panel_action))
-            .on_action(cx.listener(Self::toggle_terminal_mode_action))
-            .on_action(cx.listener(Self::switch_to_terminal_mode_action))
             .on_action(cx.listener(Self::toggle_command_palette_action))
             .on_action(cx.listener(Self::open_resume_picker_action))
             .on_action(cx.listener(Self::toggle_fps_counter_action))
@@ -620,21 +617,8 @@ impl Render for Insulator {
             .children(rename_dialog)
             .children(goal_dialog)
             .children(image_preview)
-            .children(task_switcher);
-        let generation = self.terminal_mode_switch_generation;
-        let content = if generation > 0 {
-            div()
-                .size_full()
-                .with_animation(
-                    SharedString::from(format!("agents-mode-switch-{generation}")),
-                    Animation::new(Duration::from_millis(160)).with_easing(ease_out_quint()),
-                    |element, delta| element.opacity(delta),
-                )
-                .child(content)
-                .into_any_element()
-        } else {
-            content.into_any_element()
-        };
+            .children(task_switcher)
+            .into_any_element();
 
         self.render_window_frame(content, window, cx)
     }
@@ -705,7 +689,7 @@ impl Insulator {
             .tab_index(0)
             .size(px(26.0))
             .flex_none()
-            .rounded(px(6.0))
+            .rounded(radius(6.0))
             .flex()
             .items_center()
             .justify_center()
@@ -745,7 +729,7 @@ impl Insulator {
                     .min_w_0()
                     .px(px(10.0))
                     .py(px(7.0))
-                    .rounded(px(10.0))
+                    .rounded(radius(10.0))
                     .border_1()
                     .border_color(theme.border_strong)
                     .bg(theme.elevated)

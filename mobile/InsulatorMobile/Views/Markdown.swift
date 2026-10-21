@@ -281,12 +281,12 @@ private struct BlockView: View {
         switch block {
         case .paragraph(let text):
             Text(Inline.render(text, muted: muted, fade: fade))
-                .font(.system(size: 16))
+                .font(AppTheme.font(size: 16))
                 .lineSpacing(6)
                 .textSelection(.enabled)
         case .heading(let level, let text):
             Text(Inline.render(text, muted: muted, fade: fade))
-                .font(.system(size: muted ? 14 : (level <= 2 ? 18 : 16), weight: .semibold))
+                .font(AppTheme.font(size: muted ? 14 : (level <= 2 ? 18 : 16), weight: .semibold))
                 .foregroundStyle(muted ? AppTheme.content.opacity(0.8) : AppTheme.content)
                 .padding(.top, 4)
         case .code(let code):
@@ -305,7 +305,7 @@ private struct BlockView: View {
                 ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(ordered ? "\(start + index)." : "•")
-                            .font(.system(size: 16))
+                            .font(AppTheme.font(size: 16))
                             .foregroundStyle(AppTheme.muted)
                             .frame(minWidth: 14, alignment: .leading)
                         VStack(alignment: .leading, spacing: 12) {
@@ -351,7 +351,7 @@ private struct TableView: View {
                     GridRow {
                         ForEach(0..<columns, id: \.self) { column in
                             Text(Inline.render(column < row.count ? row[column] : "", muted: muted, fade: nil))
-                                .font(.system(size: 14, weight: rowIndex == 0 ? .semibold : .regular))
+                                .font(AppTheme.font(size: 14, weight: rowIndex == 0 ? .semibold : .regular))
                                 .lineSpacing(3)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)

@@ -59,8 +59,10 @@ use crate::persistence::{
 };
 use crate::query::{Query, QueryCache};
 use crate::review_diff::{Snapshot as ReviewDiffSnapshot, Source as ReviewDiffSource};
-use crate::terminal::{TerminalExited, TerminalRestore, TerminalView};
-use crate::theme::{ColorTheme, Theme, ThemePreference, set_active_ui_font_family, sp};
+use crate::terminal::TerminalView;
+use crate::theme::{
+    AccentColor, ColorTheme, Theme, ThemePreference, radius, set_active_ui_font_family, sp,
+};
 use crate::ui::text_field::TextField;
 use crate::ui::{
     MenuChip, ProjectNameSelector, Slider, SliderEvent, SliderState, activity_icon, activity_noun,
@@ -73,10 +75,9 @@ use crate::{
     CopySelection, FindNext, FindPrevious, FocusComposer, NavigateBack, NavigateForward,
     NewProject, NewSession, NewTab, NextMainTab, OpenFind, OpenFindReplace, OpenResumePicker,
     OpenReview, OpenSettings, PreviousMainTab, ReplaceAllMatches, SaveFile, SelectFirstTask,
-    SelectLastTask, SelectTerminalTab, SwitchTaskBackward, SwitchTaskForward, SwitchToAgentsMode,
-    SwitchToTerminalMode, ToggleCommandPalette, ToggleFindCaseSensitive, ToggleFindRegex,
-    ToggleFindWholeWord, ToggleFpsCounter, ToggleModelPicker, TogglePullRequests, ToggleRightPanel,
-    ToggleSidebar, ToggleTerminalMode, ToggleUsagePanel,
+    SelectLastTask, SwitchTaskBackward, SwitchTaskForward, ToggleCommandPalette,
+    ToggleFindCaseSensitive, ToggleFindRegex, ToggleFindWholeWord, ToggleFpsCounter,
+    ToggleModelPicker, TogglePullRequests, ToggleRightPanel, ToggleSidebar, ToggleUsagePanel,
 };
 use insulator_protocol::theme::WindowStyle;
 
@@ -891,7 +892,7 @@ fn traits_choice(theme: Theme, label: String, is_default: bool, selected: bool) 
                         .h(px(18.0))
                         .px(px(5.0))
                         .flex_none()
-                        .rounded(px(4.0))
+                        .rounded(radius(4.0))
                         .border_1()
                         .border_color(theme.border_strong)
                         .bg(theme.overlay)
@@ -1233,13 +1234,13 @@ pub struct Insulator {
     daemon_token_revealed: bool,
     sound_volume_slider: Entity<SliderState>,
     sidebar_transparency_slider: Entity<SliderState>,
+    corner_rounding_slider: Entity<SliderState>,
     settings_focus: FocusHandle,
     /// Focus of last resort for the agent window. Key bindings and action
     /// handlers hang off the root element, so with nothing focused (or a focus
     /// left on a view that is no longer drawn, like a terminal after switching
     /// modes) they never fire.
     app_focus: FocusHandle,
-    agents_pending_focus: bool,
     window_style_restart_dialog: Option<WindowStyle>,
     onboarding_add_project_focus: FocusHandle,
     onboarding_github_project_focus: FocusHandle,
@@ -1571,11 +1572,16 @@ pub struct Insulator {
     /// Drives the header Fix button's loading state, mirroring Synara's
     /// "Preparing findings…" guard.
     pull_request_fix_preparing: HashSet<(String, u64)>,
+    /// Pull requests with a `gh pr merge` in flight.
+    pull_request_merging: HashSet<(String, u64)>,
     /// Fix requests waiting for review comments + checks to load so the
     /// prompt is built from complete findings instead of an empty cache.
     pull_request_fix_pending:
         HashMap<(String, u64), (pull_requests::PullRequest, gpui::AnyWindowHandle)>,
-    pull_request_markdown: RefCell<Option<((String, u64), MarkdownView)>>,
+    pull_request_markdown: RefCell<Option<((String, u64), pull_requests::PullRequestMarkdown)>>,
+    /// Parsed comment bodies of the open PR, keyed by repository, number, and index.
+    pull_request_comment_markdown:
+        RefCell<HashMap<(String, u64, usize), pull_requests::PullRequestMarkdown>>,
     pull_requests_search: Entity<TextInput>,
     /// Virtualized filtered PR rows. GitHub accounts can return hundreds of
     /// requests, so frames must only build what is visible.
@@ -1671,28 +1677,6 @@ pub struct Insulator {
     /// since the event handler has no `Context` to refresh them itself.
     workspace_queries_stale: bool,
     right_panel_terminals: HashMap<Uuid, Entity<TerminalView>>,
-    /// Which workspace fills the window. Terminal mode is independent of any
-    /// agent session; see `terminal_mode`.
-    app_mode: terminal_mode::AppMode,
-    terminal_tabs: Vec<terminal_mode::TerminalTab>,
-    active_terminal_tab: usize,
-    /// Layout read at startup, opened the first time terminal mode is shown.
-    terminal_pending_restore: Option<terminal_mode::SavedTerminalLayout>,
-    terminal_pending_focus: bool,
-    /// Sessions that finished or asked a question while terminal mode was
-    /// up, oldest first. Drives the switcher badge.
-    terminal_attention: Vec<Uuid>,
-    terminal_mode_switch_generation: usize,
-    /// Idle terminal tabs fold into a card stack behind the active tab.
-    /// `generation` keys the fold/unfold animation (0 means none yet);
-    /// `idle_generation` invalidates a pending fold timer on new activity.
-    terminal_tabs_stacked: bool,
-    terminal_tabs_generation: usize,
-    terminal_tabs_idle_generation: usize,
-    terminal_tabs_just_unfolded: bool,
-    /// Painted width of each terminal tab, so the fold animation moves tabs
-    /// between their real positions.
-    terminal_tab_widths: Rc<RefCell<HashMap<Uuid, f32>>>,
     right_panel_browsers: HashMap<Uuid, Entity<BrowserView>>,
     pull_request_video_views: HashMap<String, Entity<BrowserView>>,
     pull_request_media_paths: HashMap<String, PathBuf>,
@@ -1967,7 +1951,7 @@ mod sim_stream;
 mod skills_page;
 mod streaming;
 mod task_switcher;
-mod terminal_mode;
+mod terminal_zoom;
 mod transcript;
 mod transcript_search;
 mod transcript_view;
@@ -2296,8 +2280,7 @@ impl Insulator {
         let cached_pull_requests = pull_requests::load_cached_pull_requests();
         let cached_commits = pull_requests::cached_commits(&cached_pull_requests);
         let home_directory = crate::projectless::home_directory();
-        let saved_terminal_layout = terminal_mode::SavedTerminalLayout::load();
-        if let Some(size) = saved_terminal_layout.font_size {
+        if let Some(size) = terminal_zoom::SavedTerminalZoom::load().font_size {
             crate::terminal::set_terminal_font_size(size);
         }
         state.apply_daemon_settings(daemon.settings());
@@ -2309,6 +2292,7 @@ impl Insulator {
         crate::audio::set_volume(state.sound_volume);
         crate::haptics::set_haptics_enabled(state.haptics_enabled);
         set_active_ui_font_family(state.ui_font_family.clone());
+        crate::theme::set_corner_rounding(state.corner_rounding);
         crate::md::render::set_active_mono_family(state.code_font_family.clone());
         // Chrome text is authored in `sp` rems against the default UI font
         // size, so the window's rem size *is* the UI font size setting.
@@ -2389,6 +2373,13 @@ impl Insulator {
                 .default_value(state.sidebar_transparency)
                 .step(1.0)
         });
+        let corner_rounding_slider = cx.new(|_| {
+            SliderState::new()
+                .min(0.0)
+                .max(100.0)
+                .default_value(state.corner_rounding)
+                .step(1.0)
+        });
         let skills_search = cx.new(|cx| {
             TextInput::new(window, cx)
                 .clear_on_escape()
@@ -2467,6 +2458,7 @@ impl Insulator {
         crate::theme::apply_theme_preference(
             state.theme,
             state.color_theme,
+            state.accent_color,
             state.window_style,
             state.sidebar_transparency,
             window,
@@ -2771,6 +2763,7 @@ impl Insulator {
                     crate::theme::apply_theme_preference(
                         this.state.theme,
                         this.state.color_theme,
+                        this.state.accent_color,
                         this.state.window_style,
                         this.state.sidebar_transparency,
                         window,
@@ -2930,14 +2923,11 @@ impl Insulator {
             })
             .detach();
 
-            // Terminal tabs restore from a layout file. Capture here, on the
-            // UI thread, since the grids are gone once the app exits; the
-            // write itself runs in the background and quit waits for it.
-            cx.on_app_quit(|this, cx| {
-                let layout = this.terminal_layout_snapshot(cx);
-                let save = cx
-                    .background_executor()
-                    .spawn(async move { layout.write() });
+            // The terminal zoom persists; the write runs in the background and
+            // quit waits for it.
+            cx.on_app_quit(|_, cx| {
+                let zoom = terminal_zoom::SavedTerminalZoom::current();
+                let save = cx.background_executor().spawn(async move { zoom.write() });
                 async move {
                     save.await;
                 }
@@ -2970,6 +2960,16 @@ impl Insulator {
                     SliderEvent::Release(_) => {
                         this.commit_sound_volume(cx);
                     }
+                },
+            )
+            .detach();
+            cx.subscribe(
+                &corner_rounding_slider,
+                |this: &mut Self, _, event: &SliderEvent, cx| match event {
+                    SliderEvent::Change(value) => {
+                        this.set_corner_rounding(value.start(), cx);
+                    }
+                    SliderEvent::Release(_) => this.save(),
                 },
             )
             .detach();
@@ -3293,9 +3293,9 @@ impl Insulator {
                 daemon_token_revealed: false,
                 sound_volume_slider,
                 sidebar_transparency_slider,
+                corner_rounding_slider,
                 settings_focus,
                 app_focus,
-                agents_pending_focus: false,
                 window_style_restart_dialog: None,
                 onboarding_add_project_focus,
                 onboarding_github_project_focus,
@@ -3470,8 +3470,10 @@ impl Insulator {
                 pull_request_diffs_loading: HashSet::new(),
                 pull_request_diffs_error: HashMap::new(),
                 pull_request_fix_preparing: HashSet::new(),
+                pull_request_merging: HashSet::new(),
                 pull_request_fix_pending: HashMap::new(),
                 pull_request_markdown: RefCell::new(None),
+                pull_request_comment_markdown: RefCell::default(),
                 pull_requests_search,
                 pull_requests_list_state: pull_requests_list_state.clone(),
                 pull_requests_rows: RefCell::new(Vec::new()),
@@ -3557,18 +3559,6 @@ impl Insulator {
                 working_trees: QueryCache::new(MAX_CACHED_WORKSPACES),
                 workspace_queries_stale: false,
                 right_panel_terminals: HashMap::new(),
-                app_mode: saved_terminal_layout.mode,
-                terminal_tabs: Vec::new(),
-                active_terminal_tab: 0,
-                terminal_pending_restore: Some(saved_terminal_layout),
-                terminal_pending_focus: false,
-                terminal_attention: Vec::new(),
-                terminal_mode_switch_generation: 0,
-                terminal_tabs_stacked: false,
-                terminal_tabs_generation: 0,
-                terminal_tabs_idle_generation: 0,
-                terminal_tabs_just_unfolded: false,
-                terminal_tab_widths: Rc::default(),
                 right_panel_browsers: HashMap::new(),
                 pull_request_video_views: HashMap::new(),
                 pull_request_media_paths: HashMap::new(),

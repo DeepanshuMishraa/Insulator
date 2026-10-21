@@ -509,7 +509,7 @@ impl Element for MathText {
         let wash = |rect: Bounds<Pixels>, color: Hsla, radius: f32, window: &mut Window| {
             window.paint_quad(quad(
                 rect,
-                px(radius),
+                px(radius * crate::theme::corner_scale()),
                 color,
                 px(0.0),
                 gpui::transparent_black(),

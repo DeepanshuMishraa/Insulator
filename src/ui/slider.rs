@@ -9,7 +9,7 @@ use gpui::{
     quad, rgb, size,
 };
 
-use crate::theme::Theme;
+use crate::theme::{Theme, radius};
 
 /// Represents a single slider value or a range.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -245,7 +245,12 @@ impl RenderOnce for Slider {
         if !disabled {
             base = base
                 .tab_index(0)
-                .focus_visible(|style| style.rounded(px(6.0)).border_1().border_color(theme.accent))
+                .focus_visible(|style| {
+                    style
+                        .rounded(radius(6.0))
+                        .border_1()
+                        .border_color(theme.accent)
+                })
                 .on_key_down({
                     let state_entity = state_entity.clone();
                     move |event: &KeyDownEvent, _, cx| {

@@ -19,7 +19,7 @@ pub use shimmer::{ShimmerSpread, ShimmerStyle, ShimmerText};
 pub use slider::{Slider, SliderEvent, SliderState, SliderValue};
 
 use crate::model::{ActivityKind, ChatStatus, ProviderKind, RuntimeMode, SessionStatus};
-use crate::theme::{Theme, sp};
+use crate::theme::{Theme, radius, sp};
 
 /// A monochrome icon from the embedded set, tinted via text color. Sized in
 /// `sp` so icons keep pace with the chrome text they sit beside when the UI
@@ -46,7 +46,7 @@ pub fn icon_button(id: impl Into<ElementId>, path: &'static str, theme: Theme) -
     div()
         .id(id)
         .size(px(22.0))
-        .rounded(px(6.0))
+        .rounded(radius(6.0))
         .flex()
         .items_center()
         .justify_center()
@@ -463,7 +463,11 @@ impl RenderOnce for MenuChip {
                 .height
                 .unwrap_or(if self.outlined { px(30.0) } else { px(26.0) }))
             .px(if self.outlined { px(10.0) } else { px(7.0) })
-            .rounded(if self.outlined { px(7.0) } else { px(6.0) })
+            .rounded(if self.outlined {
+                radius(7.0)
+            } else {
+                radius(6.0)
+            })
             .flex()
             .items_center()
             .gap(px(6.0))
@@ -679,8 +683,6 @@ mod tests {
             "icons/panel-right.svg",
             "icons/x.svg",
             "icons/bot.svg",
-            "icons/mode-agents.svg",
-            "icons/mode-terminal.svg",
             "icons/rotate-cw.svg",
             "icons/package.svg",
             "icons/trash.svg",

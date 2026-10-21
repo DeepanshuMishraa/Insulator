@@ -26,7 +26,7 @@ pub use insulator_protocol::persistence::{
     ComposerDraft, ComposerDraftAttachment, ComposerDraftChange, ComposerDraftKey,
     ComposerDraftTarget, ComposerDrafts, SessionMessageMatch,
 };
-use insulator_protocol::theme::{ColorTheme, ThemePreference, WindowStyle};
+use insulator_protocol::theme::{AccentColor, ColorTheme, ThemePreference, WindowStyle};
 
 const STATE_VERSION: u32 = 5;
 const APP_STATE_VERSION: u32 = 1;
@@ -267,6 +267,11 @@ pub struct AppSettings {
     pub theme: ThemePreference,
     pub color_theme: ColorTheme,
     #[serde(default)]
+    pub accent_color: AccentColor,
+    /// Corner rounding, 0 (square) to 100 (twice the authored radii).
+    #[serde(default)]
+    pub corner_rounding: f32,
+    #[serde(default)]
     pub window_style: WindowStyle,
     #[serde(default = "default_sidebar_transparency")]
     pub sidebar_transparency: f32,
@@ -319,6 +324,8 @@ impl Default for AppSettings {
             favorite_models: Vec::new(),
             theme: ThemePreference::System,
             color_theme: ColorTheme::default(),
+            accent_color: AccentColor::default(),
+            corner_rounding: 0.0,
             window_style: WindowStyle::default(),
             sidebar_transparency: DEFAULT_SIDEBAR_TRANSPARENCY,
             sidebar_transparency_customized: false,
@@ -488,6 +495,11 @@ pub struct PersistedState {
     #[serde(default)]
     pub color_theme: ColorTheme,
     #[serde(default)]
+    pub accent_color: AccentColor,
+    /// Corner rounding, 0 (square) to 100 (twice the authored radii).
+    #[serde(default)]
+    pub corner_rounding: f32,
+    #[serde(default)]
     pub window_style: WindowStyle,
     #[serde(default = "default_sidebar_transparency")]
     pub sidebar_transparency: f32,
@@ -603,6 +615,8 @@ impl PersistedState {
             favorite_models: Vec::new(),
             theme: ThemePreference::System,
             color_theme: ColorTheme::default(),
+            accent_color: AccentColor::default(),
+            corner_rounding: 0.0,
             window_style: WindowStyle::default(),
             sidebar_transparency: DEFAULT_SIDEBAR_TRANSPARENCY,
             sidebar_transparency_customized: false,
@@ -746,6 +760,8 @@ impl PersistedState {
             favorite_models: self.favorite_models.clone(),
             theme: self.theme,
             color_theme: self.color_theme,
+            accent_color: self.accent_color,
+            corner_rounding: self.corner_rounding,
             window_style: self.window_style,
             sidebar_transparency: self.sidebar_transparency,
             sidebar_transparency_customized: self.sidebar_transparency_customized,
@@ -802,6 +818,8 @@ impl PersistedState {
         self.favorite_models = settings.favorite_models;
         self.theme = settings.theme;
         self.color_theme = settings.color_theme;
+        self.accent_color = settings.accent_color;
+        self.corner_rounding = settings.corner_rounding.clamp(0.0, 100.0);
         self.window_style = settings.window_style;
         self.sidebar_transparency_customized = settings.sidebar_transparency_customized;
         let dark = match settings.theme {

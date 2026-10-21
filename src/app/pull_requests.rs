@@ -562,14 +562,36 @@ fn preserve_cached_details(entries: &mut [PullRequest], cached: &[PullRequest]) 
     }
 }
 
-fn save_cached_pull_requests(entries: &[PullRequest]) {
-    let path = pull_request_cache_path();
-    let Some(parent) = path.parent() else { return };
-    let _ = std::fs::create_dir_all(parent);
-    let Ok(bytes) = serde_json::to_vec(entries) else {
-        return;
-    };
-    let _ = std::fs::write(path, bytes);
+/// Generation of the newest cache snapshot handed to a writer, and the lock
+/// writers hold while they check it, so an older snapshot finishing late
+/// never overwrites a newer one.
+static PULL_REQUEST_CACHE_GENERATION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+static PULL_REQUEST_CACHE_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The cache carries every body and cached diff, so serializing it can take
+/// several frames. Snapshot on the UI thread, serialize and write off it.
+fn save_cached_pull_requests(entries: &[PullRequest], cx: &App) {
+    use std::sync::atomic::Ordering;
+    let generation = PULL_REQUEST_CACHE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let entries = entries.to_vec();
+    cx.background_executor()
+        .spawn(async move {
+            let Ok(bytes) = serde_json::to_vec(&entries) else {
+                return;
+            };
+            let _guard = PULL_REQUEST_CACHE_WRITE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if PULL_REQUEST_CACHE_GENERATION.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            let path = pull_request_cache_path();
+            let Some(parent) = path.parent() else { return };
+            let _ = std::fs::create_dir_all(parent);
+            let _ = std::fs::write(path, bytes);
+        })
+        .detach();
 }
 
 #[derive(Default, Deserialize)]
@@ -896,6 +918,26 @@ fn format_pr_state(state: &str) -> &'static str {
     }
 }
 
+/// A PR body or comment, cleaned and parsed once. Render reuses it until the
+/// raw text changes, instead of re-cleaning and re-parsing every frame.
+#[derive(Default)]
+pub(super) struct PullRequestMarkdown {
+    raw: String,
+    cleaned: String,
+    view: MarkdownView,
+}
+
+impl PullRequestMarkdown {
+    fn sync(&mut self, raw: &str) {
+        if self.raw == raw {
+            return;
+        }
+        raw.clone_into(&mut self.raw);
+        self.cleaned = without_html_comments(raw);
+        self.view.set_text(&self.cleaned, false);
+    }
+}
+
 fn without_html_comments(body: &str) -> String {
     let mut result = String::with_capacity(body.len());
     let mut rest = body;
@@ -1200,6 +1242,52 @@ fn post_pull_request_comment(request: &PullRequest, body: &str) -> anyhow::Resul
     if !output.status.success() {
         anyhow::bail!(
             "posting pull-request comment failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MergeStrategy {
+    Squash,
+    Merge,
+    Rebase,
+}
+
+impl MergeStrategy {
+    const ALL: [Self; 3] = [Self::Merge, Self::Squash, Self::Rebase];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Squash => "Squash and merge",
+            Self::Merge => "Merge",
+            Self::Rebase => "Rebase and merge",
+        }
+    }
+
+    fn flag(self) -> &'static str {
+        match self {
+            Self::Squash => "--squash",
+            Self::Merge => "--merge",
+            Self::Rebase => "--rebase",
+        }
+    }
+}
+
+fn merge_pull_request(request: &PullRequest, strategy: MergeStrategy) -> anyhow::Result<()> {
+    let output = gh_output(&[
+        "pr",
+        "merge",
+        &request.number.to_string(),
+        "--repo",
+        &request.repository,
+        strategy.flag(),
+    ])?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "Could not merge #{}: {}. The pull request is unchanged.",
+            request.number,
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
@@ -1528,7 +1616,7 @@ impl Insulator {
                         }
                         this.pull_requests_cursor = next_cursor;
                         this.pull_requests_has_more = this.pull_requests_cursor.is_some();
-                        save_cached_pull_requests(&this.pull_requests);
+                        save_cached_pull_requests(&this.pull_requests, cx);
                         this.pull_requests_error = None;
                         this.ensure_pull_request_avatars(cx);
                     }
@@ -1575,7 +1663,7 @@ impl Insulator {
                         this.pull_requests = merge_pull_requests(merged);
                         this.pull_requests_cursor = next_cursor;
                         this.pull_requests_has_more = this.pull_requests_cursor.is_some();
-                        save_cached_pull_requests(&this.pull_requests);
+                        save_cached_pull_requests(&this.pull_requests, cx);
                         this.pull_requests_error = None;
                         this.ensure_pull_request_avatars(cx);
                     }
@@ -1694,7 +1782,7 @@ impl Insulator {
                     touched = true;
                 }
                 if touched {
-                    save_cached_pull_requests(&this.pull_requests);
+                    save_cached_pull_requests(&this.pull_requests, cx);
                     cx.notify();
                 }
             });
@@ -1759,7 +1847,7 @@ impl Insulator {
                                 entry.author_avatar_url = loaded.author_avatar_url.clone();
                             }
                             entry.author_avatar_path = loaded.author_avatar_path.clone();
-                            save_cached_pull_requests(&this.pull_requests);
+                            save_cached_pull_requests(&this.pull_requests, cx);
                         }
                         if !loaded.checks.is_empty() && !this.pull_request_checks.contains_key(&key)
                         {
@@ -1800,6 +1888,47 @@ impl Insulator {
                     Err(error) => {
                         this.pull_request_body_error.insert(key, error.to_string());
                     }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn merge_pull_request(
+        &mut self,
+        request: PullRequest,
+        strategy: MergeStrategy,
+        cx: &mut Context<Self>,
+    ) {
+        let key = (request.repository.clone(), request.number);
+        if !self.pull_request_merging.insert(key.clone()) {
+            return;
+        }
+        cx.notify();
+        let entity = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { merge_pull_request(&request, strategy) })
+                .await;
+            let _ = entity.update(cx, |this, cx| {
+                this.pull_request_merging.remove(&key);
+                match result {
+                    Ok(()) => {
+                        for entry in this
+                            .pull_requests
+                            .iter_mut()
+                            .chain(this.pull_request_detail.as_mut().into_iter())
+                        {
+                            if entry.repository == key.0 && entry.number == key.1 {
+                                entry.state = "merged".to_owned();
+                            }
+                        }
+                        save_cached_pull_requests(&this.pull_requests, cx);
+                        this.show_success_toast(format!("Merged #{}", key.1));
+                    }
+                    Err(error) => this.show_toast(error.to_string()),
                 }
                 cx.notify();
             });
@@ -1983,7 +2112,7 @@ impl Insulator {
                             entry.repository == request_key.0 && entry.number == request_key.1
                         }) {
                             entry.cached_diff = Some(diff.1.clone());
-                            save_cached_pull_requests(&this.pull_requests);
+                            save_cached_pull_requests(&this.pull_requests, cx);
                         }
                         this.pull_request_diffs
                             .insert(request_key.clone(), Arc::new(diff.0));
@@ -2027,7 +2156,7 @@ impl Insulator {
                             entry.repository == request_key.0 && entry.number == request_key.1
                         }) {
                             entry.cached_commits = commits.clone();
-                            save_cached_pull_requests(&this.pull_requests);
+                            save_cached_pull_requests(&this.pull_requests, cx);
                         }
                         this.pull_request_commits
                             .insert(request_key.clone(), commits);
@@ -2153,7 +2282,7 @@ impl Insulator {
                                 .w_full()
                                 .px(px(6.0))
                                 .py(px(5.0))
-                                .rounded(px(6.0))
+                                .rounded(radius(6.0))
                                 .flex()
                                 .items_center()
                                 .justify_between()
@@ -2277,6 +2406,9 @@ impl Insulator {
                         .into_any_element()
                 } else {
                     let palette = MarkdownPalette::from_theme(theme);
+                    self.pull_request_comment_markdown.borrow_mut().retain(
+                        |(repository, number, _), _| *repository == key.0 && *number == key.1,
+                    );
                     div()
                         .flex()
                         .flex_col()
@@ -2297,7 +2429,7 @@ impl Insulator {
                                 .w_full()
                                 .px(px(8.0))
                                 .py(px(6.0))
-                                .rounded(px(6.0))
+                                .rounded(radius(6.0))
                                 .cursor_pointer()
                                 .flex()
                                 .items_center()
@@ -2364,8 +2496,9 @@ impl Insulator {
 
                             let mut card = div()
                                 .w_full()
-                                .rounded(px(8.0))
-                                .bg(theme.overlay)
+                                .rounded(radius(8.0))
+                                .border_1()
+                                .border_color(theme.border)
                                 .child(item_header);
                             if !collapsed {
                                 if let Some(location) = comment.location.as_ref() {
@@ -2392,7 +2525,7 @@ impl Insulator {
                                                 div()
                                                     .px(px(6.0))
                                                     .py(px(2.0))
-                                                    .rounded(px(4.0))
+                                                    .rounded(radius(4.0))
                                                     .bg(theme.overlay_strong)
                                                     .text_size(sp(11.5))
                                                     .text_color(theme.text)
@@ -2401,9 +2534,14 @@ impl Insulator {
                                         );
                                     }
                                 }
-                                let body = without_html_comments(&comment.body);
-                                let mut view = MarkdownView::new();
-                                view.set_text(&body, false);
+                                let mut comment_markdown =
+                                    self.pull_request_comment_markdown.borrow_mut();
+                                let markdown = comment_markdown
+                                    .entry((key.0.clone(), key.1, index))
+                                    .or_default();
+                                markdown.sync(&comment.body);
+                                let body = markdown.cleaned.clone();
+                                let view = &markdown.view;
                                 let context = MarkdownCtx::new(
                                     format!("pull-request-comment-{}-{index}", key.1),
                                     &palette,
@@ -2415,8 +2553,8 @@ impl Insulator {
                                 )
                                 .with_math_enabled(self.state.render_math)
                                 .with_link_handler(self.markdown_link_handler.clone());
-                                let rendered = md::render::markdown(&view, &context)
-                                    .unwrap_or_else(|| {
+                                let rendered =
+                                    md::render::markdown(view, &context).unwrap_or_else(|| {
                                         md::render::plain_text(
                                             body,
                                             crate::theme::active_ui_font_family(),
@@ -2507,7 +2645,7 @@ impl Insulator {
                     .min_h(px(40.0))
                     .max_h(px(120.0))
                     .px(px(12.0))
-                    .rounded(px(20.0))
+                    .rounded(radius(20.0))
                     .border_1()
                     .border_color(theme.border_strong)
                     .bg(theme.inset)
@@ -2525,7 +2663,7 @@ impl Insulator {
                         div()
                             .id("pull-request-submit-comment")
                             .size(px(26.0))
-                            .rounded(px(13.0))
+                            .rounded(radius(13.0))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -3166,7 +3304,7 @@ impl Insulator {
                             .tab_index(0)
                             .h(px(28.0))
                             .px(px(11.0))
-                            .rounded(px(6.0))
+                            .rounded(radius(6.0))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -3182,13 +3320,9 @@ impl Insulator {
                             } else {
                                 theme.text_secondary
                             })
-                            .border_1()
-                            .border_color(if selected {
-                                theme.border
-                            } else {
-                                gpui::transparent_black()
+                            .when(selected, |element| {
+                                element.border_b_2().border_color(theme.accent)
                             })
-                            .when(selected, |element| element.bg(theme.overlay_strong))
                             .when(!selected, |element| {
                                 element.hover(|element| {
                                     element.bg(theme.overlay).text_color(theme.text)
@@ -3236,7 +3370,7 @@ impl Insulator {
                         div()
                             .id("pull-requests-refresh")
                             .size(px(32.0))
-                            .rounded(px(6.0))
+                            .rounded(radius(6.0))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -3287,7 +3421,7 @@ impl Insulator {
                                 .right(px(12.0))
                                 .bottom(px(12.0))
                                 .py(px(10.0))
-                                .rounded(px(8.0))
+                                .rounded(radius(8.0))
                                 .bg(theme.surface)
                                 .flex()
                                 .items_center()
@@ -3314,7 +3448,7 @@ impl Insulator {
                                 .bottom(px(12.0))
                                 .py(px(10.0))
                                 .id("pull-requests-pagination-retry")
-                                .rounded(px(8.0))
+                                .rounded(radius(8.0))
                                 .bg(theme.surface)
                                 .flex()
                                 .items_center()
@@ -3398,7 +3532,7 @@ fn render_pull_request_row(
         .w_full()
         .h(px(PULL_REQUEST_ROW_HEIGHT))
         .flex_none()
-        .rounded(px(7.0))
+        .rounded(radius(7.0))
         .cursor_pointer()
         .px(px(10.0))
         .flex()
@@ -3406,15 +3540,15 @@ fn render_pull_request_row(
         .gap(px(10.0))
         .when(is_selected, |element| {
             element
-                .bg(theme.overlay_strong)
+                .bg(theme.overlay)
                 .border_1()
-                .border_color(theme.border)
+                .border_color(gpui::transparent_black())
         })
         .when(!is_selected, |element| {
             element
                 .border_1()
                 .border_color(gpui::transparent_black())
-                .hover(|element| element.bg(theme.overlay).border_color(theme.border))
+                .hover(|element| element.bg(theme.overlay))
                 .active(|element| element.bg(theme.overlay_strong))
         })
         .on_click(move |_, _, cx| {
@@ -3445,7 +3579,7 @@ fn render_pull_request_row(
             div()
                 .w(px(3.0))
                 .h(px(24.0))
-                .rounded(px(1.5))
+                .rounded(radius(1.5))
                 .flex_none()
                 .bg(if is_selected {
                     theme.accent
@@ -3524,7 +3658,7 @@ fn render_pull_request_row(
                 .flex_none()
                 .px(px(8.0))
                 .py(px(2.0))
-                .rounded(px(999.0))
+                .rounded(radius(999.0))
                 .bg(state_color.opacity(if theme.is_dark { 0.16 } else { 0.10 }))
                 .text_size(sp(10.5))
                 .font_weight(FontWeight::MEDIUM)
@@ -3559,7 +3693,15 @@ impl Insulator {
         } else {
             request.url.clone()
         };
-        let body = without_html_comments(&request.body);
+        let body = {
+            let mut cache = self.pull_request_markdown.borrow_mut();
+            if !matches!(cache.as_ref(), Some((cached_key, _)) if cached_key == &commit_key) {
+                *cache = Some((commit_key.clone(), PullRequestMarkdown::default()));
+            }
+            let (_, markdown) = cache.as_mut().expect("markdown cache initialized");
+            markdown.sync(&request.body);
+            markdown.cleaned.clone()
+        };
         let show_video_players = selected_tab == PullRequestDetailTab::Summary
             && !self.is_pr_section_collapsed(&commit_key, "description");
         let loading_style = ShimmerStyle::new()
@@ -3605,12 +3747,9 @@ impl Insulator {
                 .into_any_element()
         } else {
             let key = (request.repository.clone(), request.number);
-            let mut cache = self.pull_request_markdown.borrow_mut();
-            if !matches!(cache.as_ref(), Some((cached_key, _)) if cached_key == &key) {
-                *cache = Some((key.clone(), MarkdownView::new()));
-            }
-            let (_, view) = cache.as_mut().expect("markdown cache initialized");
-            view.set_text(&body, false);
+            let cache = self.pull_request_markdown.borrow();
+            let (_, markdown) = cache.as_ref().expect("markdown cache initialized");
+            let view = &markdown.view;
             let video_urls = view.video_urls();
 
             let stale_urls = self
@@ -3807,7 +3946,7 @@ impl Insulator {
                             } else if request.author.is_empty() {
                                 div()
                                     .size(px(18.0))
-                                    .rounded(px(9.0))
+                                    .rounded(radius(9.0))
                                     .bg(rgb(0x388bfd))
                                     .flex()
                                     .items_center()
@@ -4011,7 +4150,7 @@ impl Insulator {
                                                         div()
                                                             .px(px(6.0))
                                                             .py(px(2.0))
-                                                            .rounded(px(5.0))
+                                                            .rounded(radius(5.0))
                                                             .bg(theme.overlay)
                                                             .flex()
                                                             .items_center()
@@ -4199,8 +4338,9 @@ impl Insulator {
                                 div()
                                     .px(px(10.0))
                                     .py(px(9.0))
-                                    .rounded(px(7.0))
-                                    .bg(theme.overlay)
+                                    .rounded(radius(7.0))
+                                    .border_1()
+                                    .border_color(theme.border)
                                     .child(
                                         div()
                                             .text_size(sp(13.0))
@@ -4307,10 +4447,9 @@ impl Insulator {
                         div()
                             .px(px(8.0))
                             .h(px(26.0))
-                            .rounded(px(6.0))
+                            .rounded(radius(6.0))
                             .border_1()
                             .border_color(theme.border)
-                            .bg(theme.overlay)
                             .flex()
                             .items_center()
                             .gap(px(6.0))
@@ -4342,14 +4481,13 @@ impl Insulator {
                                         })
                                         .h(px(26.0))
                                         .px(px(10.0))
-                                        .rounded(px(6.0))
+                                        .rounded(radius(6.0))
                                         .flex()
                                         .items_center()
                                         .justify_center()
                                         .gap(px(6.0))
                                         .border_1()
                                         .border_color(theme.border)
-                                        .bg(theme.overlay)
                                         .cursor_pointer()
                                         .when(!is_preparing, |element| {
                                             element
@@ -4408,12 +4546,50 @@ impl Insulator {
                                         }),
                                 )
                             })
+                            .when(request.state.eq_ignore_ascii_case("open"), |el| {
+                                let merge_key = (request.repository.clone(), request.number);
+                                let is_merging = self.pull_request_merging.contains(&merge_key);
+                                let merge_handle = self.menu_handle("merge-pull-request", cx);
+                                let merge_request = request.clone();
+                                let merge_entity = close.clone();
+                                el.child(dropdown_menu(
+                                    MenuChip::new("merge-pull-request")
+                                        .icon("icons/git-merge.svg", theme.accent)
+                                        .label(if is_merging { "Merging…" } else { "Merge" })
+                                        .outlined()
+                                        .height(px(26.0))
+                                        .disabled(is_merging)
+                                        .selected(merge_handle.is_open()),
+                                    "merge-pull-request-menu",
+                                    &merge_handle,
+                                    MenuAlign::BelowRight,
+                                    move |_| {
+                                        MergeStrategy::ALL
+                                            .into_iter()
+                                            .map(|strategy| {
+                                                let request = merge_request.clone();
+                                                let entity = merge_entity.clone();
+                                                MenuItem::new(strategy.label(), move |_, cx| {
+                                                    let _ = entity.update(cx, |this, cx| {
+                                                        this.merge_pull_request(
+                                                            request.clone(),
+                                                            strategy,
+                                                            cx,
+                                                        );
+                                                    });
+                                                })
+                                                .disabled(is_merging)
+                                            })
+                                            .collect()
+                                    },
+                                ))
+                            })
                             .child({
                                 let url = github_url.clone();
                                 div()
                                     .id("open-pull-request-github")
                                     .size(px(26.0))
-                                    .rounded(px(6.0))
+                                    .rounded(radius(6.0))
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -4430,7 +4606,7 @@ impl Insulator {
                                 div()
                                     .id("close-pull-request-detail")
                                     .size(px(26.0))
-                                    .rounded(px(6.0))
+                                    .rounded(radius(6.0))
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -4469,7 +4645,7 @@ impl Insulator {
                             .tab_index(0)
                             .h(px(28.0))
                             .px(px(10.0))
-                            .rounded(px(6.0))
+                            .rounded(radius(6.0))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -4485,7 +4661,9 @@ impl Insulator {
                             } else {
                                 theme.text_secondary
                             })
-                            .when(active, |element| element.bg(theme.overlay_strong))
+                            .when(active, |element| {
+                                element.border_b_2().border_color(theme.accent)
+                            })
                             .when(!active, |element| {
                                 element.hover(|element| {
                                     element.bg(theme.overlay).text_color(theme.text)

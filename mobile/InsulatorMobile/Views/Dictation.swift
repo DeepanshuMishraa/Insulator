@@ -26,7 +26,7 @@ struct DictationBar: View {
                 .frame(maxWidth: .infinity)
 
             Text(Duration.seconds(recorder.seconds).formatted(.time(pattern: .minuteSecond)))
-                .font(.system(size: 13).monospacedDigit())
+                .font(AppTheme.font(size: 13).monospacedDigit())
                 .foregroundStyle(AppTheme.muted)
 
             Button {

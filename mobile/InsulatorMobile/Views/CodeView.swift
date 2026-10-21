@@ -205,9 +205,9 @@ struct FileScreen: View {
                     VStack(spacing: 10) {
                         IconView(.fileText, size: 28).foregroundStyle(AppTheme.muted)
                         Text("Couldn't open \((path as NSString).lastPathComponent)")
-                            .font(.system(size: 17, weight: .semibold))
+                            .font(AppTheme.font(size: 17, weight: .semibold))
                         Text(error)
-                            .font(.system(size: 14))
+                            .font(AppTheme.font(size: 14))
                             .foregroundStyle(AppTheme.muted)
                             .multilineTextAlignment(.center)
                     }
@@ -227,10 +227,10 @@ struct FileScreen: View {
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 1) {
                         Text((path as NSString).lastPathComponent)
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(AppTheme.font(size: 16, weight: .semibold))
                         let directory = (path as NSString).deletingLastPathComponent
                         Text(directory.isEmpty ? "/" : directory)
-                            .font(.system(size: 12))
+                            .font(AppTheme.font(size: 12))
                             .foregroundStyle(AppTheme.muted)
                     }
                     .lineLimit(1)

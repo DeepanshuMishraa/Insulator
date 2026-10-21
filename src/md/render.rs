@@ -42,7 +42,7 @@ use super::selection::{
     RegisteredText, SelectionRegistry, SelectionState, TextKey, line_range, word_range,
 };
 use super::veil::{RowVeil, apply_veil};
-use crate::theme::Theme;
+use crate::theme::{Theme, radius};
 use crate::ui::menu::{ContextMenuHandle, context_menu};
 use crate::ui::tooltip::Tooltip;
 
@@ -885,7 +885,7 @@ fn text_element_with_selection(
                 for rect in range_rects(&layout, range, CODE_WASH_PAD_X, CODE_WASH_INSET_Y) {
                     window.paint_quad(quad(
                         rect,
-                        px(CODE_WASH_RADIUS),
+                        radius(CODE_WASH_RADIUS),
                         code_wash,
                         px(0.0),
                         gpui::transparent_black(),
@@ -1695,7 +1695,7 @@ fn checkbox(checked: bool, ctx: &Ctx) -> AnyElement {
         .size(px(box_size))
         .my(px(((ctx.metrics.line_height - box_size) / 2.0).max(0.0)))
         .flex_none()
-        .rounded(px(3.0))
+        .rounded(radius(3.0))
         .border_1()
         .border_color(if checked {
             ctx.palette.accent
@@ -1792,13 +1792,13 @@ fn render_image(url: &str, alt: &str, ctx: &Ctx) -> AnyElement {
                 .w_full()
                 .max_w(relative(1.0))
                 .max_h(px(MAX_HEIGHT))
-                .rounded(px(6.0))
+                .rounded(radius(6.0))
                 .object_fit(gpui::ObjectFit::ScaleDown)
                 .with_loading(move || {
                     div()
                         .w_full()
                         .h(px(160.0))
-                        .rounded(px(6.0))
+                        .rounded(radius(6.0))
                         .bg(loading_color)
                         .into_any_element()
                 })
@@ -1809,7 +1809,7 @@ fn render_image(url: &str, alt: &str, ctx: &Ctx) -> AnyElement {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(px(6.0))
+                        .rounded(radius(6.0))
                         .bg(loading_color)
                         .text_color(fallback_color)
                         .child("Image failed to load")
@@ -1843,7 +1843,7 @@ fn render_video(url: &str, ctx: &Ctx) -> AnyElement {
             )))
             .w_full()
             .h(px(280.0))
-            .rounded(px(8.0))
+            .rounded(radius(8.0))
             .overflow_hidden()
             .child(player)
             .into_any_element();
@@ -1858,7 +1858,7 @@ fn render_video(url: &str, ctx: &Ctx) -> AnyElement {
         .id(id)
         .w_full()
         .min_w_0()
-        .rounded(px(8.0))
+        .rounded(radius(8.0))
         .border_1()
         .border_color(ctx.palette.border)
         .bg(ctx.palette.inset)
@@ -2019,7 +2019,7 @@ fn render_code_block(language: Option<&str>, code: &str, ctx: &Ctx) -> AnyElemen
         .tab_index(0)
         .size(px(24.0))
         .flex_none()
-        .rounded(px(5.0))
+        .rounded(radius(5.0))
         .flex()
         .items_center()
         .justify_center()
@@ -2065,7 +2065,7 @@ fn render_code_block(language: Option<&str>, code: &str, ctx: &Ctx) -> AnyElemen
         .tab_stop(false)
         .w_full()
         .min_w_0()
-        .rounded(px(8.0))
+        .rounded(radius(8.0))
         .border_1()
         .border_color(ctx.palette.border)
         .bg(ctx.palette.inset)
@@ -2182,7 +2182,7 @@ fn render_table(
     let mut table = div()
         .w_full()
         .min_w_0()
-        .rounded(px(8.0))
+        .rounded(radius(8.0))
         .border_1()
         .border_color(ctx.palette.border)
         .overflow_hidden()

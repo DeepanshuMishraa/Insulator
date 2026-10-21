@@ -95,11 +95,18 @@ enum AppThemeChoice: String, CaseIterable, Identifiable {
 
 enum AppFontChoice: String, CaseIterable, Identifiable {
     case sfPro
+    case newYork
     case geist
+    case geistMono
     case paperMono
     case jetBrainsMono
+    case inter
+    case instrumentSans
     case manrope
     case poppins
+    case newsreader
+    case sourceSerif
+    case lora
     case satoshi
 
     var id: Self { self }
@@ -107,29 +114,61 @@ enum AppFontChoice: String, CaseIterable, Identifiable {
     var name: String {
         switch self {
         case .sfPro: "SF Pro"
-        case .geist: "Geist"
+        case .newYork: "New York"
+        case .geist: "Geist Sans"
+        case .geistMono: "Geist Mono"
         case .paperMono: "Paper Mono"
         case .jetBrainsMono: "JetBrains Mono"
+        case .inter: "Inter"
+        case .instrumentSans: "Instrument Sans"
         case .manrope: "Manrope"
         case .poppins: "Poppins"
+        case .newsreader: "Newsreader"
+        case .sourceSerif: "Source Serif"
+        case .lora: "Lora"
         case .satoshi: "Satoshi"
         }
     }
 
+    enum Kind: String, CaseIterable {
+        case sans = "Sans"
+        case serif = "Serif"
+        case mono = "Mono"
+    }
+
+    var kind: Kind {
+        switch self {
+        case .sfPro, .geist, .inter, .instrumentSans, .manrope, .poppins, .satoshi: .sans
+        case .newYork, .newsreader, .sourceSerif, .lora: .serif
+        case .geistMono, .paperMono, .jetBrainsMono: .mono
+        }
+    }
+
+    /// The bundled family, or nil for a face the system draws itself.
     fileprivate var familyName: String? {
         switch self {
-        case .sfPro: nil
+        case .sfPro, .newYork: nil
         case .geist: "Geist"
+        case .geistMono: "Geist Mono"
         case .paperMono: "Paper Mono"
         case .jetBrainsMono: "JetBrains Mono"
+        case .inter: "Inter"
+        case .instrumentSans: "Instrument Sans"
         case .manrope: "Manrope"
         case .poppins: "Poppins"
+        case .newsreader: "Newsreader"
+        case .sourceSerif: "Source Serif 4"
+        case .lora: "Lora"
         case .satoshi: "Satoshi"
         }
+    }
+
+    fileprivate var systemDesign: Font.Design {
+        self == .newYork ? .serif : .default
     }
 
     fileprivate var isMonospaced: Bool {
-        self == .paperMono || self == .jetBrainsMono
+        kind == .mono
     }
 
     var isAvailable: Bool {
@@ -181,10 +220,8 @@ enum AppTheme {
         let base: Font
         if let family, UIFont(name: family, size: 17) != nil {
             base = .custom(family, size: pointSize(for: style), relativeTo: style)
-        } else if monospaced {
-            base = .system(style, design: .monospaced)
         } else {
-            base = .system(style)
+            base = .system(style, design: monospaced ? .monospaced : selected.systemDesign)
         }
         return weight.map(base.weight) ?? base
     }
@@ -199,7 +236,7 @@ enum AppTheme {
         if let family, UIFont(name: family, size: size) != nil {
             return .custom(family, size: size).weight(weight)
         }
-        return .system(size: size, weight: weight, design: monospaced ? .monospaced : .default)
+        return .system(size: size, weight: weight, design: monospaced ? .monospaced : selected.systemDesign)
     }
 
     /// Code, diffs and file contents: Menlo, as the desktop's code views.

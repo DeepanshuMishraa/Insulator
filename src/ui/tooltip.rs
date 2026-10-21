@@ -9,7 +9,7 @@ use gpui::{
     div, px,
 };
 
-use crate::theme::{Theme, sp};
+use crate::theme::{Theme, radius, sp};
 
 /// A single-line hint.
 pub struct Tooltip {
@@ -47,7 +47,7 @@ impl Render for Tooltip {
             div()
                 .px(px(7.0))
                 .py(px(4.0))
-                .rounded(px(6.0))
+                .rounded(radius(6.0))
                 .border_1()
                 .border_color(theme.border_strong)
                 .bg(theme.raised)

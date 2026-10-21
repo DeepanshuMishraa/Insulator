@@ -10,7 +10,7 @@ use gpui::{
 };
 
 use crate::app::Insulator;
-use crate::theme::{Theme, sp};
+use crate::theme::{Theme, radius, sp};
 use crate::ui::icon;
 use crate::ui::menu::{ContextMenuHandle, MenuAlign, popover};
 use crate::ui::tooltip::Tooltip;
@@ -420,7 +420,7 @@ impl Insulator {
             .w(px(26.0))
             .h(px(26.0))
             .flex_none()
-            .rounded(px(6.0))
+            .rounded(radius(6.0))
             .flex()
             .items_center()
             .justify_center()
@@ -627,7 +627,7 @@ fn render_resource_monitor_panel(
         .id("resource-monitor-popover")
         .track_focus(handle.focus_handle())
         .w(px(330.0))
-        .rounded(px(10.0))
+        .rounded(radius(10.0))
         .border_1()
         .border_color(theme.border_strong)
         .bg(theme.elevated)
@@ -899,7 +899,7 @@ fn render_view_icon_button(
         .id(id)
         .w(px(22.0))
         .h(px(22.0))
-        .rounded(px(4.0))
+        .rounded(radius(4.0))
         .flex()
         .items_center()
         .justify_center()
@@ -937,7 +937,7 @@ fn render_copy_icon_button(
         .id(id)
         .w(px(22.0))
         .h(px(22.0))
-        .rounded(px(4.0))
+        .rounded(radius(4.0))
         .flex()
         .items_center()
         .justify_center()

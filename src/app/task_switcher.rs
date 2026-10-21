@@ -8,11 +8,12 @@
 
 use super::*;
 
+const CONTAINER_RADIUS: f32 = 18.0;
+
 const CARD_WIDTH: f32 = 224.0;
 const CARD_HEIGHT: f32 = 138.0;
 const CARD_GAP: f32 = 8.0;
 const GRID_INSET: f32 = 12.0;
-const CONTAINER_RADIUS: f32 = 18.0;
 const MAX_COLUMNS: usize = 5;
 const MAX_ROWS: usize = 2;
 const MAX_TASKS: usize = MAX_COLUMNS * MAX_ROWS;
@@ -517,7 +518,7 @@ impl Insulator {
             .h(px(CARD_HEIGHT))
             .flex_none()
             .p(px(12.0))
-            .rounded(px(12.0))
+            .rounded(radius(12.0))
             .border_1()
             .when(highlighted, |card| {
                 card.border_color(theme.accent)
@@ -663,7 +664,7 @@ impl Insulator {
                             .flex_none()
                             .px(px(6.0))
                             .py(px(1.5))
-                            .rounded(px(4.0))
+                            .rounded(radius(4.0))
                             .bg(if highlighted {
                                 theme.raised
                             } else {
@@ -733,7 +734,7 @@ impl Insulator {
             .px(px(GRID_INSET))
             .pb(px(GRID_INSET - CARD_GAP))
             .overflow_hidden()
-            .rounded(px(CONTAINER_RADIUS))
+            .rounded(radius(CONTAINER_RADIUS))
             .border_1()
             .border_color(theme.border_strong)
             .bg(theme.elevated)

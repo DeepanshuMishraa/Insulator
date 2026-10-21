@@ -167,7 +167,7 @@ impl Insulator {
                     )))
                     .h(px(36.0))
                     .px(px(11.0))
-                    .rounded(px(8.0))
+                    .rounded(radius(8.0))
                     .flex()
                     .items_center()
                     .gap(px(10.0))
@@ -224,7 +224,7 @@ impl Insulator {
                         .id("settings-back")
                         .h(px(34.0))
                         .px(px(9.0))
-                        .rounded(px(8.0))
+                        .rounded(radius(8.0))
                         .flex()
                         .items_center()
                         .gap(px(9.0))
@@ -497,7 +497,7 @@ impl Insulator {
                     .w_full()
                     .px(px(20.0))
                     .py(px(14.0))
-                    .rounded(px(13.0))
+                    .rounded(radius(13.0))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.raised)
@@ -524,7 +524,7 @@ impl Insulator {
                     .min_h(px(60.0))
                     .px(px(20.0))
                     .py(px(12.0))
-                    .rounded(px(13.0))
+                    .rounded(radius(13.0))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.raised)
@@ -570,7 +570,7 @@ impl Insulator {
                     .min_h(px(60.0))
                     .px(px(20.0))
                     .py(px(12.0))
-                    .rounded(px(13.0))
+                    .rounded(radius(13.0))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.raised)
@@ -617,7 +617,7 @@ impl Insulator {
                     .min_h(px(60.0))
                     .px(px(20.0))
                     .py(px(12.0))
-                    .rounded(px(13.0))
+                    .rounded(radius(13.0))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.raised)
@@ -664,7 +664,7 @@ impl Insulator {
                     .min_h(px(60.0))
                     .px(px(20.0))
                     .py(px(12.0))
-                    .rounded(px(13.0))
+                    .rounded(radius(13.0))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.raised)
@@ -721,7 +721,7 @@ impl Insulator {
                         .min_h(px(60.0))
                         .px(px(20.0))
                         .py(px(12.0))
-                        .rounded(px(13.0))
+                        .rounded(radius(13.0))
                         .border_1()
                         .border_color(theme.border)
                         .bg(theme.raised)
@@ -773,7 +773,7 @@ impl Insulator {
                 .w_full()
                 .px(px(20.0))
                 .py(px(16.0))
-                .rounded(px(13.0))
+                .rounded(radius(13.0))
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.raised)
@@ -817,7 +817,7 @@ impl Insulator {
             .tab_index(0)
             .h(px(29.0))
             .px(px(11.0))
-            .rounded(px(7.0))
+            .rounded(radius(7.0))
             .border_1()
             .border_color(theme.border_strong)
             .flex()
@@ -857,7 +857,7 @@ impl Insulator {
             .tab_index(0)
             .h(px(27.0))
             .px(px(9.0))
-            .rounded(px(6.0))
+            .rounded(radius(6.0))
             .border_1()
             .border_color(theme.border_strong)
             .flex()
@@ -905,7 +905,7 @@ impl Insulator {
             .id("reveal-daemon-token")
             .tab_index(0)
             .size(px(27.0))
-            .rounded(px(6.0))
+            .rounded(radius(6.0))
             .border_1()
             .border_color(theme.border_strong)
             .flex()
@@ -948,7 +948,7 @@ impl Insulator {
             .tab_index(0)
             .h(px(27.0))
             .px(px(9.0))
-            .rounded(px(6.0))
+            .rounded(radius(6.0))
             .border_1()
             .border_color(theme.border_strong)
             .flex()
@@ -1002,7 +1002,7 @@ impl Insulator {
                     div()
                         .flex_none()
                         .p(px(QUIET_ZONE))
-                        .rounded(px(10.0))
+                        .rounded(radius(10.0))
                         // Scanners want dark modules on light, whatever the theme.
                         .bg(gpui::white())
                         .child(div().relative().size(px(side)).children(
@@ -1027,7 +1027,7 @@ impl Insulator {
                 .tab_index(0)
                 .h(px(27.0))
                 .px(px(9.0))
-                .rounded(px(6.0))
+                .rounded(radius(6.0))
                 .border_1()
                 .border_color(theme.border_strong)
                 .flex()
@@ -1106,7 +1106,7 @@ impl Insulator {
             .tab_index(0)
             .h(px(27.0))
             .px(px(9.0))
-            .rounded(px(6.0))
+            .rounded(radius(6.0))
             .border_1()
             .border_color(theme.border_strong)
             .flex()
@@ -1144,7 +1144,7 @@ impl Insulator {
                     .min_h(px(66.0))
                     .px(px(20.0))
                     .py(px(13.0))
-                    .rounded(px(13.0))
+                    .rounded(radius(13.0))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.raised)
@@ -1206,7 +1206,7 @@ impl Insulator {
                     div()
                         .px(px(20.0))
                         .py(px(15.0))
-                        .rounded(px(13.0))
+                        .rounded(radius(13.0))
                         .border_1()
                         .border_color(theme.border)
                         .bg(theme.raised)
@@ -1310,7 +1310,7 @@ impl Insulator {
                     div()
                         .px(px(20.0))
                         .py(px(15.0))
-                        .rounded(px(13.0))
+                        .rounded(radius(13.0))
                         .border_1()
                         .border_color(theme.border)
                         .bg(theme.raised)
@@ -1400,7 +1400,7 @@ impl Insulator {
                                 .mt(px(7.0))
                                 .px(px(10.0))
                                 .py(px(8.0))
-                                .rounded(px(8.0))
+                                .rounded(radius(8.0))
                                 .bg(theme.inset)
                                 .w_full()
                                 .min_w_0()
@@ -1664,6 +1664,40 @@ impl Insulator {
                             });
                         })
                         .selected(color_theme == selected_color_theme)
+                    })
+                    .collect()
+            },
+        );
+
+        let selected_accent = self.state.accent_color;
+        let accent_weak = cx.entity().downgrade();
+        let accent_handle = self.menu_handle("accent-selector", cx);
+        let accent_selector = dropdown_menu(
+            MenuChip::new("accent-selector")
+                .label(selected_accent.label())
+                .outlined()
+                .selected(accent_handle.is_open())
+                .w(px(150.0))
+                .justify_between(),
+            "accent-selector-menu",
+            &accent_handle,
+            MenuAlign::BelowRight,
+            move |_| {
+                AccentColor::ALL
+                    .into_iter()
+                    .map(|accent| {
+                        let weak = accent_weak.clone();
+                        let swatch = accent
+                            .rgb(theme.is_dark)
+                            .map_or(theme.accent, |color| rgb(color).into());
+                        MenuItem::new(accent.label(), move |window, cx| {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.set_accent_color(accent, window, cx);
+                            });
+                        })
+                        .icon("icons/swatch.svg")
+                        .icon_color(swatch)
+                        .selected(accent == selected_accent)
                     })
                     .collect()
             },
@@ -1936,7 +1970,7 @@ impl Insulator {
             .w_full()
             .flex()
             .flex_col()
-            .rounded(px(13.0))
+            .rounded(radius(13.0))
             .border_1()
             .border_color(theme.border)
             .overflow_hidden()
@@ -2009,6 +2043,87 @@ impl Insulator {
                             ),
                     )
                     .child(color_theme_selector),
+            )
+            .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+            .child(
+                div()
+                    .w_full()
+                    .min_h(px(60.0))
+                    .px(px(20.0))
+                    .py(px(12.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(24.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(sp(13.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text)
+                                    .child("Accent"),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(5.0))
+                                    .text_size(sp(12.5))
+                                    .line_height(sp(18.0))
+                                    .text_color(theme.text_secondary)
+                                    .child("Color for highlights, selection, and focus."),
+                            ),
+                    )
+                    .child(accent_selector),
+            )
+            .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+            .child(
+                div()
+                    .w_full()
+                    .min_h(px(60.0))
+                    .px(px(20.0))
+                    .py(px(12.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(24.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(sp(13.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text)
+                                    .child("Corner rounding"),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(5.0))
+                                    .text_size(sp(12.5))
+                                    .line_height(sp(18.0))
+                                    .text_color(theme.text_secondary)
+                                    .child("From square corners to fully rounded."),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w(px(220.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .gap(px(10.0))
+                            .child(Slider::new(&self.corner_rounding_slider).width(px(170.0)))
+                            .child(
+                                div()
+                                    .w(px(40.0))
+                                    .text_size(sp(12.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text_secondary)
+                                    .text_right()
+                                    .child(format!("{:.0}%", self.state.corner_rounding)),
+                            ),
+                    ),
             )
             .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
             .child(
@@ -2171,7 +2286,7 @@ impl Insulator {
                                     .id("choose-background-image")
                                     .px(px(12.0))
                                     .py(px(6.0))
-                                    .rounded(px(6.0))
+                                    .rounded(radius(6.0))
                                     .bg(theme.overlay)
                                     .hover(|el| el.bg(theme.overlay_strong))
                                     .cursor_pointer()
@@ -2209,7 +2324,7 @@ impl Insulator {
             .w_full()
             .flex()
             .flex_col()
-            .rounded(px(13.0))
+            .rounded(radius(13.0))
             .border_1()
             .border_color(theme.border)
             .overflow_hidden()
@@ -2328,7 +2443,7 @@ impl Insulator {
             .w_full()
             .flex()
             .flex_col()
-            .rounded(px(13.0))
+            .rounded(radius(13.0))
             .border_1()
             .border_color(theme.border)
             .overflow_hidden()
@@ -2388,7 +2503,7 @@ impl Insulator {
             .min_h(px(56.0))
             .px(px(20.0))
             .py(px(12.0))
-            .rounded(px(13.0))
+            .rounded(radius(13.0))
             .border_1()
             .border_color(theme.border)
             .bg(theme.raised)
@@ -2474,6 +2589,7 @@ impl Insulator {
         crate::theme::update_active_theme(
             self.state.theme,
             self.state.color_theme,
+            self.state.accent_color,
             self.state.window_style,
             transparency,
             cx,
@@ -2675,7 +2791,7 @@ impl Insulator {
             .focus_visible(|style| style.border_color(theme.accent))
             .h(px(28.0))
             .px(px(11.0))
-            .rounded(px(7.0))
+            .rounded(radius(7.0))
             .border_1()
             .border_color(theme.border_strong)
             .flex()
@@ -2786,7 +2902,7 @@ impl Insulator {
                         .w(px(30.0))
                         .h(px(30.0))
                         .flex_none()
-                        .rounded(px(7.0))
+                        .rounded(radius(7.0))
                         .bg(theme.overlay)
                         .flex()
                         .items_center()
@@ -2871,7 +2987,7 @@ impl Insulator {
             .w_full()
             .px(px(20.0))
             .py(px(14.0))
-            .rounded(px(13.0))
+            .rounded(radius(13.0))
             .border_1()
             .border_color(theme.border)
             .bg(theme.raised)
@@ -2953,7 +3069,7 @@ impl Insulator {
             .focus_visible(|style| style.border_color(theme.accent))
             .h(px(29.0))
             .px(px(10.0))
-            .rounded(px(7.0))
+            .rounded(radius(7.0))
             .border_1()
             .border_color(theme.border_strong)
             .flex()
@@ -3163,9 +3279,9 @@ impl Insulator {
                                 .w(px(32.0))
                                 .h(px(32.0))
                                 .flex_none()
-                                .rounded(px(7.0))
+                                .rounded(radius(7.0))
                                 .when_some(app_icon, |element, app_icon| {
-                                    element.child(img(app_icon).size_full().rounded(px(7.0)))
+                                    element.child(img(app_icon).size_full().rounded(radius(7.0)))
                                 }),
                         )
                         .child(
@@ -3193,7 +3309,7 @@ impl Insulator {
                                 .id(SharedString::from(format!("revoke-computer-app-{key}")))
                                 .h(px(25.0))
                                 .px(px(9.0))
-                                .rounded(px(6.0))
+                                .rounded(radius(6.0))
                                 .border_1()
                                 .border_color(theme.border_strong)
                                 .flex()
@@ -3221,7 +3337,7 @@ impl Insulator {
                 div()
                     .px(px(20.0))
                     .py(px(14.0))
-                    .rounded(px(13.0))
+                    .rounded(radius(13.0))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.raised)
@@ -3261,7 +3377,7 @@ impl Insulator {
                 div()
                     .px(px(20.0))
                     .py(px(14.0))
-                    .rounded(px(13.0))
+                    .rounded(radius(13.0))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.raised)
@@ -3304,7 +3420,7 @@ impl Insulator {
                                 .id("recheck-computer-permissions")
                                 .h(px(28.0))
                                 .px(px(11.0))
-                                .rounded(px(7.0))
+                                .rounded(radius(7.0))
                                 .border_1()
                                 .border_color(theme.border_strong)
                                 .text_color(theme.text_secondary)
@@ -3328,7 +3444,7 @@ impl Insulator {
                 div()
                     .px(px(20.0))
                     .py(px(14.0))
-                    .rounded(px(13.0))
+                    .rounded(radius(13.0))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.raised)
@@ -3499,6 +3615,7 @@ impl Insulator {
         crate::theme::apply_theme_preference(
             preference,
             self.state.color_theme,
+            self.state.accent_color,
             self.state.window_style,
             self.state.sidebar_transparency,
             window,
@@ -3528,6 +3645,7 @@ impl Insulator {
         crate::theme::apply_theme_preference(
             self.state.theme,
             color_theme,
+            self.state.accent_color,
             self.state.window_style,
             self.state.sidebar_transparency,
             window,
@@ -3541,6 +3659,41 @@ impl Insulator {
         );
         self.save();
         self.sync_sim_appearance(cx);
+        cx.notify();
+    }
+
+    pub(super) fn set_corner_rounding(&mut self, rounding: f32, cx: &mut Context<Self>) {
+        let rounding = rounding.clamp(0.0, 100.0);
+        if (self.state.corner_rounding - rounding).abs() < f32::EPSILON {
+            return;
+        }
+        self.state.corner_rounding = rounding;
+        crate::theme::set_corner_rounding(rounding);
+        // Cached panes keep their last paint until told otherwise.
+        cx.refresh_windows();
+        cx.notify();
+    }
+
+    fn set_accent_color(
+        &mut self,
+        accent: AccentColor,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.state.accent_color == accent {
+            return;
+        }
+        self.state.accent_color = accent;
+        crate::theme::apply_theme_preference(
+            self.state.theme,
+            self.state.color_theme,
+            accent,
+            self.state.window_style,
+            self.state.sidebar_transparency,
+            window,
+            cx,
+        );
+        self.save();
         cx.notify();
     }
 
@@ -3567,7 +3720,7 @@ impl Insulator {
                     div()
                         .w(px(380.0))
                         .p(px(22.0))
-                        .rounded(px(12.0))
+                        .rounded(radius(12.0))
                         .border_1()
                         .border_color(theme.border_strong)
                         .bg(theme.raised)
@@ -3600,7 +3753,7 @@ impl Insulator {
                                         .id("window-style-restart-later")
                                         .px(px(12.0))
                                         .py(px(7.0))
-                                        .rounded(px(6.0))
+                                        .rounded(radius(6.0))
                                         .text_color(theme.text_secondary)
                                         .child("Do it later")
                                         .on_click({
@@ -3618,7 +3771,7 @@ impl Insulator {
                                         .id("window-style-restart-now")
                                         .px(px(12.0))
                                         .py(px(7.0))
-                                        .rounded(px(6.0))
+                                        .rounded(radius(6.0))
                                         .bg(rgb(0xc0392b))
                                         .text_color(rgb(0xffffff))
                                         .child("Restart")
@@ -3669,6 +3822,7 @@ impl Insulator {
         crate::theme::apply_theme_preference(
             self.state.theme,
             self.state.color_theme,
+            self.state.accent_color,
             style,
             self.state.sidebar_transparency,
             window,
@@ -3722,6 +3876,7 @@ impl Insulator {
         crate::theme::update_active_theme(
             self.state.theme,
             self.state.color_theme,
+            self.state.accent_color,
             WindowStyle::Image,
             self.state.sidebar_transparency,
             cx,
@@ -3846,7 +4001,7 @@ fn permission_status_row(
             .id(id)
             .h(px(25.0))
             .px(px(4.0))
-            .rounded(px(6.0))
+            .rounded(radius(6.0))
             .flex()
             .items_center()
             .gap(px(5.0))
@@ -3860,7 +4015,7 @@ fn permission_status_row(
             .id(id)
             .h(px(25.0))
             .px(px(9.0))
-            .rounded(px(6.0))
+            .rounded(radius(6.0))
             .border_1()
             .border_color(theme.border_strong)
             .flex()
@@ -4030,7 +4185,7 @@ impl Insulator {
                 .w_full()
                 .px(px(20.0))
                 .py(px(12.0))
-                .rounded(px(13.0))
+                .rounded(radius(13.0))
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.raised)
@@ -4064,7 +4219,7 @@ impl Insulator {
                         .focus_visible(|style| style.border_color(theme.accent))
                         .px(px(12.0))
                         .h(px(28.0))
-                        .rounded(px(8.0))
+                        .rounded(radius(8.0))
                         .border_1()
                         .border_color(theme.border_strong)
                         .flex()
@@ -4103,7 +4258,7 @@ impl Insulator {
                 .w_full()
                 .px(px(20.0))
                 .py(px(8.0))
-                .rounded(px(13.0))
+                .rounded(radius(13.0))
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.raised)
@@ -4211,7 +4366,7 @@ impl Insulator {
                         .focus_visible(|style| style.border_color(theme.accent))
                         .px(px(8.0))
                         .h(px(26.0))
-                        .rounded(px(7.0))
+                        .rounded(radius(7.0))
                         .flex()
                         .items_center()
                         .cursor_default()
@@ -4241,7 +4396,7 @@ impl Insulator {
                     .px(px(12.0))
                     .h(px(28.0))
                     .min_w(px(96.0))
-                    .rounded(px(8.0))
+                    .rounded(radius(8.0))
                     .border_1()
                     .border_color(if capturing {
                         theme.accent

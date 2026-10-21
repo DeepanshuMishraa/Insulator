@@ -95,7 +95,7 @@ struct SessionScreen: View {
                             .overlay(alignment: .topTrailing) {
                                 if !changed.isEmpty {
                                     Text("\(changed.count)")
-                                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                                        .font(AppTheme.font(size: 11, weight: .semibold).monospacedDigit())
                                         .foregroundStyle(.white)
                                         .padding(.horizontal, 4)
                                         .frame(minWidth: 17, minHeight: 17)
@@ -172,10 +172,10 @@ private struct SessionTitle: ViewModifier {
     private var label: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title)
-                .font(.system(size: 17, weight: .bold))
+                .font(AppTheme.font(size: 17, weight: .bold))
                 .foregroundStyle(AppTheme.content)
             Text(subtitle)
-                .font(.system(size: 13))
+                .font(AppTheme.font(size: 13))
                 .foregroundStyle(AppTheme.muted)
         }
         .lineLimit(1)
@@ -193,11 +193,11 @@ private struct PermissionSheet: View {
             HStack(spacing: 10) {
                 IconView(.lock, size: 20).foregroundStyle(AppTheme.caution)
                 Text("Needs your approval")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(AppTheme.font(size: 13, weight: .semibold))
                     .foregroundStyle(AppTheme.caution)
             }
             Text(permission.title)
-                .font(.system(size: 17, weight: .semibold))
+                .font(AppTheme.font(size: 17, weight: .semibold))
                 .foregroundStyle(AppTheme.content)
             if let detail = permission.detail, !detail.isEmpty {
                 ScrollView {
@@ -217,7 +217,7 @@ private struct PermissionSheet: View {
                         Task { await app.respond(to: permission, option: option) }
                     } label: {
                         Text(option.label)
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(AppTheme.font(size: 16, weight: .semibold))
                             .foregroundStyle(option.allow ? AppTheme.inverse : AppTheme.content)
                             .frame(maxWidth: .infinity, minHeight: 50)
                             .background(option.allow ? AppTheme.inverseSurface : AppTheme.fill, in: Capsule())
@@ -290,7 +290,7 @@ private struct TranscriptLoading: View {
         VStack {
             if empty {
                 Text("No messages yet.")
-                    .font(.system(size: 15))
+                    .font(AppTheme.font(size: 15))
                     .foregroundStyle(AppTheme.muted)
             } else {
                 ProgressView()

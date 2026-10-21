@@ -86,7 +86,7 @@ struct IconView: View {
                 ReiconIcon(reicon, size: size)
             } else {
                 Image(systemName: icon.symbol)
-                    .font(.system(size: size * 0.82, weight: .medium))
+                    .font(AppTheme.font(size: size * 0.82, weight: .medium))
                     .frame(width: size, height: size)
             }
         }
